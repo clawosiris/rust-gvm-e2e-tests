@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH="/usr/local/cargo/bin:${PATH}"
 
 library_tests() {
   echo "=== Layer 1: Library Tests (rust-gvm) ==="
@@ -12,18 +13,8 @@ cli_tests() {
 }
 
 case "${1:-all}" in
-  library)
-    library_tests
-    ;;
-  cli)
-    cli_tests
-    ;;
-  all)
-    library_tests
-    cli_tests
-    ;;
-  *)
-    echo "usage: $0 [all|library|cli]" >&2
-    exit 1
-    ;;
+  library) library_tests ;;
+  cli) cli_tests ;;
+  all) library_tests; cli_tests ;;
+  *) echo "usage: $0 [all|library|cli]" >&2; exit 1 ;;
 esac
