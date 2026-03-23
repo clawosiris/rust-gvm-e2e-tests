@@ -2,20 +2,31 @@
 
 ## Overview
 
-A standalone integration test suite that validates the entire rust-gvm ecosystem against a real Greenbone Community Edition container stack. Tests all interface layers: library (GMP), CLI, REST API, gRPC API, and MCP server.
+A standalone integration test suite that validates the rust-gvm ecosystem against a real Greenbone Community Edition container stack. Developed in phases as components mature.
 
-## Goals
+## Phases
+
+| Phase | Layers | Components | Status |
+|-------|--------|------------|--------|
+| **1** | Library + CLI | rust-gvm, gvm-rools | 🔧 Active |
+| **2** | REST + gRPC API | rust-gvm-api | Planned (when API is implemented) |
+| **3** | MCP Server | openvas-mcp-server | Planned (when MCP is production-ready) |
+| **4** | Cross-client validation | python-gvm differential | Planned |
+
+---
+
+## Phase 1: Library + CLI (Current Focus)
+
+### Goals
 
 1. **Validate protocol correctness** — rust-gvm speaks correct GMP against a real gvmd
 2. **Validate CLI user experience** — gvm-rools commands work end-to-end
-3. **Validate API layers** — REST and gRPC endpoints behave correctly
-4. **Validate MCP integration** — openvas-mcp-server tools function against live infrastructure
-5. **Catch regressions early** — triggered on PRs to any component repo
-6. **Extensible** — new protocols and interfaces can be added without restructuring
+3. **Catch regressions early** — triggered on PRs to rust-gvm and gvm-rools
+4. **Migrate existing E2E infra** from rust-gvm repo into this standalone repo
 
-## Infrastructure
+### Infrastructure
 
-### GVM Community Stack (Docker Compose)
+#### GVM Community Stack (Docker Compose)
 
 Based on the official Greenbone Community Edition compose file, adapted for testing:
 
@@ -26,24 +37,21 @@ Based on the official Greenbone Community Edition compose file, adapted for test
 | openvasd | `community/openvas-scanner:stable` | Notus service mode |
 | pg-gvm | `community/pg-gvm:stable` | PostgreSQL backend |
 | redis-server | `community/redis-server` | Scanner KV store |
-| gsad | `community/gsad:stable` | API gateway (optional) |
 | Feed containers | Various | VTs, SCAP, CERT, data-objects, report-formats |
 
-### Runner
+#### Runner
 
 A self-hosted GitHub Actions runner (Hetzner VPS) with:
 - Docker / Docker Compose
 - Persistent volumes (feed data survives between runs — delta sync ~2-3 min vs full sync ~20 min)
 - Runner labels: `[self-hosted, docker]`
 
-### Volume Strategy
+#### Volume Strategy
 
 - **Persistent between runs**: Feed data (VTs, SCAP, CERT), PostgreSQL data, scan configs
 - **First run**: Full feed sync (~20 min)
 - **Subsequent runs**: Delta sync only (~2-3 min)
 - **Optional clean**: `clean: true` workflow input forces `docker compose down -v`
-
-## Test Layers
 
 ### Layer 1: Library Tests (rust-gvm)
 
@@ -81,90 +89,32 @@ Tests the `gvm-cli` command-line tool against the same stack.
 - Create/delete target via CLI XML
 - Error handling: invalid XML, wrong credentials, non-existent socket
 
-### Layer 3: REST API Tests (rust-gvm-api)
-
-Tests the REST API server against the GVM stack.
-
-**Prerequisites:** Start `gvm-rest-api` server connected to gvmd socket.
-
-**Tests:**
-- `GET /health` — server health check
-- `GET /api/v1/version` — GMP version
-- `GET /api/v1/scan-configs` — list configs (paginated)
-- `POST /api/v1/targets` → `GET` → `DELETE` — CRUD cycle
-- `POST /api/v1/tasks` → start → stop → `GET` report — full scan lifecycle (extended)
-- Authentication: JWT token flow, invalid token rejection
-- Error responses: 400, 401, 404, 500 format validation
-
-### Layer 4: gRPC API Tests (rust-gvm-api)
-
-Tests the gRPC API server.
-
-**Prerequisites:** Start `gvm-grpc-api` server connected to gvmd socket.
-
-**Tests:**
-- `SystemService.GetVersion` — health + version
-- `TargetService.Create` → `Get` → `Delete` — CRUD
-- `ScanConfigService.List` — streaming response
-- `TaskService.Create` → `Start` → `WatchStatus` (server-streaming) → `Stop` (extended)
-- Auth interceptor: valid/invalid JWT, mTLS (when configured)
-
-### Layer 5: MCP Server Tests (openvas-mcp-server)
-
-Tests the MCP server tools against the GVM stack.
-
-**Prerequisites:** Start openvas-mcp-server connected to gvmd.
-
-**Tests:**
-- Tool discovery: list available tools
-- `get_version` tool — basic connectivity
-- `list_scan_configs` tool — feed data
-- `create_target` → `delete_target` tool — write operations
-- Error handling: invalid parameters, connection failures
-
-## Differential Validation
-
-For critical operations, cross-check rust-gvm results against python-gvm (gvm-tools):
-- Same GMP command sent via both clients
-- Response structure and content compared
-- Differences flagged as potential compatibility issues
-
-This is opt-in via `E2E_DIFFERENTIAL=1`.
-
-## Workflow Design
+### Workflow Design (Phase 1)
 
 ```yaml
-# Trigger: push/PR to any component repo, or manual dispatch
 on:
   workflow_dispatch:
     inputs:
       rust-gvm-ref: { default: "main" }
       gvm-rools-ref: { default: "main" }
-      rust-gvm-api-ref: { default: "main" }
-      openvas-mcp-server-ref: { default: "main" }
       run-scan: { type: boolean, default: false }
       clean: { type: boolean, default: false }
-      differential: { type: boolean, default: false }
   repository_dispatch:
     types: [component-updated]
 ```
 
-### Job Structure
+#### Job Structure
 
 ```
-prepare:     Pull images, start GVM stack, wait for readiness
-test-library: Layer 1 (rust-gvm)
-test-cli:     Layer 2 (gvm-rools) — needs: prepare
-test-rest:    Layer 3 (REST API) — needs: prepare
-test-grpc:    Layer 4 (gRPC API) — needs: prepare
-test-mcp:     Layer 5 (MCP server) — needs: prepare
-report:       Collect results, post summary
-cleanup:      Stop containers (keep volumes)
+prepare:       Pull images, start GVM stack, wait for readiness
+test-library:  Layer 1 (rust-gvm) — needs: prepare
+test-cli:      Layer 2 (gvm-rools) — needs: prepare
+cleanup:       Stop containers (keep volumes) — always
 ```
 
-Layers 1-5 run in parallel after the stack is ready.
+Layers 1 and 2 run in parallel after the stack is ready.
 
-## Directory Structure
+### Directory Structure (Phase 1)
 
 ```
 rust-gvm-e2e-tests/
@@ -180,16 +130,8 @@ rust-gvm-e2e-tests/
 ├── tests/
 │   ├── library/                  # Layer 1: rust-gvm tests
 │   │   └── smoke.rs
-│   ├── cli/                      # Layer 2: gvm-rools tests
-│   │   └── smoke.sh
-│   ├── rest/                     # Layer 3: REST API tests
-│   │   └── smoke.rs
-│   ├── grpc/                     # Layer 4: gRPC API tests
-│   │   └── smoke.rs
-│   ├── mcp/                      # Layer 5: MCP server tests
-│   │   └── smoke.py
-│   └── differential/             # Cross-client validation
-│       └── validate.py
+│   └── cli/                      # Layer 2: gvm-rools tests
+│       └── smoke.sh
 ├── .github/
 │   └── workflows/
 │       ├── e2e.yml               # Main E2E workflow (reusable)
@@ -197,12 +139,12 @@ rust-gvm-e2e-tests/
 └── Cargo.toml                    # Workspace for Rust test binaries
 ```
 
-## Cross-Repo Triggering
+### Cross-Repo Triggering (Phase 1)
 
-Component repos can trigger E2E tests via `repository_dispatch`:
+Component repos trigger E2E tests via `repository_dispatch`:
 
 ```yaml
-# In component repo CI (e.g., rust-gvm ci.yml):
+# In rust-gvm or gvm-rools CI:
 - name: Trigger E2E tests
   if: github.event_name == 'push' && github.ref == 'refs/heads/main'
   run: |
@@ -211,25 +153,74 @@ Component repos can trigger E2E tests via `repository_dispatch`:
       -f client_payload='{"component":"rust-gvm","ref":"${{ github.sha }}"}'
 ```
 
-## Version Coordination
+### Migration Path
 
-- Default: test against `main` of each component
-- Override: specify branch/tag/SHA per component via workflow inputs
-- Release validation: test against release tags before publishing
+1. ✅ Create repo with spec (this document)
+2. Move docker-compose.yml + scripts from rust-gvm `tests/e2e/gvm-community/`
+3. Port Layer 1 tests (existing rust-gvm E2E binary)
+4. Add Layer 2 tests (gvm-rools CLI)
+5. Add cross-repo dispatch triggers to rust-gvm and gvm-rools
+6. Remove E2E infrastructure from rust-gvm (keep as deprecated until migration verified)
 
-## Failure Handling
+---
+
+## Phase 2: REST + gRPC API (Future)
+
+*To be specified when rust-gvm-api implementation reaches Phase 2+.*
+
+### Layer 3: REST API Tests
+
+- Health check, version, CRUD cycles
+- Authentication (JWT + API keys)
+- Pagination, filtering, error responses
+- OpenAPI spec compliance validation
+
+### Layer 4: gRPC API Tests
+
+- Unary RPCs: version, CRUD
+- Server-streaming: `WatchTaskStatus`, `StreamReportResults`
+- Auth interceptor validation
+- Proto contract testing
+
+### Additional Infrastructure
+
+- Start `gvm-rest-api` and `gvm-grpc-api` servers as additional services in docker-compose
+- Both connect to gvmd via shared socket volume
+
+---
+
+## Phase 3: MCP Server (Future)
+
+*To be specified when openvas-mcp-server is production-ready.*
+
+### Layer 5: MCP Server Tests
+
+- Tool discovery and schema validation
+- GVM operations via MCP tool calls
+- Error propagation and handling
+
+---
+
+## Phase 4: Cross-Client Validation (Future)
+
+*Optional differential testing.*
+
+- Same GMP command sent via rust-gvm and python-gvm (gvm-tools)
+- Response structure and content compared
+- Differences flagged as potential compatibility issues
+- Opt-in via `E2E_DIFFERENTIAL=1`
+
+---
+
+## Failure Handling (All Phases)
 
 - **Stack startup failure**: Collect container logs, report, skip tests
 - **Individual test failure**: Continue other layers, collect all results
 - **Feed sync timeout**: Configurable (default 150 min for cold start)
 - **Flaky tests**: Mark with `#[ignore]` + re-run annotation; track in issues
 
-## Migration Path
+## Version Coordination
 
-1. ✅ Create repo with spec (this document)
-2. Move docker-compose.yml + scripts from rust-gvm `tests/e2e/gvm-community/`
-3. Port Layer 1 tests (existing rust-gvm E2E binary)
-4. Add Layer 2 tests (gvm-rools CLI)
-5. Add cross-repo dispatch triggers to component repos
-6. Remove E2E infrastructure from rust-gvm (keep as deprecated until migration verified)
-7. Add Layers 3-5 as those components mature
+- Default: test against `main` of each component
+- Override: specify branch/tag/SHA per component via workflow inputs
+- Release validation: test against release tags before publishing
