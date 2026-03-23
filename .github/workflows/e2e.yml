@@ -48,7 +48,7 @@ jobs:
   e2e:
     name: GVM Community E2E
     needs: build-runner
-    runs-on: [self-hosted, docker]
+    runs-on: [self-hosted]
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
