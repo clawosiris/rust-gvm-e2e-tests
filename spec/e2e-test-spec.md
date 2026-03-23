@@ -73,6 +73,15 @@ Tests the Rust GMP client library directly via Unix socket.
 - Retrieve report, verify structure
 - Cleanup all created resources
 
+**SSH transport tests:**
+- Connect via SSH tunnel to gvmd socket (direct-streamlocal)
+- Authenticate + `get_version` over SSH
+- CRUD target over SSH (same operations as socket, different transport)
+- Verify SSH agent auth and password auth paths
+- Error handling: wrong host key, invalid credentials, unreachable host
+
+*Infrastructure note:* The docker-compose stack needs an SSH-enabled sidecar container (or SSH access configured on the gvmd container) exposing the gvmd Unix socket via `direct-streamlocal@openssh.com` forwarding.
+
 **Readiness checks:**
 - Phase 1 (bash): Wait for gvmd socket to accept connections (socat probe)
 - Phase 2 (rust-gvm): Poll `get_version` + `authenticate` until success
