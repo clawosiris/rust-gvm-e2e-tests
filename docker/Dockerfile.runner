@@ -1,21 +1,27 @@
-FROM rust:1.75
+FROM rust:1.88
 
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 WORKDIR /workspace
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates bash git pkg-config libssl-dev \
+    && apt-get install -y --no-install-recommends ca-certificates bash git pkg-config libssl-dev socat python3 python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml /tmp/rust-gvm-e2e-tests/Cargo.toml
 COPY tests/library/Cargo.toml /tmp/rust-gvm-e2e-tests/tests/library/Cargo.toml
 COPY tests/library/src /tmp/rust-gvm-e2e-tests/tests/library/src
 
-RUN cargo install --path /tmp/rust-gvm-e2e-tests/tests/library --bin gvm-community-e2e \
+RUN --mount=type=secret,id=github_token \
+    if [ -f /run/secrets/github_token ]; then \
+      TOKEN=$(cat /run/secrets/github_token); \
+      git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"; \
+    fi \
+    && cargo install --path /tmp/rust-gvm-e2e-tests/tests/library --bin gvm-community-e2e \
     && git clone --branch main --depth 1 https://github.com/clawosiris/gvm-rools.git /tmp/gvm-rools \
     && cargo build --release --manifest-path /tmp/gvm-rools/Cargo.toml --bin gvm-cli \
     && install -m 0755 /tmp/gvm-rools/target/release/gvm-cli /usr/local/cargo/bin/gvm-cli \
-    && rm -rf /tmp/rust-gvm-e2e-tests /tmp/gvm-rools
+    && rm -rf /tmp/rust-gvm-e2e-tests /tmp/gvm-rools \
+    && git config --global --unset-all url.https://x-access-token.insteadof 2>/dev/null || true
 
 CMD ["/bin/bash"]
