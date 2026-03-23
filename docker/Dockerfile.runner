@@ -1,9 +1,21 @@
 FROM rust:1.75
 
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+
 WORKDIR /workspace
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates bash pkg-config libssl-dev \
+    && apt-get install -y --no-install-recommends ca-certificates bash git pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml /tmp/rust-gvm-e2e-tests/Cargo.toml
+COPY tests/library/Cargo.toml /tmp/rust-gvm-e2e-tests/tests/library/Cargo.toml
+COPY tests/library/src /tmp/rust-gvm-e2e-tests/tests/library/src
+
+RUN cargo install --path /tmp/rust-gvm-e2e-tests/tests/library --bin gvm-community-e2e \
+    && git clone --branch main --depth 1 https://github.com/clawosiris/gvm-rools.git /tmp/gvm-rools \
+    && cargo build --release --manifest-path /tmp/gvm-rools/Cargo.toml --bin gvm-cli \
+    && install -m 0755 /tmp/gvm-rools/target/release/gvm-cli /usr/local/cargo/bin/gvm-cli \
+    && rm -rf /tmp/rust-gvm-e2e-tests /tmp/gvm-rools
 
 CMD ["/bin/bash"]
