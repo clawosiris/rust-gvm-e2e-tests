@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /workspace
-
 library_tests() {
-  cargo run --quiet -p gvm-community-e2e -- --mode smoke
+  echo "=== Layer 1: Library Tests (rust-gvm) ==="
+  gvm-community-e2e --mode smoke
 }
 
 cli_tests() {
-  ./tests/cli/smoke.sh
+  echo "=== Layer 2: CLI Tests (gvm-rools) ==="
+  bash /workspace/tests/cli/smoke.sh
 }
 
 case "${1:-all}" in
