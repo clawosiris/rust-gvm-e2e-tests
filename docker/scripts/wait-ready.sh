@@ -19,7 +19,7 @@ fi
 
 echo "Socket detected. Polling get_version response"
 for _ in $(seq 1 60); do
-  if cargo run --quiet --example e2e_gvm_community -- --mode wait-ready; then
+  if cargo run --quiet -p gvm-community-e2e -- --mode wait-ready; then
     echo "gvmd is responsive"
     exit 0
   fi

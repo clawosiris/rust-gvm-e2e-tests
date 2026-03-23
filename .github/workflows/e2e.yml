@@ -28,7 +28,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  COMPOSE_FILE: tests/e2e/gvm-community/docker-compose.yml
+  COMPOSE_FILE: docker/docker-compose.yml
   RUNNER_IMAGE_NAME: rust-gvm-e2e-runner
   RUNNER_IMAGE_TAG: ci
 
@@ -50,7 +50,7 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
-          file: tests/e2e/gvm-community/Dockerfile.runner
+          file: docker/Dockerfile.runner
           tags: ${{ env.RUNNER_IMAGE_NAME }}:${{ env.RUNNER_IMAGE_TAG }}
           outputs: type=docker,dest=runner-image.tar
 
@@ -112,7 +112,7 @@ jobs:
 
       - name: Wait for gvmd readiness
         run: |
-          bash tests/e2e/gvm-community/scripts/wait-ready.sh
+          bash docker/scripts/wait-ready.sh
         timeout-minutes: 10
 
       - name: Run smoke tests

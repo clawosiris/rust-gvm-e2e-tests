@@ -2,4 +2,28 @@
 set -euo pipefail
 
 cd /workspace
-cargo run --example e2e_gvm_community -- --mode smoke
+
+library_tests() {
+  cargo run --quiet -p gvm-community-e2e -- --mode smoke
+}
+
+cli_tests() {
+  ./tests/cli/smoke.sh
+}
+
+case "${1:-all}" in
+  library)
+    library_tests
+    ;;
+  cli)
+    cli_tests
+    ;;
+  all)
+    library_tests
+    cli_tests
+    ;;
+  *)
+    echo "usage: $0 [all|library|cli]" >&2
+    exit 1
+    ;;
+esac

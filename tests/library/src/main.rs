@@ -123,7 +123,7 @@ impl Mode {
         }
 
         Err(AppError::Usage(
-            "usage: cargo run --example e2e_gvm_community -- --mode <smoke|wait-ready>".to_string(),
+            "usage: cargo run -p gvm-community-e2e -- --mode <smoke|wait-ready>".to_string(),
         ))
     }
 }
