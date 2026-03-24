@@ -36,7 +36,7 @@ const SCAN_TARGET_NAME: &str = "e2e-scan-target";
 const SCAN_TASK_NAME: &str = "e2e-scan-task";
 
 fn main() -> ExitCode {
-    match Builder::new_current_thread().enable_all().build() {
+    match Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => match runtime.block_on(async_main()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -194,25 +194,32 @@ impl Drop for CleanupTracker {
         let task_ids = self.task_ids.clone();
         let target_ids = self.target_ids.clone();
 
-        match Builder::new_current_thread().enable_all().build() {
-            Ok(runtime) => {
-                let result = runtime.block_on(async move {
-                    let mut tracker = CleanupTracker {
-                        config,
-                        task_ids,
-                        target_ids,
-                        armed: false,
-                    };
-                    tracker.cleanup_inner().await
-                });
+        let cleanup = async move {
+            let mut tracker = CleanupTracker {
+                config,
+                task_ids,
+                target_ids,
+                armed: false,
+            };
+            tracker.cleanup_inner().await
+        };
 
-                if let Err(error) = result {
-                    log_line(&format!("cleanup after failure was incomplete: {error}"));
+        // If we're inside a tokio runtime, use block_in_place to avoid
+        // the "Cannot start a runtime from within a runtime" panic.
+        let result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(cleanup))
+        } else {
+            match Builder::new_current_thread().enable_all().build() {
+                Ok(runtime) => runtime.block_on(cleanup),
+                Err(error) => {
+                    log_line(&format!("failed to build cleanup runtime: {error}"));
+                    return;
                 }
             }
-            Err(error) => {
-                log_line(&format!("failed to build cleanup runtime: {error}"));
-            }
+        };
+
+        if let Err(error) = result {
+            log_line(&format!("cleanup after failure was incomplete: {error}"));
         }
     }
 }
