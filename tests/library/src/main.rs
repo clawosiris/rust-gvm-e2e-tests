@@ -19,7 +19,9 @@ use gvm_gmp::commands::report_formats::{get_report_formats, GetReportFormatsOpts
 use gvm_gmp::commands::reports::get_report;
 use gvm_gmp::commands::scan_configs::{get_scan_configs, GetScanConfigsOpts};
 use gvm_gmp::commands::scanners::{get_scanners, GetScannersOpts};
-use gvm_gmp::commands::targets::{create_target, delete_target, get_target, CreateTargetOpts};
+use gvm_gmp::commands::targets::{
+    create_target, delete_target, get_target, get_targets, CreateTargetOpts, GetTargetsOpts,
+};
 use gvm_gmp::commands::tasks::{
     create_task, delete_task, get_task, start_task, stop_task, CreateTaskOpts,
 };
@@ -362,6 +364,19 @@ async fn run_scan_suite(
 ) -> Result<(), AppError> {
     log_line("Running extended scan flow because E2E_RUN_SCAN=1");
 
+    // Clean up stale scan target from previous runs (persistent volumes)
+    {
+        let targets_response = client
+            .call(get_targets(GetTargetsOpts::default()))
+            .await?;
+        let xml = targets_response.as_str()?;
+        let stale_ids = find_elements_by_name(xml, "target", SCAN_TARGET_NAME)?;
+        for stale_id in &stale_ids {
+            log_line(&format!("cleaning up stale scan target {stale_id}"));
+            let _ = client.call(delete_target(stale_id)).await;
+        }
+    }
+
     // Get port list (GMP requires PORT_LIST or PORT_RANGE)
     let port_list_id = first_element_id(
         &client
@@ -568,6 +583,56 @@ fn response_summary(response: &Response) -> Result<String, AppError> {
     Ok(xml.chars().take(240).collect())
 }
 
+
+/// Find all `<element_name>` elements whose `<name>` child matches `target_name`,
+/// returning their `id` attributes.
+fn find_elements_by_name(
+    xml: &str,
+    element_name: &str,
+    target_name: &str,
+) -> Result<Vec<String>, AppError> {
+    let mut reader = Reader::from_str(xml);
+    let mut ids = Vec::new();
+    let mut current_id: Option<String> = None;
+    let mut inside_element = false;
+    let mut inside_name = false;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) if e.name().as_ref() == element_name.as_bytes() => {
+                inside_element = true;
+                current_id = None;
+                for attr in e.attributes().flatten() {
+                    if attr.key.as_ref() == b"id" {
+                        current_id =
+                            Some(attr.decode_and_unescape_value(reader.decoder())?.into_owned());
+                    }
+                }
+            }
+            Event::End(ref e) if e.name().as_ref() == element_name.as_bytes() => {
+                inside_element = false;
+                current_id = None;
+            }
+            Event::Start(ref e) if inside_element && e.name().as_ref() == b"name" => {
+                inside_name = true;
+            }
+            Event::End(ref e) if e.name().as_ref() == b"name" => {
+                inside_name = false;
+            }
+            Event::Text(ref e) if inside_element && inside_name => {
+                let name = e.unescape()?.into_owned();
+                if name == target_name {
+                    if let Some(ref id) = current_id {
+                        ids.push(id.clone());
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(ids)
+}
 fn ensure(condition: bool, message: &str) -> Result<(), AppError> {
     if condition {
         Ok(())
