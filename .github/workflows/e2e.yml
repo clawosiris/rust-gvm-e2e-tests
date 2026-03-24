@@ -1,7 +1,7 @@
 name: E2E Tests
 
 concurrency:
-  group: e2e-tests
+  group: e2e-tests-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 on:
@@ -29,6 +29,12 @@ on:
         default: "main"
   repository_dispatch:
     types: [component-updated]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tests/**'
+      - 'docker/**'
+      - '.github/workflows/e2e.yml'
 
 permissions:
   contents: read
