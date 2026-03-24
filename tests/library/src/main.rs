@@ -373,7 +373,9 @@ async fn run_scan_suite(
         let stale_ids = find_elements_by_name(xml, "target", SCAN_TARGET_NAME)?;
         for stale_id in &stale_ids {
             log_line(&format!("cleaning up stale scan target {stale_id}"));
-            let _ = client.call(delete_target(stale_id)).await;
+            if let Ok(entity_id) = stale_id.parse() {
+                let _ = client.call(delete_target(&entity_id, true)).await;
+            }
         }
     }
 
@@ -620,7 +622,7 @@ fn find_elements_by_name(
                 inside_name = false;
             }
             Event::Text(ref e) if inside_element && inside_name => {
-                let name = e.unescape()?.into_owned();
+                let name = String::from_utf8_lossy(e.as_ref()).into_owned();
                 if name == target_name {
                     if let Some(ref id) = current_id {
                         ids.push(id.clone());
