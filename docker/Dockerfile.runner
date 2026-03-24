@@ -22,7 +22,11 @@ RUN --mount=type=secret,id=github_token \
       TOKEN=$(cat /run/secrets/github_token); \
       git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"; \
     fi \
-    && sed -i "s|branch = \"main\"|branch = \"${RUST_GVM_REF}\"|g" /tmp/rust-gvm-e2e-tests/tests/library/Cargo.toml \
+    && if echo "${RUST_GVM_REF}" | grep -qP '^[0-9a-f]{7,40}$'; then \
+      sed -i "s|branch = \"main\"|rev = \"${RUST_GVM_REF}\"|g" /tmp/rust-gvm-e2e-tests/tests/library/Cargo.toml; \
+    elif [ "${RUST_GVM_REF}" != "main" ]; then \
+      sed -i "s|branch = \"main\"|branch = \"${RUST_GVM_REF}\"|g" /tmp/rust-gvm-e2e-tests/tests/library/Cargo.toml; \
+    fi \
     && cargo install --path /tmp/rust-gvm-e2e-tests/tests/library --bin gvm-community-e2e \
     && git clone --branch ${GVM_ROOLS_REF} --depth 1 https://github.com/clawosiris/gvm-rools.git /tmp/gvm-rools \
     && cargo build --release --manifest-path /tmp/gvm-rools/Cargo.toml --bin gvm-cli \
