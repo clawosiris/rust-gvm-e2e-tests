@@ -17,6 +17,16 @@ on:
         required: false
         type: boolean
         default: false
+      rust-gvm-ref:
+        description: "rust-gvm branch/tag/SHA to test against"
+        required: false
+        type: string
+        default: "main"
+      gvm-rools-ref:
+        description: "gvm-rools branch/tag/SHA to test against"
+        required: false
+        type: string
+        default: "main"
   repository_dispatch:
     types: [component-updated]
 
@@ -34,8 +44,30 @@ jobs:
     name: Build E2E Runner Image
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      rust-gvm-ref: ${{ steps.refs.outputs.rust-gvm-ref }}
+      gvm-rools-ref: ${{ steps.refs.outputs.gvm-rools-ref }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Resolve component refs
+        id: refs
+        run: |
+          RUST_GVM_REF="main"
+          GVM_ROOLS_REF="main"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RUST_GVM_REF="${{ inputs.rust-gvm-ref || 'main' }}"
+            GVM_ROOLS_REF="${{ inputs.gvm-rools-ref || 'main' }}"
+          elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            COMPONENT="${{ github.event.client_payload.component }}"
+            REF="${{ github.event.client_payload.ref }}"
+            if [ "$COMPONENT" = "rust-gvm" ] && [ -n "$REF" ]; then
+              RUST_GVM_REF="$REF"
+            elif [ "$COMPONENT" = "gvm-rools" ] && [ -n "$REF" ]; then
+              GVM_ROOLS_REF="$REF"
+            fi
+          fi
+          echo "rust-gvm-ref=$RUST_GVM_REF" >> "$GITHUB_OUTPUT"
+          echo "gvm-rools-ref=$GVM_ROOLS_REF" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build and export runner image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -44,6 +76,9 @@ jobs:
           file: docker/Dockerfile.runner
           tags: ${{ env.RUNNER_IMAGE_NAME }}:${{ env.RUNNER_IMAGE_TAG }}
           outputs: type=docker,dest=runner-image.tar
+          build-args: |
+            RUST_GVM_REF=${{ steps.refs.outputs.rust-gvm-ref }}
+            GVM_ROOLS_REF=${{ steps.refs.outputs.gvm-rools-ref }}
           secrets: |
             github_token=${{ secrets.RELEASE_TOKEN }}
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
@@ -59,6 +94,10 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Log component refs under test
+        run: |
+          echo "rust-gvm ref: ${{ needs.build-runner.outputs.rust-gvm-ref }}"
+          echo "gvm-rools ref: ${{ needs.build-runner.outputs.gvm-rools-ref }}"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: e2e-runner-image
