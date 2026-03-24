@@ -12,6 +12,13 @@ on:
         required: false
         type: boolean
         default: false
+      clean:
+        description: "Destroy persistent volumes before starting (clean slate)"
+        required: false
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [component-updated]
 
 permissions:
   contents: read
@@ -57,6 +64,9 @@ jobs:
           name: e2e-runner-image
       - name: Load runner image
         run: docker load -i runner-image.tar && rm -f runner-image.tar
+      - name: Clean volumes (if requested)
+        if: ${{ inputs.clean == true }}
+        run: docker compose -f ${{ env.COMPOSE_FILE }} down -v
       - name: Pull container images
         run: docker compose -f ${{ env.COMPOSE_FILE }} pull
       - name: Start GVM stack
@@ -69,11 +79,19 @@ jobs:
           docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run \
             -e E2E_RUN_SCAN=${{ inputs.run-scan && '1' || '0' }} \
             --rm rust-gvm-e2e
+      - name: gvm-tools cross-check on failure
+        if: failure()
+        run: |
+          docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run --rm -T --entrypoint "" rust-gvm-e2e \
+            python3 /workspace/docker/scripts/validate-against-gvm-tools.py --check all
       - name: Collect logs on failure
         if: failure()
         run: |
           docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=200 gvmd
           docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=50 ospd-openvas
+          docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=50 openvasd
+          docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=30 redis-server
+          docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=30 pg-gvm
       - name: Stop containers (keep volumes)
         if: always()
         run: docker compose -f ${{ env.COMPOSE_FILE }} down
