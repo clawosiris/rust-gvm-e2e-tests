@@ -69,7 +69,12 @@ require_contains "${pretty_output}" "<get_configs_response" "pretty get_configs"
 require_contains "${pretty_output}" $'\n' "pretty get_configs"
 log "[pass] cli 03 pretty get_configs"
 
-create_output="$(run_cli --xml "<create_target><name>${SMOKE_TARGET_NAME}</name><hosts>127.0.0.1</hosts></create_target>")"
+# Fetch the first port list id (GMP requires PORT_LIST or PORT_RANGE for create_target)
+port_lists_output="$(run_cli --xml '<get_port_lists/>')"
+port_list_id="$(printf '%s' "${port_lists_output}" | sed -n 's/.*<port_list id="\([^"]*\)".*/\1/p' | head -n1)"
+[[ -n "${port_list_id}" ]] || fail "create_target: no port list available"
+
+create_output="$(run_cli --xml "<create_target><name>${SMOKE_TARGET_NAME}</name><hosts>127.0.0.1</hosts><port_list id=\"${port_list_id}\"/></create_target>")"
 require_contains "${create_output}" "<create_target_response" "create_target"
 target_id="$(printf '%s' "${create_output}" | sed -n 's/.*id="\([^"]*\)".*/\1/p' | head -n1)"
 [[ -n "${target_id}" ]] || fail "create_target: failed to parse target id"
