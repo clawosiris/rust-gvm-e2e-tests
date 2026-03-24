@@ -355,11 +355,20 @@ async fn run_scan_suite(
 ) -> Result<(), AppError> {
     log_line("Running extended scan flow because E2E_RUN_SCAN=1");
 
+    // Get port list (GMP requires PORT_LIST or PORT_RANGE)
+    let port_list_id = first_element_id(
+        &client
+            .call(get_port_lists(GetPortListsOpts::default()))
+            .await?,
+        "port_list",
+    )?;
+
     let scan_target = client
         .call(create_target(
             SCAN_TARGET_NAME,
             CreateTargetOpts {
                 hosts: vec!["127.0.0.1".to_string()],
+                port_list_id: Some(port_list_id),
                 ..CreateTargetOpts::default()
             },
         ))
