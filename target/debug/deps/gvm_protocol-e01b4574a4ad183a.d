@@ -1,0 +1,10 @@
+/var/tmp/rust-gvm-e2e-tests/target/debug/deps/gvm_protocol-e01b4574a4ad183a.d: /home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/lib.rs /home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/error.rs /home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/request.rs /home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/response.rs /home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/xml_command.rs /home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/xml_reader.rs
+
+/var/tmp/rust-gvm-e2e-tests/target/debug/deps/libgvm_protocol-e01b4574a4ad183a.rmeta: /home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/lib.rs /home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/error.rs /home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/request.rs /home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/response.rs /home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/xml_command.rs /home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/xml_reader.rs
+
+/home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/lib.rs:
+/home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/error.rs:
+/home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/request.rs:
+/home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/response.rs:
+/home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/xml_command.rs:
+/home/clawd/.cargo/git/checkouts/rust-gvm-a6cd652cfa76be35/de4ba92/crates/gvm-protocol/src/xml_reader.rs:

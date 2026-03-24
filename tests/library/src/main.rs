@@ -716,10 +716,35 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     log_pass("crud 08", "verify credential absent");
 
     // --- schedule CRUD ---
-    // TODO: GMP 22.5+ requires <icalendar> element for create_schedule,
-    // but ScheduleOpts in rust-gvm doesn't support it yet.
-    // Skipped until rust-gvm adds icalendar support.
-    log_line("[skip] crud 09-12: schedule CRUD (needs icalendar support in rust-gvm)");
+    let ical = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//e2e//EN\r\nBEGIN:VEVENT\r\nDTSTART:20260401T060000Z\r\nDURATION:PT0S\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\nEND:VCALENDAR";
+    let sched_resp = client
+        .call(create_schedule(
+            "e2e-schedule",
+            ScheduleOpts {
+                icalendar: Some(ical.into()),
+                timezone: Some("UTC".into()),
+                comment: Some("e2e test schedule".into()),
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&sched_resp, 201, "create_schedule")?;
+    let sched_id = response_id(&sched_resp, "create_schedule")?;
+    tracker.track_schedule(&sched_id);
+    log_pass("crud 09", &format!("create schedule ({sched_id})"));
+
+    let get_sched_resp = client.call(get_schedule(&sched_id)).await?;
+    assert_status(&get_sched_resp, 200, "get_schedule")?;
+    log_pass("crud 10", "get schedule");
+
+    let del_sched_resp = client.call(delete_schedule(&sched_id, true)).await?;
+    assert_status(&del_sched_resp, 200, "delete_schedule")?;
+    tracker.schedule_ids.retain(|v| v != sched_id.as_str());
+    log_pass("crud 11", "delete schedule");
+
+    let verify_sched_resp = client.send(get_schedule(&sched_id)).await?;
+    assert_status(&verify_sched_resp, 404, "verify schedule absent")?;
+    log_pass("crud 12", "verify schedule absent");
 
     // --- filter CRUD ---
     let filter_resp = client
@@ -906,9 +931,35 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     log_pass("crud 28", "verify override absent");
 
     // --- tag CRUD ---
-    // TODO: GMP 22.5+ requires <resources type="..."> element, but rust-gvm
-    // builds <resource_type> instead. Skip until library XML is fixed.
-    log_line("[skip] crud 29-32: tag CRUD (needs resources element fix in rust-gvm)");
+    let tag_resp = client
+        .call(create_tag(
+            "e2e:test-tag",
+            TagOpts {
+                resource_type: Some(EntityType::Task),
+                value: Some("e2e-value".into()),
+                comment: Some("e2e test tag".into()),
+                active: Some(true),
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&tag_resp, 201, "create_tag")?;
+    let tag_id = response_id(&tag_resp, "create_tag")?;
+    tracker.track_tag(&tag_id);
+    log_pass("crud 29", &format!("create tag ({tag_id})"));
+
+    let get_tag_resp = client.call(get_tag(&tag_id)).await?;
+    assert_status(&get_tag_resp, 200, "get_tag")?;
+    log_pass("crud 30", "get tag");
+
+    let del_tag_resp = client.call(delete_tag(&tag_id, true)).await?;
+    assert_status(&del_tag_resp, 200, "delete_tag")?;
+    tracker.tag_ids.retain(|v| v != tag_id.as_str());
+    log_pass("crud 31", "delete tag");
+
+    let verify_tag_resp = client.send(get_tag(&tag_id)).await?;
+    assert_status(&verify_tag_resp, 404, "verify tag absent")?;
+    log_pass("crud 32", "verify tag absent");
 
     // --- alert CRUD ---
     // TODO: Verify alert XML structure matches GMP 22.5+ requirements.
