@@ -428,10 +428,51 @@ enum AppError {
 
 async fn wait_ready(config: &EnvConfig) -> Result<(), AppError> {
     let mut client = connect_client(config).await?;
+
+    // Phase 1: Verify GMP protocol is responding
     let response = client
         .send(gvm_gmp::commands::version::get_version())
         .await?;
     assert_status(&response, 200, "get_version")?;
+    log_line("gvmd protocol responding");
+
+    // Phase 2: Wait for feed data to be loaded (scan configs appear after feed sync)
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
+    loop {
+        let auth = client
+            .call(authenticate(&config.username, &config.password))
+            .await?;
+        if auth.status_code() != Some(200) {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(AppError::Assertion(
+                    "timed out waiting for authentication to succeed".to_string(),
+                ));
+            }
+            sleep(Duration::from_secs(5)).await;
+            continue;
+        }
+
+        let configs = client
+            .call(get_scan_configs(GetScanConfigsOpts::default()))
+            .await?;
+        if configs.status_code() == Some(200) {
+            let count = count_elements(&configs, "config")?;
+            if count >= 1 {
+                log_line(&format!("feed ready: {count} scan config(s) available"));
+                break;
+            }
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            return Err(AppError::Assertion(
+                "timed out waiting for scan configs (feed data may not be loaded)".to_string(),
+            ));
+        }
+
+        log_line("waiting for feed data (scan configs not yet available)...");
+        sleep(Duration::from_secs(10)).await;
+    }
+
     client.disconnect().await?;
     Ok(())
 }
