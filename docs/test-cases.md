@@ -2,7 +2,7 @@
 
 A comprehensive overview of all test cases covered by the rust-gvm E2E test suite.
 
-> **Quick Stats:** 60+ test points across 4 suites, validating library, CLI, and cross-implementation consistency.
+> **Quick Stats:** 60+ test points across 5 suites, validating library, CLI, and cross-implementation consistency.
 
 ---
 
@@ -163,6 +163,24 @@ A comprehensive overview of all test cases covered by the rust-gvm E2E test suit
 | 07 | Wrong password | Non-zero exit code on auth failure |
 | 08 | `--raw` flag | Raw XML response passthrough |
 | 09 | Bad socket | Graceful error on connection failure |
+
+---
+
+## Suite 5: Differential Tests
+
+**Purpose:** Send identical GMP commands via rust-gvm and python-gvm (`gvm-tools`) and compare normalized results.  
+**Trigger:** Opt-in via `--suite differential` or workflow input `run-differential: true`.  
+**Behavior:** Mismatches are logged as warnings (non-blocking) for fault isolation.
+
+| # | Test Case | What It Validates |
+|---|-----------|-------------------|
+| 01 | `get_version` | Version string parity across both clients |
+| 02 | `get_scan_configs` | Config count, UUID set, and names match |
+| 03 | `get_scanners` | Scanner count and UUID/name parity |
+| 04 | `get_port_lists` | Port list count and UUID/name parity |
+| 05 | `get_feeds` | Feed type/status/syncing parity |
+| 06 | `get_report_formats` | Format count and UUID/name/type parity |
+| 07 | Target lifecycle cross-check | Create target via both clients, verify visibility in both, cleanup |
 
 ---
 

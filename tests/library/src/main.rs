@@ -5,17 +5,22 @@
 
 #![allow(clippy::print_stdout, clippy::too_many_lines)]
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::io::{self, Write};
+use std::process::Command;
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use gvm_client::{parse_version_text, GmpClient, GvmError};
 use gvm_connection::UnixSocketConnection;
 use gvm_gmp::commands::alerts::{create_alert, delete_alert, get_alert, AlertOpts};
 use gvm_gmp::commands::authentication::authenticate;
-use gvm_gmp::commands::credentials::{create_credential, delete_credential, get_credential, CredentialOpts};
+use gvm_gmp::commands::credentials::{
+    create_credential, delete_credential, get_credential, CredentialOpts,
+};
 use gvm_gmp::commands::feed::get_feeds;
 use gvm_gmp::commands::filters::{create_filter, delete_filter, get_filter, FilterOpts};
 use gvm_gmp::commands::notes::{create_note, delete_note, get_note, NoteOpts};
@@ -40,11 +45,14 @@ use gvm_gmp::commands::targets::{
 use gvm_gmp::commands::tasks::{
     create_task, delete_task, get_task, start_task, stop_task, CreateTaskOpts,
 };
-use gvm_gmp::enums::{AlertCondition, AlertEvent, AlertMethod, CredentialType, EntityType, FilterType};
+use gvm_gmp::enums::{
+    AlertCondition, AlertEvent, AlertMethod, CredentialType, EntityType, FilterType,
+};
 use gvm_gmp::types::{EntityId, GmpVersion};
 use gvm_protocol::Response;
 use quick_xml::events::Event;
 use quick_xml::Reader;
+use serde_json::Value;
 use thiserror::Error;
 use tokio::runtime::Builder;
 use tokio::time::sleep;
@@ -97,6 +105,12 @@ async fn async_main() -> Result<(), AppError> {
             run_secinfo_suite(&config).await?;
             log_line("E2E SecInfo suite passed");
         }
+        Mode::Differential => {
+            let mut tracker = CleanupTracker::new(config.clone());
+            run_differential_suite(&config, &mut tracker).await?;
+            tracker.cleanup_now().await?;
+            log_line("E2E differential suite completed");
+        }
         Mode::All => {
             let mut tracker = CleanupTracker::new(config.clone());
             run_smoke_suite(&config, &mut tracker).await?;
@@ -147,6 +161,7 @@ enum Mode {
     WaitReady,
     Crud,
     SecInfo,
+    Differential,
     All,
 }
 
@@ -172,16 +187,17 @@ impl Mode {
                     "smoke" => Ok(Self::Smoke),
                     "crud" => Ok(Self::Crud),
                     "secinfo" => Ok(Self::SecInfo),
+                    "differential" => Ok(Self::Differential),
                     "all" => Ok(Self::All),
                     other => Err(AppError::Usage(format!(
-                        "unsupported suite `{other}`; expected `smoke`, `crud`, `secinfo`, or `all`"
+                        "unsupported suite `{other}`; expected `smoke`, `crud`, `secinfo`, `differential`, or `all`"
                     ))),
                 };
             }
         }
 
         Err(AppError::Usage(
-            "usage: gvm-community-e2e [--mode <smoke|wait-ready> | --suite <smoke|crud|secinfo|all>]"
+            "usage: gvm-community-e2e [--mode <smoke|wait-ready> | --suite <smoke|crud|secinfo|differential|all>]"
                 .to_string(),
         ))
     }
@@ -423,6 +439,8 @@ enum AppError {
     #[error(transparent)]
     Xml(#[from] quick_xml::Error),
     #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
     Client(#[from] GvmError),
 }
 
@@ -590,9 +608,7 @@ async fn run_scan_suite(
 
     // Clean up stale scan target from previous runs (persistent volumes)
     {
-        let targets_response = client
-            .call(get_targets(GetTargetsOpts::default()))
-            .await?;
+        let targets_response = client.call(get_targets(GetTargetsOpts::default())).await?;
         let xml = targets_response.as_str()?;
         let stale_ids = find_elements_by_name(xml, "target", SCAN_TARGET_NAME)?;
         for stale_id in &stale_ids {
@@ -1082,11 +1098,913 @@ async fn run_secinfo_suite(config: &EnvConfig) -> Result<(), AppError> {
         .await?;
     assert_status(&nvts_resp, 200, "get_nvts")?;
     let nvt_count = count_elements(&nvts_resp, "nvt")?;
-    ensure(nvt_count >= 1, "expected at least one NVT; VT feed may not be loaded")?;
+    ensure(
+        nvt_count >= 1,
+        "expected at least one NVT; VT feed may not be loaded",
+    )?;
     log_pass("secinfo 06", &format!("get_nvts ({nvt_count} entries)"));
 
     client.disconnect().await?;
     Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct IdNameEntity {
+    id: String,
+    name: String,
+}
+
+#[derive(Clone, Debug)]
+struct FeedEntity {
+    feed_type: String,
+    name: String,
+    status: String,
+    currently_syncing: bool,
+}
+
+#[derive(Clone, Debug)]
+struct ReportFormatEntity {
+    id: String,
+    name: String,
+    extension: String,
+    content_type: String,
+}
+
+async fn run_differential_suite(
+    config: &EnvConfig,
+    tracker: &mut CleanupTracker,
+) -> Result<(), AppError> {
+    let mut client = connect_client(config).await?;
+    let auth_response = client
+        .call(authenticate(&config.username, &config.password))
+        .await?;
+    assert_status(&auth_response, 200, "authenticate")?;
+
+    let mut warnings: Vec<String> = Vec::new();
+
+    // 01: get_version
+    let rust_version_response = client
+        .send(gvm_gmp::commands::version::get_version())
+        .await?;
+    assert_status(&rust_version_response, 200, "get_version")?;
+    let rust_version = rust_version_response
+        .child_text("version")
+        .unwrap_or_default();
+    compare_get_version(&rust_version, &mut warnings)?;
+    log_pass("diff 01", "get_version compared");
+
+    // 02: get_scan_configs
+    let rust_scan_configs_response = client
+        .call(get_scan_configs(GetScanConfigsOpts::default()))
+        .await?;
+    assert_status(&rust_scan_configs_response, 200, "get_scan_configs")?;
+    let rust_scan_configs = parse_id_name_entities(&rust_scan_configs_response, "config", "name")?;
+    compare_id_name_command("get_scan_configs", &rust_scan_configs, &mut warnings)?;
+    log_pass("diff 02", "get_scan_configs compared");
+
+    // 03: get_scanners
+    let rust_scanners_response = client
+        .call(get_scanners(GetScannersOpts::default()))
+        .await?;
+    assert_status(&rust_scanners_response, 200, "get_scanners")?;
+    let rust_scanners = parse_id_name_entities(&rust_scanners_response, "scanner", "name")?;
+    compare_id_name_command("get_scanners", &rust_scanners, &mut warnings)?;
+    log_pass("diff 03", "get_scanners compared");
+
+    // 04: get_port_lists
+    let rust_port_lists_response = client
+        .call(get_port_lists(GetPortListsOpts::default()))
+        .await?;
+    assert_status(&rust_port_lists_response, 200, "get_port_lists")?;
+    let rust_port_lists = parse_id_name_entities(&rust_port_lists_response, "port_list", "name")?;
+    compare_id_name_command("get_port_lists", &rust_port_lists, &mut warnings)?;
+    log_pass("diff 04", "get_port_lists compared");
+
+    // 05: get_feeds
+    let rust_feeds_response = client.call(get_feeds()).await?;
+    assert_status(&rust_feeds_response, 200, "get_feeds")?;
+    let rust_feeds = parse_feed_entities(&rust_feeds_response)?;
+    compare_get_feeds(&rust_feeds, &mut warnings)?;
+    log_pass("diff 05", "get_feeds compared");
+
+    // 06: get_report_formats
+    let rust_report_formats_response = client
+        .call(get_report_formats(GetReportFormatsOpts::default()))
+        .await?;
+    assert_status(&rust_report_formats_response, 200, "get_report_formats")?;
+    let rust_report_formats = parse_report_format_entities(&rust_report_formats_response)?;
+    compare_get_report_formats(&rust_report_formats, &mut warnings)?;
+    log_pass("diff 06", "get_report_formats compared");
+
+    // 07: create/get/delete target via both clients and cross-verify existence
+    run_target_differential(&mut client, tracker, &rust_port_lists, &mut warnings).await?;
+    log_pass("diff 07", "cross-client target lifecycle");
+
+    if warnings.is_empty() {
+        log_line("[pass] differential comparison had no mismatches");
+    } else {
+        log_line(&format!(
+            "[warn] differential comparison detected {} mismatch(es)",
+            warnings.len()
+        ));
+        for warning in warnings {
+            log_line(&format!("[warn] {warning}"));
+        }
+    }
+
+    client.disconnect().await?;
+    Ok(())
+}
+
+async fn run_target_differential(
+    client: &mut GmpClient<UnixSocketConnection>,
+    tracker: &mut CleanupTracker,
+    rust_port_lists: &[IdNameEntity],
+    warnings: &mut Vec<String>,
+) -> Result<(), AppError> {
+    let Some(port_list_id) = rust_port_lists.first().map(|entry| entry.id.clone()) else {
+        warnings.push(
+            "target differential: no port list available; skipping target checks".to_string(),
+        );
+        return Ok(());
+    };
+
+    let run_id = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let rust_target_name = format!("e2e-diff-rust-{run_id}");
+    let python_target_name = format!("e2e-diff-python-{run_id}");
+
+    let rust_target_response = client
+        .call(create_target(
+            &rust_target_name,
+            CreateTargetOpts {
+                hosts: vec!["127.0.0.1".to_string()],
+                port_list_id: Some(parse_entity_id(&port_list_id)?),
+                ..CreateTargetOpts::default()
+            },
+        ))
+        .await?;
+    assert_status(
+        &rust_target_response,
+        201,
+        "differential create_target rust",
+    )?;
+    let rust_target_id = response_id(&rust_target_response, "differential create_target rust")?;
+    tracker.track_target(&rust_target_id);
+
+    let python_create = run_python_helper(
+        "create_target",
+        &[
+            ("--name", python_target_name.as_str()),
+            ("--hosts", "127.0.0.1"),
+            ("--port-list-id", port_list_id.as_str()),
+        ],
+    )?;
+    let python_target_id = parse_python_target_id(&python_create, "create_target", warnings);
+    if let Some(id) = python_target_id.as_deref() {
+        if let Ok(entity_id) = parse_entity_id(id) {
+            tracker.track_target(&entity_id);
+        } else {
+            warnings.push(format!("create_target python returned invalid UUID `{id}`"));
+        }
+    }
+
+    let rust_targets_response = client.call(get_targets(GetTargetsOpts::default())).await?;
+    assert_status(&rust_targets_response, 200, "get_targets rust")?;
+    let rust_targets = parse_id_name_entities(&rust_targets_response, "target", "name")?;
+
+    let python_targets_json = run_python_helper("get_targets", &[])?;
+    let python_targets = parse_python_id_name_entities(&python_targets_json, "targets", warnings);
+
+    compare_target_visibility(
+        "rust target",
+        rust_target_id.as_str(),
+        &rust_target_name,
+        &rust_targets,
+        &python_targets,
+        warnings,
+    );
+    if let Some(id) = python_target_id.as_deref() {
+        compare_target_visibility(
+            "python target",
+            id,
+            &python_target_name,
+            &rust_targets,
+            &python_targets,
+            warnings,
+        );
+    }
+
+    let rust_delete_response = client.call(delete_target(&rust_target_id, true)).await?;
+    assert_status(
+        &rust_delete_response,
+        200,
+        "differential delete_target rust",
+    )?;
+    tracker
+        .target_ids
+        .retain(|value| value != rust_target_id.as_str());
+
+    if let Some(id) = python_target_id {
+        let python_delete = run_python_helper("delete_target", &[("--target-id", id.as_str())])?;
+        if python_delete
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            != "ok"
+        {
+            warnings.push(format!(
+                "delete_target python returned non-ok status: {}",
+                python_delete
+            ));
+        }
+        tracker.target_ids.retain(|value| value != id.as_str());
+    }
+
+    Ok(())
+}
+
+fn compare_target_visibility(
+    label: &str,
+    expected_id: &str,
+    expected_name: &str,
+    rust_targets: &[IdNameEntity],
+    python_targets: &[IdNameEntity],
+    warnings: &mut Vec<String>,
+) {
+    let rust_map: BTreeMap<&str, &str> = rust_targets
+        .iter()
+        .map(|entry| (entry.id.as_str(), entry.name.as_str()))
+        .collect();
+    let python_map: BTreeMap<&str, &str> = python_targets
+        .iter()
+        .map(|entry| (entry.id.as_str(), entry.name.as_str()))
+        .collect();
+
+    match rust_map.get(expected_id) {
+        Some(name) if *name == expected_name => {}
+        Some(name) => warnings.push(format!(
+            "{label} mismatch in rust get_targets: id `{expected_id}` has name `{name}`, expected `{expected_name}`"
+        )),
+        None => warnings.push(format!(
+            "{label} missing in rust get_targets: id `{expected_id}`"
+        )),
+    }
+    match python_map.get(expected_id) {
+        Some(name) if *name == expected_name => {}
+        Some(name) => warnings.push(format!(
+            "{label} mismatch in python get_targets: id `{expected_id}` has name `{name}`, expected `{expected_name}`"
+        )),
+        None => warnings.push(format!(
+            "{label} missing in python get_targets: id `{expected_id}`"
+        )),
+    }
+}
+
+fn compare_get_version(rust_version: &str, warnings: &mut Vec<String>) -> Result<(), AppError> {
+    let python_json = run_python_helper("get_version", &[])?;
+    let python_status = python_json
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if python_status != "ok" {
+        warnings.push(format!(
+            "get_version python helper returned non-ok status: {python_json}"
+        ));
+        return Ok(());
+    }
+
+    let python_version = python_json
+        .get("data")
+        .and_then(|data| data.get("version"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if rust_version != python_version {
+        warnings.push(format!(
+            "get_version mismatch: rust `{rust_version}` vs python `{python_version}`"
+        ));
+    }
+
+    Ok(())
+}
+
+fn compare_id_name_command(
+    command: &str,
+    rust_entities: &[IdNameEntity],
+    warnings: &mut Vec<String>,
+) -> Result<(), AppError> {
+    let python_json = run_python_helper(command, &[])?;
+    let python_entities =
+        parse_python_id_name_entities(&python_json, list_key_for_command(command), warnings);
+    compare_id_name_entities(command, rust_entities, &python_entities, warnings);
+    Ok(())
+}
+
+fn compare_id_name_entities(
+    label: &str,
+    rust_entities: &[IdNameEntity],
+    python_entities: &[IdNameEntity],
+    warnings: &mut Vec<String>,
+) {
+    if rust_entities.len() != python_entities.len() {
+        warnings.push(format!(
+            "{label} count mismatch: rust {} vs python {}",
+            rust_entities.len(),
+            python_entities.len()
+        ));
+    }
+
+    let rust_ids: BTreeSet<&str> = rust_entities
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect();
+    let python_ids: BTreeSet<&str> = python_entities
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect();
+
+    for missing in rust_ids.difference(&python_ids) {
+        warnings.push(format!("{label} UUID missing in python: {missing}"));
+    }
+    for missing in python_ids.difference(&rust_ids) {
+        warnings.push(format!("{label} UUID missing in rust: {missing}"));
+    }
+
+    let rust_map: BTreeMap<&str, &str> = rust_entities
+        .iter()
+        .map(|entry| (entry.id.as_str(), entry.name.as_str()))
+        .collect();
+    let python_map: BTreeMap<&str, &str> = python_entities
+        .iter()
+        .map(|entry| (entry.id.as_str(), entry.name.as_str()))
+        .collect();
+
+    for id in rust_ids.intersection(&python_ids) {
+        let rust_name = rust_map.get(id).copied().unwrap_or_default();
+        let python_name = python_map.get(id).copied().unwrap_or_default();
+        if rust_name != python_name {
+            warnings.push(format!(
+                "{label} name mismatch for UUID `{id}`: rust `{rust_name}` vs python `{python_name}`"
+            ));
+        }
+    }
+}
+
+fn compare_get_feeds(
+    rust_feeds: &[FeedEntity],
+    warnings: &mut Vec<String>,
+) -> Result<(), AppError> {
+    let python_json = run_python_helper("get_feeds", &[])?;
+    let python_status = python_json
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if python_status != "ok" {
+        warnings.push(format!(
+            "get_feeds python helper returned non-ok status: {python_json}"
+        ));
+        return Ok(());
+    }
+
+    let python_feeds = parse_python_feeds(&python_json, warnings);
+    if rust_feeds.len() != python_feeds.len() {
+        warnings.push(format!(
+            "get_feeds count mismatch: rust {} vs python {}",
+            rust_feeds.len(),
+            python_feeds.len()
+        ));
+    }
+
+    let rust_types: BTreeSet<&str> = rust_feeds
+        .iter()
+        .map(|entry| entry.feed_type.as_str())
+        .collect();
+    let python_types: BTreeSet<&str> = python_feeds
+        .iter()
+        .map(|entry| entry.feed_type.as_str())
+        .collect();
+    for missing in rust_types.difference(&python_types) {
+        warnings.push(format!("get_feeds type missing in python: {missing}"));
+    }
+    for missing in python_types.difference(&rust_types) {
+        warnings.push(format!("get_feeds type missing in rust: {missing}"));
+    }
+
+    let rust_map: BTreeMap<&str, &FeedEntity> = rust_feeds
+        .iter()
+        .map(|entry| (entry.feed_type.as_str(), entry))
+        .collect();
+    let python_map: BTreeMap<&str, &FeedEntity> = python_feeds
+        .iter()
+        .map(|entry| (entry.feed_type.as_str(), entry))
+        .collect();
+    for key in rust_types.intersection(&python_types) {
+        let Some(rust_entry) = rust_map.get(key).copied() else {
+            continue;
+        };
+        let Some(python_entry) = python_map.get(key).copied() else {
+            continue;
+        };
+        if rust_entry.name != python_entry.name {
+            warnings.push(format!(
+                "get_feeds name mismatch for type `{key}`: rust `{}` vs python `{}`",
+                rust_entry.name, python_entry.name
+            ));
+        }
+        if rust_entry.status != python_entry.status {
+            warnings.push(format!(
+                "get_feeds status mismatch for type `{key}`: rust `{}` vs python `{}`",
+                rust_entry.status, python_entry.status
+            ));
+        }
+        if rust_entry.currently_syncing != python_entry.currently_syncing {
+            warnings.push(format!(
+                "get_feeds currently_syncing mismatch for type `{key}`: rust `{}` vs python `{}`",
+                rust_entry.currently_syncing, python_entry.currently_syncing
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn compare_get_report_formats(
+    rust_formats: &[ReportFormatEntity],
+    warnings: &mut Vec<String>,
+) -> Result<(), AppError> {
+    let python_json = run_python_helper("get_report_formats", &[])?;
+    let python_status = python_json
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if python_status != "ok" {
+        warnings.push(format!(
+            "get_report_formats python helper returned non-ok status: {python_json}"
+        ));
+        return Ok(());
+    }
+
+    let python_formats = parse_python_report_formats(&python_json, warnings);
+    if rust_formats.len() != python_formats.len() {
+        warnings.push(format!(
+            "get_report_formats count mismatch: rust {} vs python {}",
+            rust_formats.len(),
+            python_formats.len()
+        ));
+    }
+
+    let rust_ids: BTreeSet<&str> = rust_formats.iter().map(|entry| entry.id.as_str()).collect();
+    let python_ids: BTreeSet<&str> = python_formats
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect();
+    for missing in rust_ids.difference(&python_ids) {
+        warnings.push(format!(
+            "get_report_formats UUID missing in python: {missing}"
+        ));
+    }
+    for missing in python_ids.difference(&rust_ids) {
+        warnings.push(format!(
+            "get_report_formats UUID missing in rust: {missing}"
+        ));
+    }
+
+    let rust_map: BTreeMap<&str, &ReportFormatEntity> = rust_formats
+        .iter()
+        .map(|entry| (entry.id.as_str(), entry))
+        .collect();
+    let python_map: BTreeMap<&str, &ReportFormatEntity> = python_formats
+        .iter()
+        .map(|entry| (entry.id.as_str(), entry))
+        .collect();
+    for id in rust_ids.intersection(&python_ids) {
+        let Some(rust_entry) = rust_map.get(id).copied() else {
+            continue;
+        };
+        let Some(python_entry) = python_map.get(id).copied() else {
+            continue;
+        };
+        if rust_entry.name != python_entry.name {
+            warnings.push(format!(
+                "get_report_formats name mismatch for `{id}`: rust `{}` vs python `{}`",
+                rust_entry.name, python_entry.name
+            ));
+        }
+        if rust_entry.extension != python_entry.extension {
+            warnings.push(format!(
+                "get_report_formats extension mismatch for `{id}`: rust `{}` vs python `{}`",
+                rust_entry.extension, python_entry.extension
+            ));
+        }
+        if rust_entry.content_type != python_entry.content_type {
+            warnings.push(format!(
+                "get_report_formats content_type mismatch for `{id}`: rust `{}` vs python `{}`",
+                rust_entry.content_type, python_entry.content_type
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_id_name_entities(
+    response: &Response,
+    element_name: &str,
+    name_element: &str,
+) -> Result<Vec<IdNameEntity>, AppError> {
+    let xml = response.as_str()?;
+    let mut reader = Reader::from_str(xml);
+    let mut entities = Vec::new();
+    let mut current_id = String::new();
+    let mut current_name = String::new();
+    let mut inside_element = false;
+    let mut inside_name = false;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref event) if event.name().as_ref() == element_name.as_bytes() => {
+                inside_element = true;
+                current_id.clear();
+                current_name.clear();
+                for attribute in event.attributes().flatten() {
+                    if attribute.key.as_ref() == b"id" {
+                        current_id = attribute
+                            .decode_and_unescape_value(reader.decoder())?
+                            .into_owned();
+                    }
+                }
+            }
+            Event::Empty(ref event) if event.name().as_ref() == element_name.as_bytes() => {
+                let mut id = String::new();
+                for attribute in event.attributes().flatten() {
+                    if attribute.key.as_ref() == b"id" {
+                        id = attribute
+                            .decode_and_unescape_value(reader.decoder())?
+                            .into_owned();
+                    }
+                }
+                if !id.is_empty() {
+                    entities.push(IdNameEntity {
+                        id,
+                        name: String::new(),
+                    });
+                }
+            }
+            Event::End(ref event) if event.name().as_ref() == element_name.as_bytes() => {
+                if !current_id.is_empty() {
+                    entities.push(IdNameEntity {
+                        id: current_id.clone(),
+                        name: current_name.clone(),
+                    });
+                }
+                inside_element = false;
+                inside_name = false;
+            }
+            Event::Start(ref event)
+                if inside_element && event.name().as_ref() == name_element.as_bytes() =>
+            {
+                inside_name = true;
+            }
+            Event::End(ref event)
+                if inside_element && event.name().as_ref() == name_element.as_bytes() =>
+            {
+                inside_name = false;
+            }
+            Event::Text(ref event) if inside_element && inside_name => {
+                current_name = String::from_utf8_lossy(event.as_ref()).into_owned();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(entities)
+}
+
+fn parse_feed_entities(response: &Response) -> Result<Vec<FeedEntity>, AppError> {
+    let xml = response.as_str()?;
+    let mut reader = Reader::from_str(xml);
+    let mut feeds = Vec::new();
+    let mut inside_feed = false;
+    let mut active_child = String::new();
+    let mut current = FeedEntity {
+        feed_type: String::new(),
+        name: String::new(),
+        status: String::new(),
+        currently_syncing: false,
+    };
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref event) if event.name().as_ref() == b"feed" => {
+                inside_feed = true;
+                current = FeedEntity {
+                    feed_type: String::new(),
+                    name: String::new(),
+                    status: String::new(),
+                    currently_syncing: false,
+                };
+            }
+            Event::End(ref event) if event.name().as_ref() == b"feed" => {
+                if !current.feed_type.is_empty() {
+                    feeds.push(current.clone());
+                }
+                inside_feed = false;
+                active_child.clear();
+            }
+            Event::Empty(ref event)
+                if inside_feed && event.name().as_ref() == b"currently_syncing" =>
+            {
+                current.currently_syncing = true;
+            }
+            Event::Start(ref event) if inside_feed => {
+                if event.name().as_ref() == b"type"
+                    || event.name().as_ref() == b"name"
+                    || event.name().as_ref() == b"status"
+                    || event.name().as_ref() == b"currently_syncing"
+                {
+                    active_child = String::from_utf8_lossy(event.name().as_ref()).into_owned();
+                }
+            }
+            Event::End(ref event) if inside_feed => {
+                let tag = String::from_utf8_lossy(event.name().as_ref()).into_owned();
+                if active_child == tag {
+                    active_child.clear();
+                }
+            }
+            Event::Text(ref event) if inside_feed && !active_child.is_empty() => {
+                let value = String::from_utf8_lossy(event.as_ref()).into_owned();
+                match active_child.as_str() {
+                    "type" => current.feed_type = value,
+                    "name" => current.name = value,
+                    "status" => current.status = value,
+                    "currently_syncing" => {
+                        let lowered = value.to_ascii_lowercase();
+                        current.currently_syncing = matches!(lowered.as_str(), "1" | "true" | "yes")
+                    }
+                    _ => {}
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(feeds)
+}
+
+fn parse_report_format_entities(response: &Response) -> Result<Vec<ReportFormatEntity>, AppError> {
+    let xml = response.as_str()?;
+    let mut reader = Reader::from_str(xml);
+    let mut formats = Vec::new();
+    let mut inside_format = false;
+    let mut active_child = String::new();
+    let mut current = ReportFormatEntity {
+        id: String::new(),
+        name: String::new(),
+        extension: String::new(),
+        content_type: String::new(),
+    };
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref event) if event.name().as_ref() == b"report_format" => {
+                inside_format = true;
+                current = ReportFormatEntity {
+                    id: String::new(),
+                    name: String::new(),
+                    extension: String::new(),
+                    content_type: String::new(),
+                };
+                for attribute in event.attributes().flatten() {
+                    if attribute.key.as_ref() == b"id" {
+                        current.id = attribute
+                            .decode_and_unescape_value(reader.decoder())?
+                            .into_owned();
+                    }
+                }
+            }
+            Event::End(ref event) if event.name().as_ref() == b"report_format" => {
+                if !current.id.is_empty() {
+                    formats.push(current.clone());
+                }
+                inside_format = false;
+                active_child.clear();
+            }
+            Event::Start(ref event) if inside_format => {
+                if event.name().as_ref() == b"name"
+                    || event.name().as_ref() == b"extension"
+                    || event.name().as_ref() == b"content_type"
+                {
+                    active_child = String::from_utf8_lossy(event.name().as_ref()).into_owned();
+                }
+            }
+            Event::End(ref event) if inside_format => {
+                let tag = String::from_utf8_lossy(event.name().as_ref()).into_owned();
+                if active_child == tag {
+                    active_child.clear();
+                }
+            }
+            Event::Text(ref event) if inside_format && !active_child.is_empty() => {
+                let value = String::from_utf8_lossy(event.as_ref()).into_owned();
+                match active_child.as_str() {
+                    "name" => current.name = value,
+                    "extension" => current.extension = value,
+                    "content_type" => current.content_type = value,
+                    _ => {}
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(formats)
+}
+
+fn run_python_helper(command: &str, args: &[(&str, &str)]) -> Result<Value, AppError> {
+    let helper_path = env::var("DIFFERENTIAL_HELPER_PATH")
+        .unwrap_or_else(|_| "/workspace/docker/scripts/differential-helper.py".to_string());
+    let mut helper_command = Command::new("python3");
+    helper_command.arg(helper_path).arg(command);
+    for (flag, value) in args {
+        helper_command.arg(flag).arg(value);
+    }
+
+    let output = helper_command.output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let rendered = if !stderr.is_empty() {
+            stderr
+        } else {
+            "no output".to_string()
+        };
+        return Err(AppError::Assertion(format!(
+            "python helper `{command}` returned empty stdout: {rendered}"
+        )));
+    }
+
+    Ok(serde_json::from_str(&stdout)?)
+}
+
+fn list_key_for_command(command: &str) -> &str {
+    match command {
+        "get_scan_configs" => "scan_configs",
+        "get_scanners" => "scanners",
+        "get_port_lists" => "port_lists",
+        "get_targets" => "targets",
+        _ => "items",
+    }
+}
+
+fn parse_python_id_name_entities(
+    payload: &Value,
+    list_key: &str,
+    warnings: &mut Vec<String>,
+) -> Vec<IdNameEntity> {
+    let status = payload.get("status").and_then(Value::as_str).unwrap_or("");
+    if status != "ok" {
+        warnings.push(format!(
+            "python helper returned non-ok status for `{list_key}`: {payload}"
+        ));
+        return Vec::new();
+    }
+
+    let Some(items) = payload
+        .get("data")
+        .and_then(|data| data.get(list_key))
+        .and_then(Value::as_array)
+    else {
+        warnings.push(format!(
+            "python helper payload missing data.{list_key}: {payload}"
+        ));
+        return Vec::new();
+    };
+
+    let mut entities = Vec::new();
+    for item in items {
+        if let Some(id) = item.get("id").and_then(Value::as_str) {
+            let name = item
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            entities.push(IdNameEntity {
+                id: id.to_string(),
+                name,
+            });
+        }
+    }
+    entities
+}
+
+fn parse_python_feeds(payload: &Value, warnings: &mut Vec<String>) -> Vec<FeedEntity> {
+    let Some(items) = payload
+        .get("data")
+        .and_then(|data| data.get("feeds"))
+        .and_then(Value::as_array)
+    else {
+        warnings.push(format!(
+            "python helper payload missing data.feeds: {payload}"
+        ));
+        return Vec::new();
+    };
+
+    let mut feeds = Vec::new();
+    for item in items {
+        feeds.push(FeedEntity {
+            feed_type: item
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            name: item
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            status: item
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            currently_syncing: item
+                .get("currently_syncing")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        });
+    }
+    feeds
+}
+
+fn parse_python_report_formats(
+    payload: &Value,
+    warnings: &mut Vec<String>,
+) -> Vec<ReportFormatEntity> {
+    let Some(items) = payload
+        .get("data")
+        .and_then(|data| data.get("report_formats"))
+        .and_then(Value::as_array)
+    else {
+        warnings.push(format!(
+            "python helper payload missing data.report_formats: {payload}"
+        ));
+        return Vec::new();
+    };
+
+    let mut formats = Vec::new();
+    for item in items {
+        if let Some(id) = item.get("id").and_then(Value::as_str) {
+            formats.push(ReportFormatEntity {
+                id: id.to_string(),
+                name: item
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                extension: item
+                    .get("extension")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                content_type: item
+                    .get("content_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            });
+        }
+    }
+    formats
+}
+
+fn parse_python_target_id(
+    payload: &Value,
+    command: &str,
+    warnings: &mut Vec<String>,
+) -> Option<String> {
+    let status = payload.get("status").and_then(Value::as_str).unwrap_or("");
+    if status != "ok" {
+        warnings.push(format!(
+            "{command} python helper returned non-ok status: {payload}"
+        ));
+        return None;
+    }
+
+    let Some(id) = payload
+        .get("data")
+        .and_then(|data| data.get("id"))
+        .and_then(Value::as_str)
+    else {
+        warnings.push(format!(
+            "{command} python helper payload missing data.id: {payload}"
+        ));
+        return None;
+    };
+    Some(id.to_string())
 }
 
 async fn poll_task_status(
@@ -1234,7 +2152,6 @@ fn response_summary(response: &Response) -> Result<String, AppError> {
     Ok(xml.chars().take(240).collect())
 }
 
-
 /// Find all `<element_name>` elements whose `<name>` child matches `target_name`,
 /// returning their `id` attributes.
 fn find_elements_by_name(
@@ -1255,8 +2172,10 @@ fn find_elements_by_name(
                 current_id = None;
                 for attr in e.attributes().flatten() {
                     if attr.key.as_ref() == b"id" {
-                        current_id =
-                            Some(attr.decode_and_unescape_value(reader.decoder())?.into_owned());
+                        current_id = Some(
+                            attr.decode_and_unescape_value(reader.decoder())?
+                                .into_owned(),
+                        );
                     }
                 }
             }

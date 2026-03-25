@@ -32,6 +32,11 @@ on:
         required: false
         type: boolean
         default: true
+      run-differential:
+        description: "Run cross-client differential suite (rust-gvm vs python-gvm)"
+        required: false
+        type: boolean
+        default: false
   repository_dispatch:
     types: [component-updated]
   pull_request:
@@ -141,6 +146,12 @@ jobs:
           docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run --rm -T \
             --entrypoint "" rust-gvm-e2e \
             gvm-community-e2e --suite secinfo
+      - name: Run Differential tests
+        if: success() && inputs.run-differential == true
+        run: |
+          docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run --rm -T \
+            --entrypoint "" rust-gvm-e2e \
+            gvm-community-e2e --suite differential
       - name: Validate results with gvm-tools
         if: success() && inputs.validate-gvm-tools != false
         run: |
