@@ -437,7 +437,7 @@ async fn wait_ready(config: &EnvConfig) -> Result<(), AppError> {
     log_line("gvmd protocol responding");
 
     // Phase 2: Wait for feed data to be loaded (scan configs appear after feed sync)
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2700);
     loop {
         let auth = client
             .call(authenticate(&config.username, &config.password))
@@ -470,7 +470,7 @@ async fn wait_ready(config: &EnvConfig) -> Result<(), AppError> {
         }
 
         log_line("waiting for feed data (scan configs not yet available)...");
-        sleep(Duration::from_secs(10)).await;
+        sleep(Duration::from_secs(30)).await;
     }
 
     client.disconnect().await?;
