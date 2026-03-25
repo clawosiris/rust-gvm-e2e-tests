@@ -9,9 +9,9 @@ End-to-end integration tests for the [rust-gvm](https://github.com/clawosiris/ru
 │                   rust-gvm-e2e-tests                     │
 │                                                          │
 │  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │ Layer 1       │  │ Layer 2       │  │ Diagnostic    │  │
-│  │ rust-gvm lib  │  │ gvm-rools CLI │  │ python-gvm    │  │
-│  │ (GMP socket)  │  │ (gvm-cli)     │  │ (fault isol.) │  │
+│  │ Layer 1       │  │ Layer 2       │  │ Validation    │  │
+│  │ rust-gvm lib  │  │ gvm-rools CLI │  │ gvm-tools     │  │
+│  │ (GMP socket)  │  │ (gvm-cli)     │  │ (cross-check) │  │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬────────┘  │
 │         └────────┬────────┘                  │           │
 │                  ▼                           ▼           │
@@ -33,14 +33,14 @@ This repo validates the **full stack** — from Rust client code through CLI too
 - Scanner registration and scan execution
 - Protocol compatibility with actual gvmd versions
 
-## Test Layers
+## Test Suites
 
-### Layer 1: Library Tests (rust-gvm)
-Tests the Rust GMP client library directly via Unix socket connection to gvmd.
+### Suite 1: Smoke Tests (rust-gvm library)
+Core protocol validation via Unix socket connection to gvmd.
 
 | Test | Description |
 |------|-------------|
-| 01 | Version negotiation (GMP 22.7) |
+| 01 | Version negotiation (GMP 22.7+) |
 | 02 | Authentication |
 | 03 | List scan configs (feed-dependent) |
 | 04 | List scanners |
@@ -54,7 +54,19 @@ Tests the Rust GMP client library directly via Unix socket connection to gvmd.
 Extended (opt-in with `run-scan: true`):
 - Create task with real scan config → start → poll → stop → get report
 
-### Layer 2: CLI Tests (gvm-rools)
+### Suite 2: CRUD Tests
+Full create → get → delete → verify-absent lifecycle for:
+- Port lists, Credentials, Schedules, Filters
+- Tasks, Notes, Overrides, Tags, Alerts
+
+### Suite 3: SecInfo Tests
+Read-only queries against feed data:
+- `get_feeds` — feed status
+- `get_cves`, `get_cpes` — vulnerability data
+- `get_cert_bund_advisories`, `get_dfn_cert_advisories` — CERT data
+- `get_nvts` — vulnerability tests
+
+### Suite 4: CLI Tests (gvm-rools)
 Tests `gvm-cli` command-line tool end-to-end.
 
 | Test | Description |
@@ -64,9 +76,13 @@ Tests `gvm-cli` command-line tool end-to-end.
 | 03 | Pretty-print `get_scan_configs` |
 | 04 | Create target via XML |
 | 05 | Delete target |
+| 06 | `--duration` timing output |
+| 07 | Wrong password non-zero exit |
+| 08 | `--raw` XML passthrough |
+| 09 | Non-existent socket error |
 
-### Diagnostic: gvm-tools Cross-Check
-When tests fail, automatically re-runs the same GMP queries via python `gvm-tools` to isolate whether the failure is in rust-gvm or in the GVM stack itself.
+### Validation: gvm-tools Cross-Check
+By default, all test results are validated against python `gvm-tools` to ensure consistency between implementations. This runs on success (configurable) and always on failure for fault isolation.
 
 ## Running
 
@@ -79,6 +95,7 @@ Trigger via **workflow_dispatch** at [Actions → E2E Tests → Run workflow](..
 | `gvm-rools-ref` | `main` | gvm-rools branch/tag/SHA to test |
 | `run-scan` | `false` | Run extended scan test (~10min+) |
 | `clean` | `false` | Destroy volumes for fresh environment |
+| `validate-gvm-tools` | `true` | Cross-validate results with gvm-tools |
 
 ### Cross-Repo Triggering
 Component repos can trigger E2E tests via `repository_dispatch`:
@@ -93,14 +110,14 @@ gh api repos/clawosiris/rust-gvm-e2e-tests/dispatches \
 
 ### Self-Hosted Runner
 Tests run on a permanent Hetzner VPS runner with Docker. Persistent volumes keep GVM feed data between runs:
-- **First run**: Full feed sync (~20 min)
-- **Subsequent runs**: Delta sync only (~2-3 min)
+- **Clean run** (`clean=true`): Full feed sync (~60-90 min)
+- **Warm run** (`clean=false`): Reuses cached feed data (~13 min)
 
 ### Runner Image
 A custom Docker image (`rust-gvm-e2e-runner`) is built in CI with:
-- Pre-compiled `gvm-community-e2e` binary (Layer 1 tests)
-- Pre-compiled `gvm-cli` from gvm-rools (Layer 2 tests)
-- `python-gvm` for diagnostic cross-checks
+- Pre-compiled `gvm-community-e2e` binary (Rust test harness)
+- Pre-compiled `gvm-cli` from gvm-rools (CLI tests)
+- `python-gvm` / `gvm-tools` for validation cross-checks
 
 ### GVM Community Stack
 Standard Greenbone Community Edition containers:
@@ -123,33 +140,29 @@ rust-gvm-e2e-tests/
 │   └── scripts/
 │       ├── wait-ready.sh       # Stack readiness check
 │       ├── run-smoke.sh        # Test orchestrator
-│       └── validate-against-gvm-tools.py  # Diagnostic fallback
+│       └── validate-against-gvm-tools.py  # Cross-validation
 ├── tests/
-│   ├── library/                # Layer 1: rust-gvm binary crate
+│   ├── library/                # Rust test harness
 │   │   ├── Cargo.toml
 │   │   └── src/main.rs
-│   └── cli/                    # Layer 2: gvm-rools bash tests
+│   └── cli/                    # CLI bash tests
 │       └── smoke.sh
 ├── spec/
 │   └── e2e-test-spec.md        # Design specification
 ├── journal/
-│   └── 2026-03-23.md           # Development journal
+│   └── *.md                    # Development journal
 ├── Cargo.toml                  # Workspace root
 └── README.md
 ```
 
-## Phased Roadmap
+## Roadmap
 
-| Phase | Status | What |
-|-------|--------|------|
-| **1** | ✅ Active | Library (rust-gvm) + CLI (gvm-rools) via Unix socket |
-| **2** | Planned | REST/gRPC API (rust-gvm-api) + SSH transport |
-| **3** | Planned | MCP server (openvas-mcp-server) |
-| **4** | Planned | Cross-client differential validation (rust-gvm vs python-gvm) |
-
-## History
-
-This repo was extracted from [`clawosiris/rust-gvm`](https://github.com/clawosiris/rust-gvm) using `git-filter-repo` to preserve commit history. See [journal/2026-03-23.md](journal/2026-03-23.md) for the full migration story.
+| Phase | Status | Description |
+|-------|--------|-------------|
+| **1** | ✅ Done | Library + CLI tests via Unix socket |
+| **2** | 🔜 Planned | Multi-version GVM stack testing ([#16](../../issues/16)) |
+| **3** | Planned | REST/gRPC API tests (rust-gvm-api) |
+| **4** | Planned | MCP server tests (openvas-mcp-server) |
 
 ## License
 
