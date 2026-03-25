@@ -437,7 +437,8 @@ async fn wait_ready(config: &EnvConfig) -> Result<(), AppError> {
     log_line("gvmd protocol responding");
 
     // Phase 2: Wait for feed data to be loaded (scan configs appear after feed sync)
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2700);
+    // Clean-volume feed syncs on CI can take 60-90 min; 2h ceiling with workflow timeout as hard stop.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(7200);
     loop {
         let auth = client
             .call(authenticate(&config.username, &config.password))
