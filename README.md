@@ -35,6 +35,9 @@ This repo validates the **full stack** — from Rust client code through CLI too
 
 ## Test Suites
 
+See [docs/test-cases.md](docs/test-cases.md) for a detailed breakdown of all 60+ test points.
+
+
 ### Suite 1: Smoke Tests (rust-gvm library)
 Core protocol validation via Unix socket connection to gvmd.
 
