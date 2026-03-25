@@ -27,6 +27,11 @@ on:
         required: false
         type: string
         default: "main"
+      validate-gvm-tools:
+        description: "Validate results against gvm-tools (cross-check)"
+        required: false
+        type: boolean
+        default: true
   repository_dispatch:
     types: [component-updated]
   pull_request:
@@ -136,6 +141,12 @@ jobs:
           docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run --rm -T \
             --entrypoint "" rust-gvm-e2e \
             gvm-community-e2e --suite secinfo
+      - name: Validate results with gvm-tools
+        if: success() && inputs.validate-gvm-tools != false
+        run: |
+          echo "=== Cross-validating with gvm-tools ==="
+          docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run --rm -T --entrypoint "" rust-gvm-e2e \
+            python3 /workspace/docker/scripts/validate-against-gvm-tools.py --check all
       - name: gvm-tools cross-check on failure
         if: failure()
         run: |
