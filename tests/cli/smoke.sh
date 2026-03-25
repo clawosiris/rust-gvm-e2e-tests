@@ -27,14 +27,16 @@ require_contains() {
 }
 
 run_cli() {
-  # --xml and --pretty are top-level flags; extract them before the subcommand.
+  # --xml, --pretty, --raw, and --duration are top-level flags; extract them before the subcommand.
   local top_args=()
   local sub_args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --xml)    top_args+=(--xml "$2"); shift 2 ;;
-      --pretty) top_args+=(--pretty); shift ;;
-      *)        sub_args+=("$1"); shift ;;
+      --xml)      top_args+=(--xml "$2"); shift 2 ;;
+      --pretty)   top_args+=(--pretty); shift ;;
+      --raw)      top_args+=(--raw); shift ;;
+      --duration) top_args+=(--duration); shift ;;
+      *)          sub_args+=("$1"); shift ;;
     esac
   done
   "${GVM_CLI_BIN}" \
@@ -86,3 +88,30 @@ require_contains "${delete_output}" "<delete_target_response" "delete_target"
 require_contains "${delete_output}" 'status="200"' "delete_target"
 : > "${TARGET_ID_FILE}"
 log "[pass] cli 05 delete target"
+
+# Test --duration flag: timing output must appear on stderr
+duration_output="$(run_cli --duration --xml '<get_version/>' 2>&1)"
+require_contains "${duration_output}" "Elapsed time:" "--duration timing output"
+log "[pass] cli 06 --duration timing output"
+
+# Test error handling: wrong password exits non-zero without --raw
+if "${GVM_CLI_BIN}" \
+    --gmp-username "${GVM_ADMIN_USER}" --gmp-password "wrong-password-xyz" \
+    socket --path "${SOCKET_PATH}" --xml '<get_version/>' >/dev/null 2>&1; then
+  fail "cli 07: expected non-zero exit for wrong password"
+fi
+log "[pass] cli 07 wrong password: exits non-zero"
+
+# Test --raw flag: wrong password returns raw XML output instead of failing
+raw_output="$("${GVM_CLI_BIN}" \
+    --gmp-username "${GVM_ADMIN_USER}" --gmp-password "wrong-password-xyz" \
+    --raw socket --path "${SOCKET_PATH}" --xml '<get_version/>' 2>&1)" || true
+require_contains "${raw_output}" "<" "cli 08: expected XML output with --raw"
+log "[pass] cli 08 --raw: outputs XML despite auth failure"
+
+# Test error handling: non-existent socket exits non-zero
+if "${GVM_CLI_BIN}" \
+    socket --path "/nonexistent/path/gvmd.sock" --xml '<get_version/>' >/dev/null 2>&1; then
+  fail "cli 09: expected non-zero exit for non-existent socket"
+fi
+log "[pass] cli 09 non-existent socket: exits non-zero"

@@ -1,7 +1,7 @@
 name: E2E Tests
 
 concurrency:
-  group: e2e-tests
+  group: e2e-tests-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 on:
@@ -29,6 +29,12 @@ on:
         default: "main"
   repository_dispatch:
     types: [component-updated]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tests/**'
+      - 'docker/**'
+      - '.github/workflows/e2e.yml'
 
 permissions:
   contents: read
@@ -118,6 +124,18 @@ jobs:
           docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run \
             -e E2E_RUN_SCAN=${{ inputs.run-scan && '1' || '0' }} \
             --rm rust-gvm-e2e
+      - name: Run CRUD tests
+        if: success()
+        run: |
+          docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run --rm -T \
+            --entrypoint "" rust-gvm-e2e \
+            gvm-community-e2e --suite crud
+      - name: Run SecInfo tests
+        if: success()
+        run: |
+          docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run --rm -T \
+            --entrypoint "" rust-gvm-e2e \
+            gvm-community-e2e --suite secinfo
       - name: gvm-tools cross-check on failure
         if: failure()
         run: |
