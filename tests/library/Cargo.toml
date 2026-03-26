@@ -10,5 +10,6 @@ gvm-connection = { git = "https://github.com/clawosiris/rust-gvm.git", branch = 
 gvm-gmp = { git = "https://github.com/clawosiris/rust-gvm.git", branch = "main" }
 gvm-protocol = { git = "https://github.com/clawosiris/rust-gvm.git", branch = "main" }
 quick-xml = "0.38"
+serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "time"] }
