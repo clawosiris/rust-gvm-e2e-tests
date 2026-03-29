@@ -44,7 +44,7 @@ dependencies = [
 [[package]]
 name = "gvm-client"
 version = "0.3.1"
-source = "git+https://github.com/clawosiris/rust-gvm.git?branch=main#de4ba928b0b9532d73d9f51cb233cc6df099a7b2"
+source = "git+https://github.com/clawosiris/rust-gvm.git?branch=main#56197d9deb1c1936b7805dd20630aae645c8e6f1"
 dependencies = [
  "async-trait",
  "gvm-connection",
@@ -71,7 +71,7 @@ dependencies = [
 [[package]]
 name = "gvm-connection"
 version = "0.3.1"
-source = "git+https://github.com/clawosiris/rust-gvm.git?branch=main#de4ba928b0b9532d73d9f51cb233cc6df099a7b2"
+source = "git+https://github.com/clawosiris/rust-gvm.git?branch=main#56197d9deb1c1936b7805dd20630aae645c8e6f1"
 dependencies = [
  "async-trait",
  "gvm-protocol",
@@ -83,16 +83,17 @@ dependencies = [
 [[package]]
 name = "gvm-gmp"
 version = "0.3.1"
-source = "git+https://github.com/clawosiris/rust-gvm.git?branch=main#de4ba928b0b9532d73d9f51cb233cc6df099a7b2"
+source = "git+https://github.com/clawosiris/rust-gvm.git?branch=main#56197d9deb1c1936b7805dd20630aae645c8e6f1"
 dependencies = [
  "gvm-protocol",
+ "quick-xml 0.39.2",
  "thiserror",
 ]
 
 [[package]]
 name = "gvm-protocol"
 version = "0.3.1"
-source = "git+https://github.com/clawosiris/rust-gvm.git?branch=main#de4ba928b0b9532d73d9f51cb233cc6df099a7b2"
+source = "git+https://github.com/clawosiris/rust-gvm.git?branch=main#56197d9deb1c1936b7805dd20630aae645c8e6f1"
 dependencies = [
  "quick-xml 0.39.2",
  "thiserror",
