@@ -48,6 +48,12 @@ use gvm_gmp::commands::tasks::{
 use gvm_gmp::enums::{
     AlertCondition, AlertEvent, AlertMethod, CredentialType, EntityType, FilterType,
 };
+use gvm_gmp::responses::feed::GetFeedsResponse;
+use gvm_gmp::responses::port_list::GetPortListsResponse;
+use gvm_gmp::responses::report_format::GetReportFormatsResponse;
+use gvm_gmp::responses::scan_config::GetScanConfigsResponse;
+use gvm_gmp::responses::scanner::GetScannersResponse;
+use gvm_gmp::responses::target::GetTargetsResponse;
 use gvm_gmp::types::{EntityId, GmpVersion};
 use gvm_protocol::Response;
 use quick_xml::events::Event;
@@ -440,6 +446,8 @@ enum AppError {
     Xml(#[from] quick_xml::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Parse(#[from] gvm_gmp::responses::ParseError),
     #[error(transparent)]
     Client(#[from] GvmError),
 }
@@ -1158,7 +1166,14 @@ async fn run_differential_suite(
         .call(get_scan_configs(GetScanConfigsOpts::default()))
         .await?;
     assert_status(&rust_scan_configs_response, 200, "get_scan_configs")?;
-    let rust_scan_configs = parse_id_name_entities(&rust_scan_configs_response, "config", "name")?;
+    let rust_scan_configs = GetScanConfigsResponse::from_response(&rust_scan_configs_response)?
+        .items
+        .into_iter()
+        .map(|entry| IdNameEntity {
+            id: entry.meta.id.to_string(),
+            name: entry.meta.name,
+        })
+        .collect::<Vec<_>>();
     compare_id_name_command("get_scan_configs", &rust_scan_configs, &mut warnings)?;
     log_pass("diff 02", "get_scan_configs compared");
 
@@ -1167,7 +1182,14 @@ async fn run_differential_suite(
         .call(get_scanners(GetScannersOpts::default()))
         .await?;
     assert_status(&rust_scanners_response, 200, "get_scanners")?;
-    let rust_scanners = parse_id_name_entities(&rust_scanners_response, "scanner", "name")?;
+    let rust_scanners = GetScannersResponse::from_response(&rust_scanners_response)?
+        .items
+        .into_iter()
+        .map(|entry| IdNameEntity {
+            id: entry.meta.id.to_string(),
+            name: entry.meta.name,
+        })
+        .collect::<Vec<_>>();
     compare_id_name_command("get_scanners", &rust_scanners, &mut warnings)?;
     log_pass("diff 03", "get_scanners compared");
 
@@ -1176,14 +1198,37 @@ async fn run_differential_suite(
         .call(get_port_lists(GetPortListsOpts::default()))
         .await?;
     assert_status(&rust_port_lists_response, 200, "get_port_lists")?;
-    let rust_port_lists = parse_id_name_entities(&rust_port_lists_response, "port_list", "name")?;
+    let rust_port_lists = GetPortListsResponse::from_response(&rust_port_lists_response)?
+        .items
+        .into_iter()
+        .map(|entry| IdNameEntity {
+            id: entry.meta.id.to_string(),
+            name: entry.meta.name,
+        })
+        .collect::<Vec<_>>();
     compare_id_name_command("get_port_lists", &rust_port_lists, &mut warnings)?;
     log_pass("diff 04", "get_port_lists compared");
 
     // 05: get_feeds
     let rust_feeds_response = client.call(get_feeds()).await?;
     assert_status(&rust_feeds_response, 200, "get_feeds")?;
-    let rust_feeds = parse_feed_entities(&rust_feeds_response)?;
+    let rust_feeds = GetFeedsResponse::from_response(&rust_feeds_response)?
+        .items
+        .into_iter()
+        .map(|entry| {
+            let currently_syncing = entry
+                .currently_syncing
+                .as_deref()
+                .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+                .unwrap_or(false);
+            FeedEntity {
+                feed_type: entry.type_,
+                name: entry.name,
+                status: entry.status.unwrap_or_default(),
+                currently_syncing,
+            }
+        })
+        .collect::<Vec<_>>();
     compare_get_feeds(&rust_feeds, &mut warnings)?;
     log_pass("diff 05", "get_feeds compared");
 
@@ -1192,7 +1237,17 @@ async fn run_differential_suite(
         .call(get_report_formats(GetReportFormatsOpts::default()))
         .await?;
     assert_status(&rust_report_formats_response, 200, "get_report_formats")?;
-    let rust_report_formats = parse_report_format_entities(&rust_report_formats_response)?;
+    let rust_report_formats =
+        GetReportFormatsResponse::from_response(&rust_report_formats_response)?
+            .items
+            .into_iter()
+            .map(|entry| ReportFormatEntity {
+                id: entry.meta.id.to_string(),
+                name: entry.meta.name,
+                extension: entry.extension.unwrap_or_default(),
+                content_type: entry.content_type.unwrap_or_default(),
+            })
+            .collect::<Vec<_>>();
     compare_get_report_formats(&rust_report_formats, &mut warnings)?;
     log_pass("diff 06", "get_report_formats compared");
 
@@ -1273,7 +1328,14 @@ async fn run_target_differential(
 
     let rust_targets_response = client.call(get_targets(GetTargetsOpts::default())).await?;
     assert_status(&rust_targets_response, 200, "get_targets rust")?;
-    let rust_targets = parse_id_name_entities(&rust_targets_response, "target", "name")?;
+    let rust_targets = GetTargetsResponse::from_response(&rust_targets_response)?
+        .items
+        .into_iter()
+        .map(|entry| IdNameEntity {
+            id: entry.meta.id.to_string(),
+            name: entry.meta.name,
+        })
+        .collect::<Vec<_>>();
 
     let python_targets_json = run_python_helper("get_targets", &[])?;
     let python_targets = parse_python_id_name_entities(&python_targets_json, "targets", warnings);
@@ -1607,221 +1669,6 @@ fn compare_get_report_formats(
     }
 
     Ok(())
-}
-
-fn parse_id_name_entities(
-    response: &Response,
-    element_name: &str,
-    name_element: &str,
-) -> Result<Vec<IdNameEntity>, AppError> {
-    let xml = response.as_str()?;
-    let mut reader = Reader::from_str(xml);
-    let mut entities = Vec::new();
-    let mut current_id = String::new();
-    let mut current_name = String::new();
-    let mut inside_element = false;
-    let mut inside_name = false;
-
-    loop {
-        match reader.read_event()? {
-            Event::Start(ref event) if event.name().as_ref() == element_name.as_bytes() => {
-                inside_element = true;
-                current_id.clear();
-                current_name.clear();
-                for attribute in event.attributes().flatten() {
-                    if attribute.key.as_ref() == b"id" {
-                        current_id = attribute
-                            .decode_and_unescape_value(reader.decoder())?
-                            .into_owned();
-                    }
-                }
-            }
-            Event::Empty(ref event) if event.name().as_ref() == element_name.as_bytes() => {
-                let mut id = String::new();
-                for attribute in event.attributes().flatten() {
-                    if attribute.key.as_ref() == b"id" {
-                        id = attribute
-                            .decode_and_unescape_value(reader.decoder())?
-                            .into_owned();
-                    }
-                }
-                if !id.is_empty() {
-                    entities.push(IdNameEntity {
-                        id,
-                        name: String::new(),
-                    });
-                }
-            }
-            Event::End(ref event) if event.name().as_ref() == element_name.as_bytes() => {
-                if !current_id.is_empty() {
-                    entities.push(IdNameEntity {
-                        id: current_id.clone(),
-                        name: current_name.clone(),
-                    });
-                }
-                inside_element = false;
-                inside_name = false;
-            }
-            Event::Start(ref event)
-                if inside_element && event.name().as_ref() == name_element.as_bytes() =>
-            {
-                inside_name = true;
-            }
-            Event::End(ref event)
-                if inside_element && event.name().as_ref() == name_element.as_bytes() =>
-            {
-                inside_name = false;
-            }
-            Event::Text(ref event) if inside_element && inside_name => {
-                current_name = String::from_utf8_lossy(event.as_ref()).into_owned();
-            }
-            Event::Eof => break,
-            _ => {}
-        }
-    }
-
-    Ok(entities)
-}
-
-fn parse_feed_entities(response: &Response) -> Result<Vec<FeedEntity>, AppError> {
-    let xml = response.as_str()?;
-    let mut reader = Reader::from_str(xml);
-    let mut feeds = Vec::new();
-    let mut inside_feed = false;
-    let mut active_child = String::new();
-    let mut current = FeedEntity {
-        feed_type: String::new(),
-        name: String::new(),
-        status: String::new(),
-        currently_syncing: false,
-    };
-
-    loop {
-        match reader.read_event()? {
-            Event::Start(ref event) if event.name().as_ref() == b"feed" => {
-                inside_feed = true;
-                current = FeedEntity {
-                    feed_type: String::new(),
-                    name: String::new(),
-                    status: String::new(),
-                    currently_syncing: false,
-                };
-            }
-            Event::End(ref event) if event.name().as_ref() == b"feed" => {
-                if !current.feed_type.is_empty() {
-                    feeds.push(current.clone());
-                }
-                inside_feed = false;
-                active_child.clear();
-            }
-            Event::Empty(ref event)
-                if inside_feed && event.name().as_ref() == b"currently_syncing" =>
-            {
-                current.currently_syncing = true;
-            }
-            Event::Start(ref event) if inside_feed => {
-                if event.name().as_ref() == b"type"
-                    || event.name().as_ref() == b"name"
-                    || event.name().as_ref() == b"status"
-                    || event.name().as_ref() == b"currently_syncing"
-                {
-                    active_child = String::from_utf8_lossy(event.name().as_ref()).into_owned();
-                }
-            }
-            Event::End(ref event) if inside_feed => {
-                let tag = String::from_utf8_lossy(event.name().as_ref()).into_owned();
-                if active_child == tag {
-                    active_child.clear();
-                }
-            }
-            Event::Text(ref event) if inside_feed && !active_child.is_empty() => {
-                let value = String::from_utf8_lossy(event.as_ref()).into_owned();
-                match active_child.as_str() {
-                    "type" => current.feed_type = value,
-                    "name" => current.name = value,
-                    "status" => current.status = value,
-                    "currently_syncing" => {
-                        let lowered = value.to_ascii_lowercase();
-                        current.currently_syncing = matches!(lowered.as_str(), "1" | "true" | "yes")
-                    }
-                    _ => {}
-                }
-            }
-            Event::Eof => break,
-            _ => {}
-        }
-    }
-
-    Ok(feeds)
-}
-
-fn parse_report_format_entities(response: &Response) -> Result<Vec<ReportFormatEntity>, AppError> {
-    let xml = response.as_str()?;
-    let mut reader = Reader::from_str(xml);
-    let mut formats = Vec::new();
-    let mut inside_format = false;
-    let mut active_child = String::new();
-    let mut current = ReportFormatEntity {
-        id: String::new(),
-        name: String::new(),
-        extension: String::new(),
-        content_type: String::new(),
-    };
-
-    loop {
-        match reader.read_event()? {
-            Event::Start(ref event) if event.name().as_ref() == b"report_format" => {
-                inside_format = true;
-                current = ReportFormatEntity {
-                    id: String::new(),
-                    name: String::new(),
-                    extension: String::new(),
-                    content_type: String::new(),
-                };
-                for attribute in event.attributes().flatten() {
-                    if attribute.key.as_ref() == b"id" {
-                        current.id = attribute
-                            .decode_and_unescape_value(reader.decoder())?
-                            .into_owned();
-                    }
-                }
-            }
-            Event::End(ref event) if event.name().as_ref() == b"report_format" => {
-                if !current.id.is_empty() {
-                    formats.push(current.clone());
-                }
-                inside_format = false;
-                active_child.clear();
-            }
-            Event::Start(ref event) if inside_format => {
-                if event.name().as_ref() == b"name"
-                    || event.name().as_ref() == b"extension"
-                    || event.name().as_ref() == b"content_type"
-                {
-                    active_child = String::from_utf8_lossy(event.name().as_ref()).into_owned();
-                }
-            }
-            Event::End(ref event) if inside_format => {
-                let tag = String::from_utf8_lossy(event.name().as_ref()).into_owned();
-                if active_child == tag {
-                    active_child.clear();
-                }
-            }
-            Event::Text(ref event) if inside_format && !active_child.is_empty() => {
-                let value = String::from_utf8_lossy(event.as_ref()).into_owned();
-                match active_child.as_str() {
-                    "name" => current.name = value,
-                    "extension" => current.extension = value,
-                    "content_type" => current.content_type = value,
-                    _ => {}
-                }
-            }
-            Event::Eof => break,
-            _ => {}
-        }
-    }
-
-    Ok(formats)
 }
 
 fn run_python_helper(command: &str, args: &[(&str, &str)]) -> Result<Value, AppError> {
