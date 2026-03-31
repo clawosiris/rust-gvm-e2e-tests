@@ -43,7 +43,7 @@ use gvm_gmp::commands::targets::{
     create_target, delete_target, get_target, get_targets, CreateTargetOpts, GetTargetsOpts,
 };
 use gvm_gmp::commands::tasks::{
-    create_task, delete_task, get_task, start_task, stop_task, CreateTaskOpts,
+    create_task, delete_task, get_task, get_tasks, start_task, stop_task, CreateTaskOpts, GetTasksOpts,
 };
 use gvm_gmp::enums::{
     AlertCondition, AlertEvent, AlertMethod, CredentialType, EntityType, FilterType,
@@ -620,6 +620,23 @@ async fn run_scan_suite(
     tracker: &mut CleanupTracker,
 ) -> Result<(), AppError> {
     log_line("Running extended scan flow because E2E_RUN_SCAN=1");
+
+
+    // Clean up stale scan task from previous runs (persistent volumes)
+    // Must happen before target cleanup since targets can't be deleted while referenced by tasks
+    {
+        let tasks_response = client.call(get_tasks(GetTasksOpts::default())).await?;
+        let xml = tasks_response.as_str()?;
+        let stale_ids = find_elements_by_name(xml, "task", SCAN_TASK_NAME)?;
+        for stale_id in &stale_ids {
+            log_line(&format!("cleaning up stale scan task {stale_id}"));
+            if let Ok(entity_id) = stale_id.parse() {
+                // Stop task if running, then delete
+                let _ = client.call(stop_task(&entity_id)).await;
+                let _ = client.call(delete_task(&entity_id, true)).await;
+            }
+        }
+    }
 
     // Clean up stale scan target from previous runs (persistent volumes)
     {
