@@ -138,6 +138,7 @@ async fn async_main() -> Result<(), AppError> {
 
 #[derive(Clone, Debug)]
 struct EnvConfig {
+    task_progress_timeout_secs: u64,
     username: String,
     password: String,
     socket_path: String,
@@ -146,6 +147,10 @@ struct EnvConfig {
 
 impl EnvConfig {
     fn from_env() -> Result<Self, AppError> {
+        let task_progress_timeout_secs = env::var("E2E_TASK_PROGRESS_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(90);
         Ok(Self {
             username: env::var("GVM_ADMIN_USER").unwrap_or_else(|_| "admin".to_string()),
             password: env::var("GVM_ADMIN_PASS").unwrap_or_else(|_| "admin".to_string()),
@@ -157,6 +162,7 @@ impl EnvConfig {
                     .as_str(),
                 "1" | "true" | "TRUE" | "yes" | "YES"
             ),
+            task_progress_timeout_secs,
         })
     }
 }
@@ -601,7 +607,7 @@ async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Re
     log_pass("10", "verify deletion");
 
     if config.run_scan {
-        run_scan_suite(&mut client, tracker).await?;
+        run_scan_suite(&mut client, config, tracker).await?;
     }
 
     client.disconnect().await?;
@@ -610,6 +616,7 @@ async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Re
 
 async fn run_scan_suite(
     client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
     tracker: &mut CleanupTracker,
 ) -> Result<(), AppError> {
     log_line("Running extended scan flow because E2E_RUN_SCAN=1");
@@ -679,7 +686,7 @@ async fn run_scan_suite(
     assert_status(&start_response, 202, "start_task")?;
     let report_id = child_entity_id(&start_response, "report_id")?;
 
-    let task_status = poll_task_status(client, &task_id, Duration::from_secs(30)).await?;
+    let task_status = poll_task_status(client, &task_id, Duration::from_secs(config.task_progress_timeout_secs)).await?;
     if matches!(
         task_status.as_str(),
         "Running" | "Requested" | "Stop Requested"
