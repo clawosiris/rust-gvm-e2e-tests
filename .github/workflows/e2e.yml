@@ -64,7 +64,7 @@ jobs:
       rust-gvm-ref: ${{ steps.refs.outputs.rust-gvm-ref }}
       gvm-rools-ref: ${{ steps.refs.outputs.gvm-rools-ref }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - name: Resolve component refs
         id: refs
         run: |
@@ -109,7 +109,7 @@ jobs:
     runs-on: [self-hosted]
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - name: Log component refs under test
         run: |
           echo "rust-gvm ref: ${{ needs.build-runner.outputs.rust-gvm-ref }}"
