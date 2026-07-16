@@ -27,6 +27,11 @@ on:
         required: false
         type: string
         default: "main"
+      gvm-version:
+        description: "GVM stack image tag to test (for example stable, oldstable, edge, or a release tag)"
+        required: false
+        type: string
+        default: "stable"
       validate-gvm-tools:
         description: "Validate results against gvm-tools (cross-check)"
         required: false
@@ -63,6 +68,7 @@ jobs:
     outputs:
       rust-gvm-ref: ${{ steps.refs.outputs.rust-gvm-ref }}
       gvm-rools-ref: ${{ steps.refs.outputs.gvm-rools-ref }}
+      gvm-version: ${{ steps.refs.outputs['gvm-version'] }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
       - name: Resolve component refs
@@ -70,20 +76,27 @@ jobs:
         run: |
           RUST_GVM_REF="main"
           GVM_ROOLS_REF="main"
+          GVM_VERSION="stable"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             RUST_GVM_REF="${{ inputs.rust-gvm-ref || 'main' }}"
             GVM_ROOLS_REF="${{ inputs.gvm-rools-ref || 'main' }}"
+            GVM_VERSION="${{ inputs['gvm-version'] || 'stable' }}"
           elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then
             COMPONENT="${{ github.event.client_payload.component }}"
             REF="${{ github.event.client_payload.ref }}"
+            PAYLOAD_GVM_VERSION="${{ github.event.client_payload['gvm-version'] }}"
             if [ "$COMPONENT" = "rust-gvm" ] && [ -n "$REF" ]; then
               RUST_GVM_REF="$REF"
             elif [ "$COMPONENT" = "gvm-rools" ] && [ -n "$REF" ]; then
               GVM_ROOLS_REF="$REF"
             fi
+            if [ -n "$PAYLOAD_GVM_VERSION" ]; then
+              GVM_VERSION="$PAYLOAD_GVM_VERSION"
+            fi
           fi
           echo "rust-gvm-ref=$RUST_GVM_REF" >> "$GITHUB_OUTPUT"
           echo "gvm-rools-ref=$GVM_ROOLS_REF" >> "$GITHUB_OUTPUT"
+          echo "gvm-version=$GVM_VERSION" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Build and export runner image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -108,12 +121,15 @@ jobs:
     needs: build-runner
     runs-on: [self-hosted]
     timeout-minutes: 180
+    env:
+      GVM_VERSION: ${{ needs.build-runner.outputs['gvm-version'] }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
       - name: Log component refs under test
         run: |
           echo "rust-gvm ref: ${{ needs.build-runner.outputs.rust-gvm-ref }}"
           echo "gvm-rools ref: ${{ needs.build-runner.outputs.gvm-rools-ref }}"
+          echo "GVM stack version: ${GVM_VERSION}"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: e2e-runner-image

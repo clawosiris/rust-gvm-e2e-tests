@@ -60,27 +60,27 @@ services:
         condition: service_started
 
   gpg-data:
-    image: registry.community.greenbone.net/community/gpg-data:stable
+    image: registry.community.greenbone.net/community/gpg-data:${GVM_VERSION:-stable}
     environment:
       KEEP_ALIVE: "1"
     volumes:
       - gpg-data:/mnt
 
   redis-server:
-    image: registry.community.greenbone.net/community/redis-server:stable
+    image: registry.community.greenbone.net/community/redis-server:${GVM_VERSION:-stable}
     restart: on-failure
     volumes:
       - redis-socket:/run/redis
 
   pg-gvm-migrator:
-    image: registry.community.greenbone.net/community/pg-gvm-migrator:stable
+    image: registry.community.greenbone.net/community/pg-gvm-migrator:${GVM_VERSION:-stable}
     restart: "no"
     volumes:
       - psql-data:/var/lib/postgresql
       - psql-socket:/var/run/postgresql
 
   pg-gvm:
-    image: registry.community.greenbone.net/community/pg-gvm:stable
+    image: registry.community.greenbone.net/community/pg-gvm:${GVM_VERSION:-stable}
     restart: on-failure:10
     volumes:
       - psql-data:/var/lib/postgresql
@@ -90,7 +90,7 @@ services:
         condition: service_completed_successfully
 
   configure-openvas:
-    image: registry.community.greenbone.net/community/openvas-scanner:stable
+    image: registry.community.greenbone.net/community/openvas-scanner:${GVM_VERSION:-stable}
     volumes:
       - openvas-data:/mnt
       - openvas-log-data:/var/log/openvas
@@ -106,7 +106,7 @@ services:
         chmod 666 /var/log/openvas/openvas.log
 
   openvasd:
-    image: registry.community.greenbone.net/community/openvas-scanner:stable
+    image: registry.community.greenbone.net/community/openvas-scanner:${GVM_VERSION:-stable}
     restart: on-failure
     environment:
       OPENVASD_MODE: service_notus
@@ -128,7 +128,7 @@ services:
         condition: service_started
 
   ospd-openvas:
-    image: registry.community.greenbone.net/community/ospd-openvas:stable
+    image: registry.community.greenbone.net/community/ospd-openvas:${GVM_VERSION:-stable}
     restart: on-failure
     hostname: ospd-openvas.local
     cap_add:
@@ -167,7 +167,7 @@ services:
         condition: service_started
 
   gvmd:
-    image: registry.community.greenbone.net/community/gvmd:stable
+    image: registry.community.greenbone.net/community/gvmd:${GVM_VERSION:-stable}
     restart: on-failure
     volumes:
       - gvmd-data:/var/lib/gvm
@@ -196,7 +196,7 @@ services:
         condition: service_started
 
   gsad:
-    image: registry.community.greenbone.net/community/gsad:stable
+    image: registry.community.greenbone.net/community/gsad:${GVM_VERSION:-stable}
     restart: on-failure
     environment:
       GSAD_ARGS: "--listen=0.0.0.0 --http-only --api-only -f"
