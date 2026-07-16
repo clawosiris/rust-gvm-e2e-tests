@@ -96,9 +96,12 @@ Trigger via **workflow_dispatch** at [Actions → E2E Tests → Run workflow](..
 |-------|---------|-------------|
 | `rust-gvm-ref` | `main` | rust-gvm branch/tag/SHA to test |
 | `gvm-rools-ref` | `main` | gvm-rools branch/tag/SHA to test |
+| `gvm-version` | `stable` | GVM runtime image tag to test |
 | `run-scan` | `false` | Run extended scan test (~10min+) |
 | `clean` | `false` | Destroy volumes for fresh environment |
 | `validate-gvm-tools` | `true` | Cross-validate results with gvm-tools |
+
+`gvm-version` is applied to the runtime stack images (`gvmd`, `ospd-openvas`, `openvas-scanner`, `pg-gvm`, `redis-server`, `gpg-data`, and `gsad`). The default `stable` tag is the supported CI baseline. Other tags, such as `oldstable`, `edge`, or release-specific tags like `22.4`/`23.x`, are useful for compatibility checks when the Greenbone registry publishes the tag across all runtime images. Use `clean=true` when switching stack versions on a persistent runner to avoid reusing incompatible database or feed volumes.
 
 ### Cross-Repo Triggering
 Component repos can trigger E2E tests via `repository_dispatch`:
@@ -106,7 +109,7 @@ Component repos can trigger E2E tests via `repository_dispatch`:
 ```bash
 gh api repos/clawosiris/rust-gvm-e2e-tests/dispatches \
   -f event_type=component-updated \
-  -f client_payload='{"component":"rust-gvm","ref":"my-branch"}'
+  -f client_payload='{"component":"rust-gvm","ref":"my-branch","gvm-version":"stable"}'
 ```
 
 ## Infrastructure

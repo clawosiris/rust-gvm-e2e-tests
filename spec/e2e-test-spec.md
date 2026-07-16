@@ -32,11 +32,11 @@ Based on the official Greenbone Community Edition compose file, adapted for test
 
 | Service | Image | Purpose |
 |---------|-------|---------|
-| gvmd | `community/gvmd:stable` | Core vulnerability manager |
-| ospd-openvas | `community/ospd-openvas:stable` | Scanner daemon |
-| openvasd | `community/openvas-scanner:stable` | Notus service mode |
-| pg-gvm | `community/pg-gvm:stable` | PostgreSQL backend |
-| redis-server | `community/redis-server` | Scanner KV store |
+| gvmd | `community/gvmd:${GVM_VERSION:-stable}` | Core vulnerability manager |
+| ospd-openvas | `community/ospd-openvas:${GVM_VERSION:-stable}` | Scanner daemon |
+| openvasd | `community/openvas-scanner:${GVM_VERSION:-stable}` | Notus service mode |
+| pg-gvm | `community/pg-gvm:${GVM_VERSION:-stable}` | PostgreSQL backend |
+| redis-server | `community/redis-server:${GVM_VERSION:-stable}` | Scanner KV store |
 | Feed containers | Various | VTs, SCAP, CERT, data-objects, report-formats |
 
 #### Runner
@@ -52,6 +52,7 @@ A self-hosted GitHub Actions runner (Hetzner VPS) with:
 - **First run**: Full feed sync (~20 min)
 - **Subsequent runs**: Delta sync only (~2-3 min)
 - **Optional clean**: `clean: true` workflow input forces `docker compose down -v`
+- **Version selection**: `gvm-version` workflow input sets `GVM_VERSION` for runtime image tags and defaults to `stable`
 
 ### Layer 1: Library Tests (rust-gvm)
 

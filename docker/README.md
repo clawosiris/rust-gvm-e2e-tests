@@ -30,6 +30,15 @@ docker compose run --rm rust-gvm-e2e ./tests/e2e/gvm-community/scripts/run-smoke
 E2E_RUN_SCAN=1 docker compose run --rm rust-gvm-e2e ./tests/e2e/gvm-community/scripts/run-smoke.sh
 ```
 
+To test a different published GVM runtime image tag, set `GVM_VERSION` before pulling or starting the stack:
+
+```bash
+GVM_VERSION=edge docker compose pull
+GVM_VERSION=edge docker compose up -d
+```
+
+The default is `stable`, which is the regular CI baseline. Non-default tags are compatibility targets and must be present for all runtime images (`gvmd`, `ospd-openvas`, `openvas-scanner`, `pg-gvm`, `redis-server`, `gpg-data`, and `gsad`). When switching between stack versions on the same host, remove the existing volumes first with `./scripts/reset.sh` or use a separate compose project to avoid mixing database/feed state across versions.
+
 To stop the stack but keep cached feed data:
 
 ```bash
@@ -47,6 +56,7 @@ To stop the stack and drop all named volumes:
 - `GVM_ADMIN_USER`: GMP username. Default `admin`.
 - `GVM_ADMIN_PASS`: GMP password. Default `admin`.
 - `GVM_SOCKET_PATH`: Socket path inside the runner container. Default `/run/gvmd/gvmd.sock`.
+- `GVM_VERSION`: GVM runtime image tag. Default `stable`.
 - `E2E_RUN_SCAN`: Set to `1` to run the slower scan lifecycle test in addition to the smoke checks.
 
 ## Rust binary
