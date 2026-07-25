@@ -4967,7 +4967,8 @@ fn is_e2e_owned_value(value: &str) -> bool {
     value.starts_with("rust-gvm-e2e-")
         || matches!(
             value,
-            "e2e-test-target"
+            "e2e-target"
+                | "e2e-test-target"
                 | "e2e-scan-target"
                 | "e2e-scan-task"
                 | "e2e-port-list"
@@ -5056,11 +5057,20 @@ mod tests {
             <target id="00000000-0000-0000-0000-000000000004">
               <name>e2e-test-target-but-not-owned</name>
             </target>
+            <target id="00000000-0000-0000-0000-000000000005">
+              <name>e2e-target</name>
+            </target>
+            <target id="00000000-0000-0000-0000-000000000006">
+              <name>e2e-target-production</name>
+            </target>
           </get_targets_response>
         "#;
         assert_eq!(
             e2e_entity_ids(xml, "target").expect("parse"),
-            vec!["00000000-0000-0000-0000-000000000003"]
+            vec![
+                "00000000-0000-0000-0000-000000000003",
+                "00000000-0000-0000-0000-000000000005"
+            ]
         );
     }
 
