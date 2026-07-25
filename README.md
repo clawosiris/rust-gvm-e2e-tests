@@ -94,7 +94,7 @@ Trigger via **workflow_dispatch** at [Actions → E2E Tests → Run workflow](..
 
 | Input | Default | Description |
 |-------|---------|-------------|
-| `rust-gvm-ref` | `main` | rust-gvm branch/tag/SHA to test |
+| `rust-gvm-ref` | `devel` | rust-gvm branch/tag/SHA to test |
 | `gvm-rools-ref` | `main` | gvm-rools branch/tag/SHA to test |
 | `gvm-version` | `stable` | GVM runtime image tag to test |
 | `run-scan` | `false` | Run extended scan test (~10min+) |

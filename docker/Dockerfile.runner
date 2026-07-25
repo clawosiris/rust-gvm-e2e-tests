@@ -3,7 +3,7 @@ FROM rust:1.88
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 ENV PATH="/usr/local/cargo/bin:${PATH}"
 
-ARG RUST_GVM_REF=main
+ARG RUST_GVM_REF=devel
 ARG GVM_ROOLS_REF=main
 
 WORKDIR /workspace
@@ -24,9 +24,9 @@ RUN --mount=type=secret,id=github_token \
       git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"; \
     fi \
     && if echo "${RUST_GVM_REF}" | grep -qP '^[0-9a-f]{7,40}$'; then \
-      sed -i "s|branch = \"main\"|rev = \"${RUST_GVM_REF}\"|g" /tmp/rust-gvm-e2e-tests/tests/library/Cargo.toml; \
-    elif [ "${RUST_GVM_REF}" != "main" ]; then \
-      sed -i "s|branch = \"main\"|branch = \"${RUST_GVM_REF}\"|g" /tmp/rust-gvm-e2e-tests/tests/library/Cargo.toml; \
+      sed -i "s|branch = \"devel\"|rev = \"${RUST_GVM_REF}\"|g" /tmp/rust-gvm-e2e-tests/tests/library/Cargo.toml; \
+    elif [ "${RUST_GVM_REF}" != "devel" ]; then \
+      sed -i "s|branch = \"devel\"|branch = \"${RUST_GVM_REF}\"|g" /tmp/rust-gvm-e2e-tests/tests/library/Cargo.toml; \
     fi \
     && cargo install --path /tmp/rust-gvm-e2e-tests/tests/library --bin gvm-community-e2e \
     && git clone --branch ${GVM_ROOLS_REF} --depth 1 https://github.com/clawosiris/gvm-rools.git /tmp/gvm-rools \

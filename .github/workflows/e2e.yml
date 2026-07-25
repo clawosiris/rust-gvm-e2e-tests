@@ -21,7 +21,7 @@ on:
         description: "rust-gvm branch/tag/SHA to test against"
         required: false
         type: string
-        default: "main"
+        default: "devel"
       gvm-rools-ref:
         description: "gvm-rools branch/tag/SHA to test against"
         required: false
@@ -45,7 +45,7 @@ on:
   repository_dispatch:
     types: [component-updated]
   pull_request:
-    branches: [main]
+    branches: [main, devel]
     paths:
       - 'tests/**'
       - 'docker/**'
@@ -74,11 +74,11 @@ jobs:
       - name: Resolve component refs
         id: refs
         run: |
-          RUST_GVM_REF="main"
+          RUST_GVM_REF="devel"
           GVM_ROOLS_REF="main"
           GVM_VERSION="stable"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            RUST_GVM_REF="${{ inputs.rust-gvm-ref || 'main' }}"
+            RUST_GVM_REF="${{ inputs.rust-gvm-ref || 'devel' }}"
             GVM_ROOLS_REF="${{ inputs.gvm-rools-ref || 'main' }}"
             GVM_VERSION="${{ inputs['gvm-version'] || 'stable' }}"
           elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then
