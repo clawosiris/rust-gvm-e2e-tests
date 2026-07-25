@@ -71,7 +71,11 @@ def run_command(args):
             response = gmp.get_version()
             return {"version": _text(response, "version")}
         if args.command == "get_scan_configs":
-            return {"scan_configs": _id_name_list(gmp.get_scan_configs(), "config")}
+            return {
+                "scan_configs": _id_name_list(
+                    gmp.get_scan_configs(filter_string="rows=-1"), "config"
+                )
+            }
         if args.command == "get_scanners":
             return {"scanners": _id_name_list(gmp.get_scanners(), "scanner")}
         if args.command == "get_port_lists":

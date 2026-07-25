@@ -65,7 +65,6 @@ use gvm_gmp::enums::{
 use gvm_gmp::responses::feed::GetFeedsResponse;
 use gvm_gmp::responses::port_list::GetPortListsResponse;
 use gvm_gmp::responses::report_format::GetReportFormatsResponse;
-use gvm_gmp::responses::scan_config::GetScanConfigsResponse;
 use gvm_gmp::responses::scanner::GetScannersResponse;
 use gvm_gmp::responses::target::GetTargetsResponse;
 use gvm_gmp::types::{EntityId, GmpVersion};
@@ -3898,7 +3897,6 @@ struct FeedEntity {
     feed_type: String,
     name: String,
     status: String,
-    currently_syncing: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -3932,12 +3930,16 @@ async fn run_differential_suite(
     compare_get_version(&rust_version, &mut warnings)?;
     log_pass("diff 01", "get_version compared");
 
-    // 02: get_scan_configs
-    let rust_scan_configs_response = client
-        .call(get_scan_configs(GetScanConfigsOpts::default()))
-        .await?;
-    assert_status(&rust_scan_configs_response, 200, "get_scan_configs")?;
-    let rust_scan_configs = GetScanConfigsResponse::from_response(&rust_scan_configs_response)?
+    // 02: compare identical, unbounded usage_type=scan queries. The ergonomic
+    // rust-gvm get_scan_configs wrapper currently omits usage_type, unlike
+    // python-gvm, so the generic typed helper makes the wire semantics explicit.
+    let rust_scan_configs = client
+        .get_configs(gvm_gmp::commands::configs::GetConfigsOpts {
+            filter_string: Some("rows=-1".to_string()),
+            usage_type: Some(gvm_gmp::commands::configs::ConfigUsageType::Scan),
+            ..Default::default()
+        })
+        .await?
         .items
         .into_iter()
         .map(|entry| IdNameEntity {
@@ -3986,18 +3988,10 @@ async fn run_differential_suite(
     let rust_feeds = GetFeedsResponse::from_response(&rust_feeds_response)?
         .items
         .into_iter()
-        .map(|entry| {
-            let currently_syncing = entry
-                .currently_syncing
-                .as_deref()
-                .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
-                .unwrap_or(false);
-            FeedEntity {
-                feed_type: entry.type_,
-                name: entry.name,
-                status: entry.status.unwrap_or_default(),
-                currently_syncing,
-            }
+        .map(|entry| FeedEntity {
+            feed_type: entry.type_,
+            name: entry.name,
+            status: entry.status.unwrap_or_default(),
         })
         .collect::<Vec<_>>();
     compare_get_feeds(&rust_feeds, &mut warnings)?;
@@ -4380,12 +4374,6 @@ fn compare_get_feeds(
                 rust_entry.status, python_entry.status
             ));
         }
-        if rust_entry.currently_syncing != python_entry.currently_syncing {
-            warnings.push(format!(
-                "get_feeds currently_syncing mismatch for type `{key}`: rust `{}` vs python `{}`",
-                rust_entry.currently_syncing, python_entry.currently_syncing
-            ));
-        }
     }
 
     Ok(())
@@ -4583,10 +4571,6 @@ fn parse_python_feeds(payload: &Value, warnings: &mut Vec<String>) -> Vec<FeedEn
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
-            currently_syncing: item
-                .get("currently_syncing")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
         });
     }
     feeds

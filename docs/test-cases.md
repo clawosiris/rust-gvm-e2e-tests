@@ -65,7 +65,13 @@ hard configuration error.
 The opt-in differential lane compares normalized semantic fields and UUID/name
 identity sets with python-gvm for version, configs, scanners, port lists, feeds,
 report formats, and cross-client target creation/visibility/deletion. Any
-unexpected mismatch is blocking.
+unexpected mismatch is blocking. Both clients issue an explicit unbounded
+`usage_type=scan` config query because
+[rust-gvm #404](https://github.com/clawosiris/rust-gvm/issues/404) tracks the
+ergonomic `get_scan_configs` wrapper's missing scope. Feed equality
+intentionally excludes the momentary `currently_syncing` flag, which can change
+between sequential client reads; stable feed type, name, and status remain
+blocking.
 
 ## Conditional and excluded outcomes
 
