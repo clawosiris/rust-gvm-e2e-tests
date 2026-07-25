@@ -1521,9 +1521,8 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
         client.get_scan_config_nvt(&nvts.items[0].oid)
     );
     typed_read!(
-        "get_scan_config_nvts(config selection)",
+        "get_scan_config_nvts(public helper)",
         client.get_scan_config_nvts(GetNvtsOpts {
-            config_id: Some(configs.items[0].meta.id.clone()),
             filter_string: Some("rows=2".to_string()),
             ..Default::default()
         })
