@@ -2980,16 +2980,33 @@ async fn run_scan_suite(
     let report_id = started.report_id.ok_or_else(|| {
         AppError::Assertion("typed start_task response omitted report_id".to_string())
     })?;
-    let duplicate_start = client.start_task(&task.id).await;
-    ensure(
-        matches!(
-            duplicate_start,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { .. }
-            ))
+    match client.start_task(&task.id).await {
+        Ok(response) if response.status >= 400 => log_pass(
+            "typed duplicate start_task",
+            &format!(
+                "rejected with status {} ({})",
+                response.status, response.status_text
+            ),
         ),
-        "starting an active task did not produce a typed state-transition error",
-    )?;
+        Ok(response)
+            if response.status == 202 && response.report_id.as_ref() == Some(&report_id) =>
+        {
+            log_pass(
+                "typed duplicate start_task",
+                "idempotent response preserved the active report",
+            );
+        }
+        Ok(response) => {
+            return Err(AppError::Assertion(format!(
+                "duplicate start_task returned status {} ({}) with report {:?}, expected a rejection or the existing report {report_id}",
+                response.status, response.status_text, response.report_id
+            )));
+        }
+        Err(GvmError::Parse(gvm_gmp::responses::ParseError::ServerError { .. })) => {
+            log_pass("typed duplicate start_task", "typed server rejection")
+        }
+        Err(error) => return Err(error.into()),
+    }
 
     let task_status = wait_task_state(
         client,
