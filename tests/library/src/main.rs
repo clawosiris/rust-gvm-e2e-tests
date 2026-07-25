@@ -1163,6 +1163,12 @@ async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
         "typed authentication did not return 200",
     )?;
 
+    let text_help = client.get_help().await?;
+    ensure(
+        text_help.status == 200 && !text_help.help_text.trim().is_empty(),
+        "typed text help did not return a nonempty 200 response",
+    )?;
+
     let feature_response = client.get_features_parsed().await?;
     ensure(
         feature_response.status == 200,
@@ -1218,11 +1224,22 @@ async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
             missing_authenticated_commands.join(", ")
         ),
     )?;
+    let schema_help = client
+        .get_help_with_mode(HelpMode::Schema(gvm_gmp::enums::HelpFormat::Xml))
+        .await?;
+    ensure(
+        schema_help.status == 200
+            && schema_help
+                .schema
+                .as_ref()
+                .is_some_and(|schema| !schema.commands.is_empty()),
+        "typed full XML help did not return a command schema",
+    )?;
     runtime::observe(
-        "brief-xml-help",
+        "typed-help-modes",
         Outcome::Pass,
         &format!(
-            "{} authenticated command(s) advertised; negotiation commands are validated directly",
+            "text, brief XML, and full XML parsed; {} authenticated command(s) advertised; negotiation commands are validated directly",
             help_commands.len()
         ),
     );
