@@ -1517,17 +1517,13 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
         "warm-volume baseline requires at least one typed NVT",
     )?;
     typed_read!(
-        "get_scan_config_nvt(single)",
+        "get_scan_config_nvt(single preferences/count)",
         client.get_scan_config_nvt(&nvts.items[0].oid)
     );
     typed_read!(
-        "get_scan_config_nvts(preferences/selections)",
+        "get_scan_config_nvts(config selection)",
         client.get_scan_config_nvts(GetNvtsOpts {
             config_id: Some(configs.items[0].meta.id.clone()),
-            preferences: Some(true),
-            preference_count: Some(true),
-            timeout: Some(true),
-            details: Some(true),
             filter_string: Some("rows=2".to_string()),
             ..Default::default()
         })
