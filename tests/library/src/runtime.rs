@@ -274,6 +274,13 @@ pub fn baseline() -> Result<CommunityBaseline, String> {
         .map_err(|error| error.to_string())
 }
 
+fn normalized_help_commands(commands: &[String]) -> Vec<String> {
+    let mut commands = commands.to_vec();
+    commands.sort();
+    commands.dedup();
+    commands
+}
+
 /// Compare typed discovery with the pinned baseline.
 pub fn validate_baseline(
     gmp_version: &str,
@@ -308,7 +315,8 @@ pub fn validate_baseline(
             expected.features
         ));
     }
-    if expected.help_commands != help_commands {
+    if normalized_help_commands(&expected.help_commands) != normalized_help_commands(help_commands)
+    {
         return Err(format!(
             "advertised help baseline changed: expected {:?}, observed {help_commands:?}",
             expected.help_commands
@@ -390,6 +398,16 @@ mod tests {
         assert_eq!(
             parsed.registry_version_gates.get("get_report_hosts"),
             Some(&false)
+        );
+    }
+
+    #[test]
+    fn help_baseline_comparison_is_order_independent() {
+        let observed = vec!["get_nvt_families".to_string(), "get_nvts".to_string()];
+        let recorded = vec!["get_nvts".to_string(), "get_nvt_families".to_string()];
+        assert_eq!(
+            normalized_help_commands(&observed),
+            normalized_help_commands(&recorded)
         );
     }
 }
