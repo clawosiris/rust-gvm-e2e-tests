@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "gvm_image_tag": "stable",
+  "gmp_version": "22.7",
+  "rust_gvm_sha": "04da5996bc7b08640c15e20e85d768960b36d939",
+  "features": {},
+  "conditional_commands": {
+    "create_web_application_target": false,
+    "delete_web_application_target": false,
+    "get_credential_stores": false,
+    "get_integration_configs": false,
+    "get_license": false,
+    "get_report_applications": false,
+    "get_report_closed_cves": false,
+    "get_report_cves": false,
+    "get_report_errors": false,
+    "get_report_hosts": false,
+    "get_report_operating_systems": false,
+    "get_report_ports": false,
+    "get_report_tls_certificates": false,
+    "get_report_vulns": false,
+    "get_scan_report": false,
+    "get_timezones": false,
+    "get_web_application_targets": false,
+    "modify_credential_store": false,
+    "modify_integration_config": false,
+    "modify_license": false,
+    "modify_web_application_target": false,
+    "verify_credential_store": false
+  }
+}

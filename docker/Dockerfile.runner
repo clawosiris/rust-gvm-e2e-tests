@@ -17,6 +17,8 @@ COPY Cargo.toml /tmp/rust-gvm-e2e-tests/Cargo.toml
 COPY tests/library/Cargo.toml /tmp/rust-gvm-e2e-tests/tests/library/Cargo.toml
 COPY Cargo.lock /tmp/rust-gvm-e2e-tests/Cargo.lock
 COPY tests/library/src /tmp/rust-gvm-e2e-tests/tests/library/src
+COPY baselines /tmp/rust-gvm-e2e-tests/baselines
+COPY fixtures /tmp/rust-gvm-e2e-tests/fixtures
 
 RUN --mount=type=secret,id=github_token \
     if [ -f /run/secrets/github_token ]; then \

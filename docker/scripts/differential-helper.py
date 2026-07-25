@@ -82,6 +82,17 @@ def run_command(args):
             return {"report_formats": _report_formats(gmp.get_report_formats())}
         if args.command == "get_targets":
             return {"targets": _id_name_list(gmp.get_targets(), "target")}
+        deterministic_lists = {
+            "get_alerts": (gmp.get_alerts, "alerts", "alert"),
+            "get_credentials": (gmp.get_credentials, "credentials", "credential"),
+            "get_filters": (gmp.get_filters, "filters", "filter"),
+            "get_schedules": (gmp.get_schedules, "schedules", "schedule"),
+            "get_tags": (gmp.get_tags, "tags", "tag"),
+            "get_tasks": (gmp.get_tasks, "tasks", "task"),
+        }
+        if args.command in deterministic_lists:
+            method, key, tag = deterministic_lists[args.command]
+            return {key: _id_name_list(method(), tag)}
         if args.command == "create_target":
             if not args.name or not args.hosts or not args.port_list_id:
                 raise ValueError("create_target requires --name, --hosts, and --port-list-id")
@@ -114,6 +125,12 @@ def parse_args():
             "get_feeds",
             "get_report_formats",
             "get_targets",
+            "get_alerts",
+            "get_credentials",
+            "get_filters",
+            "get_schedules",
+            "get_tags",
+            "get_tasks",
             "create_target",
             "delete_target",
         ],

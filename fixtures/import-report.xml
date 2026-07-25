@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<report id="{{REPORT_ID}}">
+  <name>{{RUN_NAME}}</name>
+  <scan_start>2026-07-25T00:00:00Z</scan_start>
+  <scan_end>2026-07-25T00:00:01Z</scan_end>
+  <results/>
+</report>
