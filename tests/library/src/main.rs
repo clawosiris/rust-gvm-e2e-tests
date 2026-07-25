@@ -1200,7 +1200,7 @@ async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
         })?
         .commands
         .into_iter()
-        .map(|command| command.name)
+        .map(|command| canonical_help_command(&command.name))
         .collect();
     runtime::discovery(
         &version_response.version,
@@ -2746,6 +2746,10 @@ fn required_env(name: &str) -> Result<String, AppError> {
 
 fn optional_env(name: &str) -> Option<String> {
     env::var(name).ok().filter(|value| !value.trim().is_empty())
+}
+
+fn canonical_help_command(name: &str) -> String {
+    name.trim().to_ascii_lowercase()
 }
 
 fn env_u16(name: &str) -> Result<Option<u16>, AppError> {
@@ -5058,5 +5062,10 @@ mod tests {
             e2e_entity_ids(xml, "target").expect("parse"),
             vec!["00000000-0000-0000-0000-000000000003"]
         );
+    }
+
+    #[test]
+    fn help_command_names_match_registry_case() {
+        assert_eq!(canonical_help_command(" GET_TASKS "), "get_tasks");
     }
 }

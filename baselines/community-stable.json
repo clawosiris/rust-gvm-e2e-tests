@@ -3,7 +3,40 @@
   "gvm_image_tag": "stable",
   "gmp_version": "22.7",
   "rust_gvm_sha": "04da5996bc7b08640c15e20e85d768960b36d939",
-  "features": {},
+  "features": {
+    "ENABLE_AGENTS": {
+      "compiled_in": false,
+      "enabled": false
+    },
+    "ENABLE_CONTAINER_SCANNING": {
+      "compiled_in": false,
+      "enabled": false
+    },
+    "ENABLE_CREDENTIAL_STORES": {
+      "compiled_in": false,
+      "enabled": false
+    },
+    "ENABLE_JWT_AUTH": {
+      "compiled_in": false,
+      "enabled": false
+    },
+    "ENABLE_OPENVASD": {
+      "compiled_in": false,
+      "enabled": false
+    },
+    "ENABLE_SECURITY_INTELLIGENCE_EXPORT": {
+      "compiled_in": false,
+      "enabled": false
+    },
+    "ENABLE_WEB_APPLICATION_SCANNING": {
+      "compiled_in": false,
+      "enabled": false
+    },
+    "FEED_VT_METADATA": {
+      "compiled_in": true,
+      "enabled": false
+    }
+  },
   "conditional_commands": {
     "create_web_application_target": false,
     "delete_web_application_target": false,
