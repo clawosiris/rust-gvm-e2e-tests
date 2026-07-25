@@ -1196,10 +1196,40 @@ async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
         .into_iter()
         .map(|command| command.name)
         .collect();
+    runtime::discovery(
+        &version_response.version,
+        features.clone(),
+        help_commands.iter().cloned().collect(),
+    );
     ensure(
-        help_commands.contains("get_version") && help_commands.contains("authenticate"),
-        "help baseline omitted required get_version/authenticate commands",
+        !help_commands.is_empty(),
+        "authenticated brief XML help advertised no commands",
     )?;
+    let required_authenticated_commands = ["get_reports", "get_targets", "get_tasks"];
+    let missing_authenticated_commands = required_authenticated_commands
+        .iter()
+        .filter(|command| !help_commands.contains(**command))
+        .copied()
+        .collect::<Vec<_>>();
+    ensure(
+        missing_authenticated_commands.is_empty(),
+        &format!(
+            "authenticated brief XML help omitted expected Community commands: {}",
+            missing_authenticated_commands.join(", ")
+        ),
+    )?;
+    runtime::observe(
+        "brief-xml-help",
+        Outcome::Pass,
+        &format!(
+            "{} authenticated command(s) advertised; negotiation commands are validated directly",
+            help_commands.len()
+        ),
+    );
+    log_line(&format!(
+        "authenticated brief XML help commands: {}",
+        help_commands.iter().cloned().collect::<Vec<_>>().join(",")
+    ));
 
     let mut conditional_commands = BTreeMap::new();
     for entry in COMMAND_COVERAGE
@@ -1224,11 +1254,6 @@ async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
         );
     }
 
-    runtime::discovery(
-        &version_response.version,
-        features.clone(),
-        help_commands.iter().cloned().collect(),
-    );
     if env_flag("E2E_RECORD_BASELINE") {
         let path = runtime::write_baseline_candidate(
             &version_response.version,

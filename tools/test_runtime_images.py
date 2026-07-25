@@ -30,6 +30,25 @@ class RuntimeImagesTests(unittest.TestCase):
         actual = MODULE.normalize(rows, lambda image_id: [f"repo@{image_id}"])
         self.assertEqual([row["service"] for row in actual], ["a", "z"])
 
+    def test_derives_service_from_compose_container_name(self):
+        rows = MODULE.parse_compose_images(
+            '[{"ContainerName":"rust-gvm-e2e-ospd-openvas-1",'
+            '"Repository":"example/ospd","Tag":"stable","ID":"sha256:2"}]'
+        )
+        actual = MODULE.normalize(
+            rows,
+            lambda _: ["example/ospd@sha256:def"],
+            ["gvmd", "ospd-openvas"],
+        )
+        self.assertEqual(actual[0]["service"], "ospd-openvas")
+
+    def test_preserves_unmatched_container_name_as_evidence(self):
+        row = {"ContainerName": "unmatched-container"}
+        self.assertEqual(
+            MODULE.service_name(row, ["gvmd"]),
+            "unmatched-container",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
