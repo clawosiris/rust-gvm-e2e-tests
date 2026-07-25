@@ -1670,16 +1670,16 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
 async fn run_transport_suite(config: &EnvConfig) -> Result<(), AppError> {
     let mut selected = 0usize;
 
-    if let Ok(host) = env::var("E2E_TLS_HOST") {
+    if let Some(host) = optional_env("E2E_TLS_HOST") {
         selected += 1;
         let mut tls = TlsConfig::new(host);
         if let Some(port) = env_u16("E2E_TLS_PORT")? {
             tls = tls.with_port(port);
         }
-        if let Ok(server_name) = env::var("E2E_TLS_SERVER_NAME") {
+        if let Some(server_name) = optional_env("E2E_TLS_SERVER_NAME") {
             tls = tls.with_server_name(server_name);
         }
-        if let Ok(ca_path) = env::var("E2E_TLS_CA_PATH") {
+        if let Some(ca_path) = optional_env("E2E_TLS_CA_PATH") {
             tls = tls
                 .with_native_roots(false)
                 .with_root_certificate_file(ca_path)?;
@@ -1698,7 +1698,7 @@ async fn run_transport_suite(config: &EnvConfig) -> Result<(), AppError> {
         );
     }
 
-    if let Ok(host) = env::var("E2E_MTLS_HOST") {
+    if let Some(host) = optional_env("E2E_MTLS_HOST") {
         selected += 1;
         let certificate = required_env("E2E_MTLS_CERT_PATH")?;
         let private_key = required_env("E2E_MTLS_KEY_PATH")?;
@@ -1707,10 +1707,10 @@ async fn run_transport_suite(config: &EnvConfig) -> Result<(), AppError> {
         if let Some(port) = env_u16("E2E_MTLS_PORT")? {
             tls = tls.with_port(port);
         }
-        if let Ok(server_name) = env::var("E2E_MTLS_SERVER_NAME") {
+        if let Some(server_name) = optional_env("E2E_MTLS_SERVER_NAME") {
             tls = tls.with_server_name(server_name);
         }
-        if let Ok(ca_path) = env::var("E2E_MTLS_CA_PATH") {
+        if let Some(ca_path) = optional_env("E2E_MTLS_CA_PATH") {
             tls = tls
                 .with_native_roots(false)
                 .with_root_certificate_file(ca_path)?;
@@ -1729,15 +1729,15 @@ async fn run_transport_suite(config: &EnvConfig) -> Result<(), AppError> {
         );
     }
 
-    if let Ok(host) = env::var("E2E_SSH_HOST") {
+    if let Some(host) = optional_env("E2E_SSH_HOST") {
         selected += 1;
         let username = required_env("E2E_SSH_USER")?;
-        let auth = if let Ok(key_path) = env::var("E2E_SSH_KEY_PATH") {
+        let auth = if let Some(key_path) = optional_env("E2E_SSH_KEY_PATH") {
             SshAuth::PrivateKey {
                 key_path: key_path.into(),
-                passphrase: env::var("E2E_SSH_KEY_PASSPHRASE").ok(),
+                passphrase: optional_env("E2E_SSH_KEY_PASSPHRASE"),
             }
-        } else if let Ok(password) = env::var("E2E_SSH_PASSWORD") {
+        } else if let Some(password) = optional_env("E2E_SSH_PASSWORD") {
             SshAuth::Password(password)
         } else {
             SshAuth::Agent
@@ -1746,7 +1746,7 @@ async fn run_transport_suite(config: &EnvConfig) -> Result<(), AppError> {
         if let Some(port) = env_u16("E2E_SSH_PORT")? {
             ssh = ssh.with_port(port);
         }
-        if let Ok(socket) = env::var("E2E_SSH_SOCKET_PATH") {
+        if let Some(socket) = optional_env("E2E_SSH_SOCKET_PATH") {
             ssh = ssh.with_remote_socket(socket);
         }
         validate_transport(
@@ -2722,17 +2722,17 @@ where
 }
 
 fn required_env(name: &str) -> Result<String, AppError> {
-    env::var(name)
-        .ok()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            AppError::Assertion(format!("{name} is required for the selected transport"))
-        })
+    optional_env(name).ok_or_else(|| {
+        AppError::Assertion(format!("{name} is required for the selected transport"))
+    })
+}
+
+fn optional_env(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.trim().is_empty())
 }
 
 fn env_u16(name: &str) -> Result<Option<u16>, AppError> {
-    env::var(name)
-        .ok()
+    optional_env(name)
         .map(|value| {
             value
                 .parse()
