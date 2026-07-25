@@ -62,6 +62,8 @@ pub struct RunReport {
     pub outcome_counts: BTreeMap<String, usize>,
     pub features: BTreeMap<String, FeatureState>,
     pub help_commands: Vec<String>,
+    pub conditional_commands: BTreeMap<String, bool>,
+    pub registry_version_gates: BTreeMap<String, bool>,
     pub observations: Vec<Observation>,
 }
 
@@ -82,6 +84,7 @@ pub struct CommunityBaseline {
     pub features: BTreeMap<String, FeatureState>,
     pub help_commands: Vec<String>,
     pub conditional_commands: BTreeMap<String, bool>,
+    pub registry_version_gates: BTreeMap<String, bool>,
 }
 
 fn now() -> u64 {
@@ -140,6 +143,8 @@ impl RunReport {
             outcome_counts: BTreeMap::new(),
             features: BTreeMap::new(),
             help_commands: Vec::new(),
+            conditional_commands: BTreeMap::new(),
+            registry_version_gates: BTreeMap::new(),
             observations,
         }
     }
@@ -221,6 +226,17 @@ pub fn discovery(
     });
 }
 
+/// Store live conditional availability and non-authoritative registry gates.
+pub fn conditional_discovery(
+    conditional_commands: BTreeMap<String, bool>,
+    registry_version_gates: BTreeMap<String, bool>,
+) {
+    with_report(|report| {
+        report.conditional_commands = conditional_commands;
+        report.registry_version_gates = registry_version_gates;
+    });
+}
+
 /// Snapshot the current report.
 pub fn snapshot() -> Option<RunReport> {
     REPORT
@@ -264,6 +280,7 @@ pub fn validate_baseline(
     features: &BTreeMap<String, FeatureState>,
     help_commands: &[String],
     conditional_commands: &BTreeMap<String, bool>,
+    registry_version_gates: &BTreeMap<String, bool>,
 ) -> Result<(), String> {
     let expected = baseline()?;
     let image_tag = env::var("GVM_VERSION").unwrap_or_else(|_| "stable".to_string());
@@ -303,6 +320,12 @@ pub fn validate_baseline(
             expected.conditional_commands
         ));
     }
+    if expected.registry_version_gates != *registry_version_gates {
+        return Err(format!(
+            "registry version-gate diagnostics changed: expected {:?}, observed {registry_version_gates:?}",
+            expected.registry_version_gates
+        ));
+    }
     Ok(())
 }
 
@@ -312,6 +335,7 @@ pub fn write_baseline_candidate(
     features: &BTreeMap<String, FeatureState>,
     help_commands: &[String],
     conditional_commands: &BTreeMap<String, bool>,
+    registry_version_gates: &BTreeMap<String, bool>,
 ) -> Result<PathBuf, String> {
     let baseline = CommunityBaseline {
         schema_version: 1,
@@ -321,6 +345,7 @@ pub fn write_baseline_candidate(
         features: features.clone(),
         help_commands: help_commands.to_vec(),
         conditional_commands: conditional_commands.clone(),
+        registry_version_gates: registry_version_gates.clone(),
     };
     let path = Path::new("/workspace/artifacts/community-baseline-candidate.json");
     if let Some(parent) = path.parent() {
@@ -358,5 +383,13 @@ mod tests {
         assert_eq!(parsed.gvm_image_tag, "stable");
         assert_eq!(parsed.help_commands.len(), 126);
         assert!(parsed.help_commands.iter().any(|name| name == "get_tasks"));
+        assert_eq!(
+            parsed.conditional_commands.get("get_report_hosts"),
+            Some(&true)
+        );
+        assert_eq!(
+            parsed.registry_version_gates.get("get_report_hosts"),
+            Some(&false)
+        );
     }
 }

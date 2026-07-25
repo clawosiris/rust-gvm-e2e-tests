@@ -1249,6 +1249,7 @@ async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
     ));
 
     let mut conditional_commands = BTreeMap::new();
+    let mut registry_version_gates = BTreeMap::new();
     for entry in COMMAND_COVERAGE
         .iter()
         .filter(|entry| entry.disposition == Disposition::ConditionalCommunity)
@@ -1256,8 +1257,9 @@ async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
         let version_available = gvm_gmp::capabilities::command_capability(entry.name)
             .is_some_and(|capability| capability.available_in(version));
         let advertised = help_commands.contains(entry.name);
-        let available = version_available && advertised;
+        let available = live_help_supports(&help_commands, entry.name);
         conditional_commands.insert(entry.name.to_string(), available);
+        registry_version_gates.insert(entry.name.to_string(), version_available);
         runtime::observe(
             &format!("conditional-command:{}", entry.name),
             if available {
@@ -1271,12 +1273,14 @@ async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
         );
     }
 
+    runtime::conditional_discovery(conditional_commands.clone(), registry_version_gates.clone());
     if env_flag("E2E_RECORD_BASELINE") {
         let path = runtime::write_baseline_candidate(
             &version_response.version,
             &features,
             &help_commands.iter().cloned().collect::<Vec<_>>(),
             &conditional_commands,
+            &registry_version_gates,
         )
         .map_err(AppError::Assertion)?;
         log_line(&format!("recorded baseline candidate: {}", path.display()));
@@ -1286,6 +1290,7 @@ async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
             &features,
             &help_commands.iter().cloned().collect::<Vec<_>>(),
             &conditional_commands,
+            &registry_version_gates,
         )
         .map_err(AppError::Assertion)?;
     }
@@ -1522,6 +1527,7 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
             preferences: Some(true),
             preference_count: Some(true),
             timeout: Some(true),
+            details: Some(true),
             filter_string: Some("rows=2".to_string()),
             ..Default::default()
         })
@@ -2758,6 +2764,10 @@ fn canonical_help_command(name: &str) -> String {
     name.trim().to_ascii_lowercase()
 }
 
+fn live_help_supports(help_commands: &BTreeSet<String>, command: &str) -> bool {
+    help_commands.contains(command)
+}
+
 fn env_u16(name: &str) -> Result<Option<u16>, AppError> {
     optional_env(name)
         .map(|value| {
@@ -3248,22 +3258,7 @@ async fn run_conditional_report_drilldowns(
     report_id: &EntityId,
 ) -> Result<(), AppError> {
     let available = if let Some(report) = runtime::snapshot() {
-        let version = report
-            .gmp_version
-            .as_deref()
-            .map(parse_version_text)
-            .transpose()?
-            .ok_or_else(|| {
-                AppError::Assertion("scan lane is missing discovery GMP version".to_string())
-            })?;
-        report
-            .help_commands
-            .into_iter()
-            .filter(|command| {
-                gvm_gmp::capabilities::command_capability(command)
-                    .is_some_and(|capability| capability.available_in(version))
-            })
-            .collect::<BTreeSet<_>>()
+        report.help_commands.into_iter().collect::<BTreeSet<_>>()
     } else {
         BTreeSet::new()
     };
@@ -3284,6 +3279,20 @@ async fn run_conditional_report_drilldowns(
                 log_pass(concat!("typed ", $command), "valid parsed response");
             }
         };
+    }
+    if available.contains("get_scan_report") {
+        let response = client
+            .get_scan_report(
+                report_id,
+                gvm_gmp::commands::reports::GetScanReportOpts::default(),
+            )
+            .await?;
+        assert_status(&response, 200, "typed get_scan_report")?;
+        ensure(
+            response_contains(&response, "<report ")?,
+            "typed get_scan_report omitted its report payload",
+        )?;
+        log_pass("typed get_scan_report", "valid structured report response");
     }
     conditional_read!(
         "get_report_vulns",
@@ -5083,5 +5092,13 @@ mod tests {
     #[test]
     fn help_command_names_match_registry_case() {
         assert_eq!(canonical_help_command(" GET_TASKS "), "get_tasks");
+    }
+
+    #[test]
+    fn live_help_is_authoritative_over_registry_version_metadata() {
+        let help_commands = BTreeSet::from(["get_report_hosts".to_string()]);
+        let registry_gate = false;
+        assert!(live_help_supports(&help_commands, "get_report_hosts"));
+        assert!(!registry_gate);
     }
 }

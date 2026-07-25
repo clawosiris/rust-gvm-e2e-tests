@@ -76,6 +76,12 @@ conditional result. A changed advertisement or availability fails until
 reviewed. Conditional and excluded states remain distinct from pass in the JSON
 artifact.
 
+Authenticated live help/features are authoritative for Community capability
+selection. The rust-gvm minimum-version gate is recorded separately as
+diagnostic evidence and never vetoes an advertised command. In particular, the
+scan lane executes every advertised typed report drill-down, including valid
+empty responses.
+
 Only issue #118’s 15 agent/OCI wire commands, four helper-only task variants,
 and six OCI typed target methods are hard Community exclusions. A network
 service hosted in a container remains covered.
