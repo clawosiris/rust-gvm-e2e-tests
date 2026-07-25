@@ -9,7 +9,7 @@ edited by hand.
 
 The blocking warm-volume lane validates:
 
-- typed version, authentication, features, brief-XML help, feeds, settings,
+- typed version, authentication, features, text/brief-XML/full-XML help, feeds, settings,
   system reports, aggregates, auth description, resource names, preferences;
 - typed list/singular/filter/pagination parsing for targets, generic and scan
   configs/policies, scanners, port lists, tasks, NVTs/preferences/families,
@@ -69,10 +69,12 @@ unexpected mismatch is blocking.
 
 ## Conditional and excluded outcomes
 
-The fast discovery probe combines `get_version`, `get_features`, and `help`
-with rust-gvm’s semantic version registry. The checked-in baseline pins the
-result. A changed availability fails until reviewed. Conditional and excluded
-states remain distinct from pass in the JSON artifact.
+The fast discovery probe combines `get_version`, `get_features`, and normalized
+`help` command evidence with rust-gvm’s semantic version registry. The
+checked-in baseline pins the complete help inventory, feature states, and
+conditional result. A changed advertisement or availability fails until
+reviewed. Conditional and excluded states remain distinct from pass in the JSON
+artifact.
 
 Only issue #118’s 15 agent/OCI wire commands, four helper-only task variants,
 and six OCI typed target methods are hard Community exclusions. A network

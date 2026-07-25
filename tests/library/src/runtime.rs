@@ -80,6 +80,7 @@ pub struct CommunityBaseline {
     pub gmp_version: String,
     pub rust_gvm_sha: String,
     pub features: BTreeMap<String, FeatureState>,
+    pub help_commands: Vec<String>,
     pub conditional_commands: BTreeMap<String, bool>,
 }
 
@@ -261,6 +262,7 @@ pub fn baseline() -> Result<CommunityBaseline, String> {
 pub fn validate_baseline(
     gmp_version: &str,
     features: &BTreeMap<String, FeatureState>,
+    help_commands: &[String],
     conditional_commands: &BTreeMap<String, bool>,
 ) -> Result<(), String> {
     let expected = baseline()?;
@@ -289,6 +291,12 @@ pub fn validate_baseline(
             expected.features
         ));
     }
+    if expected.help_commands != help_commands {
+        return Err(format!(
+            "advertised help baseline changed: expected {:?}, observed {help_commands:?}",
+            expected.help_commands
+        ));
+    }
     if expected.conditional_commands != *conditional_commands {
         return Err(format!(
             "conditional command availability changed: expected {:?}, observed {conditional_commands:?}",
@@ -302,6 +310,7 @@ pub fn validate_baseline(
 pub fn write_baseline_candidate(
     gmp_version: &str,
     features: &BTreeMap<String, FeatureState>,
+    help_commands: &[String],
     conditional_commands: &BTreeMap<String, bool>,
 ) -> Result<PathBuf, String> {
     let baseline = CommunityBaseline {
@@ -310,6 +319,7 @@ pub fn write_baseline_candidate(
         gmp_version: gmp_version.to_string(),
         rust_gvm_sha: RUST_GVM_SHA.to_string(),
         features: features.clone(),
+        help_commands: help_commands.to_vec(),
         conditional_commands: conditional_commands.clone(),
     };
     let path = Path::new("/workspace/artifacts/community-baseline-candidate.json");
@@ -346,5 +356,7 @@ mod tests {
         let parsed = baseline().expect("baseline parses");
         assert_eq!(parsed.schema_version, 1);
         assert_eq!(parsed.gvm_image_tag, "stable");
+        assert_eq!(parsed.help_commands.len(), 126);
+        assert!(parsed.help_commands.iter().any(|name| name == "get_tasks"));
     }
 }

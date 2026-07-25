@@ -1275,13 +1275,19 @@ async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
         let path = runtime::write_baseline_candidate(
             &version_response.version,
             &features,
+            &help_commands.iter().cloned().collect::<Vec<_>>(),
             &conditional_commands,
         )
         .map_err(AppError::Assertion)?;
         log_line(&format!("recorded baseline candidate: {}", path.display()));
     } else {
-        runtime::validate_baseline(&version_response.version, &features, &conditional_commands)
-            .map_err(AppError::Assertion)?;
+        runtime::validate_baseline(
+            &version_response.version,
+            &features,
+            &help_commands.iter().cloned().collect::<Vec<_>>(),
+            &conditional_commands,
+        )
+        .map_err(AppError::Assertion)?;
     }
 
     log_pass(
