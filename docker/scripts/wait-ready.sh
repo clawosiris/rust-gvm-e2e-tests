@@ -6,7 +6,12 @@ set -euo pipefail
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker/docker-compose.yml}"
 SOCKET_PATH="/run/gvmd/gvmd.sock"
-MAX_WAIT=600
+MAX_WAIT="${GVM_READY_TIMEOUT_SECS:-2000}"
+
+if [[ ! "${MAX_WAIT}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: GVM_READY_TIMEOUT_SECS must be a positive integer, got '${MAX_WAIT}'" >&2
+  exit 2
+fi
 
 echo "=== Waiting for gvmd to accept connections ==="
 ready=false

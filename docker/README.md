@@ -56,6 +56,8 @@ To stop the stack and drop all named volumes:
 - `GVM_ADMIN_USER`: GMP username. Default `admin`.
 - `GVM_ADMIN_PASS`: GMP password. Default `admin`.
 - `GVM_SOCKET_PATH`: Socket path inside the runner container. Default `/run/gvmd/gvmd.sock`.
+- `GVM_READY_TIMEOUT_SECS`: Maximum time to wait for `gvmd` socket readiness
+  while PostgreSQL starts or recovers. Default `2000`.
 - `GVM_VERSION`: GVM runtime image tag. Default `stable`.
 - `E2E_RUN_SCAN`: Set to `1` to run the slower scan lifecycle test in addition to the smoke checks.
 
