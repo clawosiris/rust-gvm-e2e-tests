@@ -2246,11 +2246,45 @@ async fn run_isolated_suite(
             &permission_id,
             gvm_gmp::commands::permissions::PermissionOpts {
                 comment: Some(config.name("permission-modified")),
+                subject_type: Some(gvm_gmp::PermissionSubjectType::Role),
+                subject_id: Some(role.id.clone()),
                 ..Default::default()
             },
         ))
         .await?;
-    assert_status(&modify_permission, 200, "modify_permission")?;
+    if modify_permission.status_code() == Some(400)
+        && modify_permission.status_text().as_deref() == Some("Error in SUBJECT")
+    {
+        runtime::observe(
+            "typed permission modify",
+            Outcome::KnownUpstreamBug,
+            "rust-gvm#405 reproduced: flat subject elements were rejected by gvmd",
+        );
+
+        let mut command = XmlCommand::new("modify_permission");
+        command.set_attribute("permission_id", permission_id.as_str());
+        command.add_element_with_text("comment", &config.name("permission-modified"));
+        let subject = command.add_element("subject");
+        subject.set_attribute("id", role.id.as_str());
+        subject.add_child_with_text("type", "role");
+
+        let response = client.call(command).await?;
+        assert_status(
+            &response,
+            200,
+            "canonical modify_permission fallback for rust-gvm#405",
+        )?;
+        log_pass(
+            "canonical permission modify fallback",
+            permission_id.as_str(),
+        );
+    } else {
+        assert_status(&modify_permission, 200, "modify_permission")?;
+        log_pass(
+            "typed permission modify",
+            "rust-gvm emitted a gvmd-compatible subject",
+        );
+    }
     let modify_group = client
         .send(gvm_gmp::commands::groups::modify_group(
             &group.id,
