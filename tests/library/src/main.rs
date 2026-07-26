@@ -2299,6 +2299,7 @@ async fn run_isolated_suite(
             gvm_gmp::commands::users::UserOpts {
                 password: Some(user_password.clone()),
                 comment: Some(config.name("user-modified")),
+                role_ids: vec![role.id.clone()],
                 ..Default::default()
             },
         ))
