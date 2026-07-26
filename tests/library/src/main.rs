@@ -2125,6 +2125,23 @@ async fn run_isolated_suite(
         .authenticate(&config.username, &config.password)
         .await?;
 
+    let predefined_roles = client
+        .get_roles(gvm_gmp::commands::roles::GetRolesOpts {
+            filter_string: Some("name=User".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let user_role_id = predefined_roles
+        .items
+        .iter()
+        .find(|entry| entry.meta.name == "User")
+        .map(|entry| entry.meta.id.clone())
+        .ok_or_else(|| {
+            AppError::Assertion(
+                "isolated access-control suite requires the predefined User role".to_string(),
+            )
+        })?;
+
     let user_name = config.name("user");
     let user_password = format!("{}-password", config.run_id);
     let user = client
@@ -2133,6 +2150,7 @@ async fn run_isolated_suite(
             gvm_gmp::commands::users::UserOpts {
                 password: Some(user_password.clone()),
                 comment: Some(config.name("user-comment")),
+                role_ids: vec![user_role_id.clone()],
                 ..Default::default()
             },
         )
@@ -2212,6 +2230,10 @@ async fn run_isolated_suite(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    ensure(
+        user_role_ids.contains(&user_role_id),
+        "typed get_users did not preserve the predefined User role",
+    )?;
     if !user_role_ids.contains(&role.id) {
         user_role_ids.push(role.id.clone());
     }
