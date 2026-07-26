@@ -2200,6 +2200,21 @@ async fn run_isolated_suite(
         users.items.iter().any(|entry| entry.meta.id == user.id),
         "typed get_users did not round-trip the created user",
     )?;
+    let mut user_role_ids = users
+        .items
+        .iter()
+        .find(|entry| entry.meta.id == user.id)
+        .map(|entry| {
+            entry
+                .roles
+                .iter()
+                .map(|role| role.id.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !user_role_ids.contains(&role.id) {
+        user_role_ids.push(role.id.clone());
+    }
     let groups = client
         .get_groups(gvm_gmp::commands::groups::GetGroupsOpts {
             filter_string: Some(format!("uuid={}", group.id)),
@@ -2299,7 +2314,7 @@ async fn run_isolated_suite(
             gvm_gmp::commands::users::UserOpts {
                 password: Some(user_password.clone()),
                 comment: Some(config.name("user-modified")),
-                role_ids: vec![role.id.clone()],
+                role_ids: user_role_ids,
                 ..Default::default()
             },
         ))
