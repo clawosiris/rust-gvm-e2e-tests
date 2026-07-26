@@ -16,12 +16,13 @@ use crate::{Disposition, COMMAND_COVERAGE, HELPER_COVERAGE, RUST_GVM_SHA};
 
 static REPORT: OnceLock<Mutex<RunReport>> = OnceLock::new();
 
-/// Stable result state. Conditional and excluded states never count as passes.
+/// Stable result state. Conditional, excluded, and known-bug states never count as passes.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Outcome {
     Pass,
     Fail,
+    KnownUpstreamBug,
     ConditionalAvailable,
     ConditionalUnavailable,
     Excluded,
@@ -369,18 +370,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn result_states_do_not_merge_conditional_with_pass() {
+    fn result_states_do_not_merge_non_pass_with_pass() {
         let mut report = RunReport::new("unit", "devel-fast");
         report.observations.push(Observation {
             name: "conditional".to_string(),
             outcome: Outcome::ConditionalUnavailable,
             evidence: "help omitted command".to_string(),
         });
+        report.observations.push(Observation {
+            name: "known upstream bug".to_string(),
+            outcome: Outcome::KnownUpstreamBug,
+            evidence: "rust-gvm#405".to_string(),
+        });
         report.finish();
         assert_eq!(
             report.outcome_counts.get("conditional-unavailable"),
             Some(&1)
         );
+        assert_eq!(report.outcome_counts.get("known-upstream-bug"), Some(&1));
         assert_eq!(report.outcome_counts.get("pass"), None);
     }
 

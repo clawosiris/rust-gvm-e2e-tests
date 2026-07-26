@@ -68,7 +68,7 @@ use gvm_gmp::responses::report_format::GetReportFormatsResponse;
 use gvm_gmp::responses::scanner::GetScannersResponse;
 use gvm_gmp::responses::target::GetTargetsResponse;
 use gvm_gmp::types::{EntityId, GmpVersion};
-use gvm_protocol::Response;
+use gvm_protocol::{Response, XmlCommand};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde_json::Value;
@@ -2180,16 +2180,14 @@ async fn run_isolated_suite(
         )
         .await?;
     tracker.track_role(&role.id);
-    let permission = client
-        .create_permission(gvm_gmp::commands::permissions::PermissionOpts {
-            name: Some("get_tasks".to_string()),
-            comment: Some(config.name("permission-comment")),
-            subject_type: Some(gvm_gmp::PermissionSubjectType::Role),
-            subject_id: Some(role.id.clone()),
-            ..Default::default()
-        })
-        .await?;
-    tracker.track_permission(&permission.id);
+    let permission_id = create_role_permission(
+        &mut client,
+        "get_tasks",
+        &config.name("permission-comment"),
+        &role.id,
+    )
+    .await?;
+    tracker.track_permission(&permission_id);
 
     let users = client
         .get_users(gvm_gmp::commands::users::GetUsersOpts {
@@ -2226,7 +2224,7 @@ async fn run_isolated_suite(
     )?;
     let permissions = client
         .get_permissions(gvm_gmp::commands::permissions::GetPermissionsOpts {
-            filter_string: Some(format!("uuid={}", permission.id)),
+            filter_string: Some(format!("uuid={permission_id}")),
             details: Some(true),
             ..Default::default()
         })
@@ -2235,7 +2233,7 @@ async fn run_isolated_suite(
         permissions
             .items
             .iter()
-            .any(|entry| entry.meta.id == permission.id),
+            .any(|entry| entry.meta.id == permission_id),
         "typed get_permissions did not round-trip the created permission",
     )?;
     log_pass(
@@ -2245,7 +2243,7 @@ async fn run_isolated_suite(
 
     let modify_permission = client
         .send(gvm_gmp::commands::permissions::modify_permission(
-            &permission.id,
+            &permission_id,
             gvm_gmp::commands::permissions::PermissionOpts {
                 comment: Some(config.name("permission-modified")),
                 ..Default::default()
@@ -2661,13 +2659,13 @@ async fn run_isolated_suite(
         ));
     }
 
-    trash_restore_then_delete(&mut client, "permission", &permission.id, |id, ultimate| {
+    trash_restore_then_delete(&mut client, "permission", &permission_id, |id, ultimate| {
         gvm_gmp::commands::permissions::delete_permission(id, ultimate)
     })
     .await?;
     tracker
         .permission_ids
-        .retain(|id| id != permission.id.as_str());
+        .retain(|id| id != permission_id.as_str());
     trash_restore_then_delete(&mut client, "group", &group.id, |id, ultimate| {
         gvm_gmp::commands::groups::delete_group(id, ultimate)
     })
@@ -4653,9 +4651,23 @@ async fn wait_task_state(
     let mut last_status = String::from("unknown");
 
     while started.elapsed() <= timeout {
-        let response = client.call(get_task(task_id)).await?;
-        assert_status(&response, 200, "get_task")?;
-        if let Some(status) = response.child_text("status") {
+        let response = client
+            .get_tasks(GetTasksOpts {
+                filter_string: Some(format!("uuid={task_id}")),
+                details: Some(true),
+                ..Default::default()
+            })
+            .await?;
+        let task = response
+            .items
+            .iter()
+            .find(|task| task.meta.id == *task_id)
+            .ok_or_else(|| {
+                AppError::Assertion(format!(
+                    "typed get_tasks did not return polled task {task_id}"
+                ))
+            })?;
+        if let Some(status) = task.status.clone() {
             last_status = status;
             if accept(&last_status) {
                 return Ok(last_status);
@@ -4669,6 +4681,63 @@ async fn wait_task_state(
         "task {task_id} did not reach the required state within {} seconds; last status: {last_status}",
         timeout.as_secs()
     )))
+}
+
+async fn create_role_permission(
+    client: &mut GmpClient<UnixSocketConnection>,
+    name: &str,
+    comment: &str,
+    role_id: &EntityId,
+) -> Result<EntityId, AppError> {
+    match client
+        .create_permission(gvm_gmp::commands::permissions::PermissionOpts {
+            name: Some(name.to_string()),
+            comment: Some(comment.to_string()),
+            subject_type: Some(gvm_gmp::PermissionSubjectType::Role),
+            subject_id: Some(role_id.clone()),
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(permission) => {
+            log_pass(
+                "typed permission create",
+                "rust-gvm emitted a gvmd-compatible subject",
+            );
+            Ok(permission.id)
+        }
+        Err(GvmError::Parse(gvm_gmp::responses::ParseError::ServerError {
+            status: 400,
+            message,
+        })) if message == "Error in SUBJECT" => {
+            runtime::observe(
+                "typed permission create",
+                Outcome::KnownUpstreamBug,
+                "rust-gvm#405 reproduced: flat subject elements were rejected by gvmd",
+            );
+
+            let mut command = XmlCommand::new("create_permission");
+            command.add_element_with_text("name", name);
+            command.add_element_with_text("comment", comment);
+            let subject = command.add_element("subject");
+            subject.set_attribute("id", role_id.as_str());
+            subject.add_child_with_text("type", "role");
+
+            let response = client.call(command).await?;
+            assert_status(
+                &response,
+                201,
+                "canonical create_permission fallback for rust-gvm#405",
+            )?;
+            let permission_id = response_id(&response, "create_permission fallback")?;
+            log_pass(
+                "canonical permission create fallback",
+                permission_id.as_str(),
+            );
+            Ok(permission_id)
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 async fn connect_client(config: &EnvConfig) -> Result<GmpClient<UnixSocketConnection>, AppError> {

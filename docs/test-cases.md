@@ -51,6 +51,12 @@ namespace. It covers:
 - dedicated `empty_trashcan` execution.
 
 Global mutations never run against the ordinary warm-volume project.
+Until [rust-gvm #405](https://github.com/clawosiris/rust-gvm/issues/405) is
+fixed, the exact typed `create_permission` rejection is recorded as
+`known-upstream-bug`; a canonical nested-subject request then creates the
+permission so read/modify/trash/restore/delete coverage still runs. Any other
+typed result or fallback failure is blocking, and a fixed typed helper
+automatically replaces the fallback.
 
 ## `devel-transport`
 
@@ -80,7 +86,8 @@ The fast discovery probe combines `get_version`, `get_features`, and normalized
 checked-in baseline pins the complete help inventory, feature states, and
 conditional result. A changed advertisement or availability fails until
 reviewed. Conditional and excluded states remain distinct from pass in the JSON
-artifact.
+artifact. Confirmed upstream defects are also distinct as `known-upstream-bug`
+and must name their tracked issue and exact reproduced response.
 
 Authenticated live help/features are authoritative for Community capability
 selection. The rust-gvm minimum-version gate is recorded separately as

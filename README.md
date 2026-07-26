@@ -42,9 +42,9 @@ a fresh feed is known to exceed the normal two-hour readiness budget. Volume
 deletion happens only with the explicit `clean` workflow input.
 
 The test details are in [docs/test-cases.md](docs/test-cases.md). Each lane
-publishes structured JSON with pass/fail/conditional/excluded counts, exact
-rust-gvm SHA, GMP version, runtime tags/digests, feature/help evidence, and all
-observations.
+publishes structured JSON with pass/fail/known-upstream-bug/conditional/excluded
+counts, exact rust-gvm SHA, GMP version, runtime tags/digests, feature/help
+evidence, and all observations.
 
 ## Run locally on a Docker host
 
