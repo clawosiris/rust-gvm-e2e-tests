@@ -2494,7 +2494,7 @@ async fn run_isolated_suite(
     let report_format = report_formats.items.first().ok_or_else(|| {
         AppError::Assertion("isolated lane requires a warm report format".to_string())
     })?;
-    let created_format = client
+    let create_format = client
         .create_report_format(
             &config.name("report-format-created"),
             gvm_gmp::commands::report_formats::ReportFormatOpts {
@@ -2503,12 +2503,23 @@ async fn run_isolated_suite(
                 format_type: Some(gvm_gmp::ReportFormatType::Xml),
             },
         )
-        .await?;
+        .await;
     ensure(
-        created_format.status == 201,
-        "typed create_report_format failed",
+        matches!(
+            create_format,
+            Err(GvmError::Parse(
+                gvm_gmp::responses::ParseError::ServerError {
+                    status: 400,
+                    ref message,
+                }
+            )) if message == "Either a GET_REPORT_FORMATS_RESPONSE or a COPY is required"
+        ),
+        "standalone create_report_format did not produce the expected typed server error",
     )?;
-    tracker.track_report_format(&created_format.id);
+    log_pass(
+        "isolated report format create",
+        "typed server contract requires import or copy",
+    );
     let cloned_format = client.clone_report_format(&report_format.meta.id).await?;
     tracker.track_report_format(&cloned_format.id);
     let modify_format = client
@@ -2543,7 +2554,7 @@ async fn run_isolated_suite(
         "typed import_report_format failed",
     )?;
     tracker.track_report_format(&imported_format.id);
-    for id in [&created_format.id, &cloned_format.id, &imported_format.id] {
+    for id in [&cloned_format.id, &imported_format.id] {
         let verified = client
             .send(gvm_gmp::commands::report_formats::verify_report_format(id))
             .await?;
