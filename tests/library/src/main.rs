@@ -2297,6 +2297,7 @@ async fn run_isolated_suite(
         .send(gvm_gmp::commands::users::modify_user(
             &user.id,
             gvm_gmp::commands::users::UserOpts {
+                password: Some(user_password.clone()),
                 comment: Some(config.name("user-modified")),
                 ..Default::default()
             },
