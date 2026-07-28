@@ -60,7 +60,7 @@ use gvm_gmp::commands::tasks::{
     create_task, delete_task, get_task, get_tasks, stop_task, CreateTaskOpts, GetTasksOpts,
 };
 use gvm_gmp::enums::{
-    AlertCondition, AlertEvent, AlertMethod, CredentialType, EntityType, FilterType,
+    AlertCondition, AlertEvent, AlertMethod, CredentialType, EntityType, FilterType, ResourceType,
 };
 use gvm_gmp::responses::feed::GetFeedsResponse;
 use gvm_gmp::responses::port_list::GetPortListsResponse;
@@ -1366,6 +1366,13 @@ async fn wait_ready(config: &EnvConfig) -> Result<(), AppError> {
     Ok(())
 }
 
+fn resource_names_request() -> impl gvm_protocol::Request {
+    gvm_gmp::commands::system::get_resource_names(gvm_gmp::commands::system::GetResourceNamesOpts {
+        resource_type: Some(ResourceType::Target),
+        ..Default::default()
+    })
+}
+
 async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
     let mut rejected_client = connect_client(config).await?;
     let rejected = rejected_client
@@ -1674,11 +1681,7 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
         .await?;
     assert_status(&preferences, 200, "get_preferences")?;
     log_pass("raw diagnostic get_preferences", "status and framing");
-    let resource_names = client
-        .send(gvm_gmp::commands::system::get_resource_names(
-            gvm_gmp::commands::system::GetResourceNamesOpts::default(),
-        ))
-        .await?;
+    let resource_names = client.send(resource_names_request()).await?;
     assert_status(&resource_names, 200, "get_resource_names")?;
     log_pass("raw diagnostic get_resource_names", "status and framing");
 
@@ -2960,6 +2963,55 @@ async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Re
     Ok(())
 }
 
+fn select_scan_report_id(
+    started_report_id: &EntityId,
+    current_report_id: Option<&EntityId>,
+    last_report_id: Option<&EntityId>,
+) -> Option<EntityId> {
+    if started_report_id.as_str() != "0" {
+        return Some(started_report_id.clone());
+    }
+
+    current_report_id
+        .filter(|id| id.as_str() != "0")
+        .or_else(|| last_report_id.filter(|id| id.as_str() != "0"))
+        .cloned()
+}
+
+async fn resolve_scan_report_id(
+    client: &mut GmpClient<UnixSocketConnection>,
+    task_id: &EntityId,
+    started_report_id: &EntityId,
+) -> Result<EntityId, AppError> {
+    let response = client
+        .get_tasks(GetTasksOpts {
+            filter_string: Some(format!("uuid={task_id}")),
+            details: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    let task = response
+        .items
+        .iter()
+        .find(|task| task.meta.id == *task_id)
+        .ok_or_else(|| {
+            AppError::Assertion(format!(
+                "typed get_tasks did not return scan task {task_id} while resolving its report"
+            ))
+        })?;
+
+    select_scan_report_id(
+        started_report_id,
+        task.current_report.as_ref().map(|report| &report.id),
+        task.last_report.as_ref().map(|report| &report.id),
+    )
+    .ok_or_else(|| {
+        AppError::Assertion(format!(
+            "task {task_id} retained provisional report id {started_report_id} without exposing a current or last report"
+        ))
+    })
+}
+
 async fn run_scan_suite(
     client: &mut GmpClient<UnixSocketConnection>,
     config: &EnvConfig,
@@ -3046,7 +3098,7 @@ async fn run_scan_suite(
 
     let started = client.start_task(&task.id).await?;
     ensure(started.status == 202, "typed start_task did not return 202")?;
-    let report_id = started.report_id.ok_or_else(|| {
+    let started_report_id = started.report_id.ok_or_else(|| {
         AppError::Assertion("typed start_task response omitted report_id".to_string())
     })?;
     match client.start_task(&task.id).await {
@@ -3058,7 +3110,8 @@ async fn run_scan_suite(
             ),
         ),
         Ok(response)
-            if response.status == 202 && response.report_id.as_ref() == Some(&report_id) =>
+            if response.status == 202
+                && response.report_id.as_ref() == Some(&started_report_id) =>
         {
             log_pass(
                 "typed duplicate start_task",
@@ -3067,7 +3120,7 @@ async fn run_scan_suite(
         }
         Ok(response) => {
             return Err(AppError::Assertion(format!(
-                "duplicate start_task returned status {} ({}) with report {:?}, expected a rejection or the existing report {report_id}",
+                "duplicate start_task returned status {} ({}) with report {:?}, expected a rejection or the existing report {started_report_id}",
                 response.status, response.status_text, response.report_id
             )));
         }
@@ -3084,6 +3137,7 @@ async fn run_scan_suite(
         |status| status != "New" && status != "Requested",
     )
     .await?;
+    let report_id = resolve_scan_report_id(client, &task.id, &started_report_id).await?;
     if matches!(task_status.as_str(), "Running" | "Stop Requested") {
         let stop_response = client.call(stop_task(&task.id)).await?;
         assert_status(&stop_response, 200, "stop_task")?;
@@ -5237,5 +5291,41 @@ mod tests {
         let registry_gate = false;
         assert!(live_help_supports(&help_commands, "get_report_hosts"));
         assert!(!registry_gate);
+    }
+
+    #[test]
+    fn resource_names_request_includes_mandatory_resource_type() {
+        let request = resource_names_request();
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("resource-names request should be UTF-8");
+
+        assert_eq!(xml, r#"<get_resource_names type="TARGET"/>"#);
+    }
+
+    #[test]
+    fn provisional_start_report_id_resolves_from_task_linkage() {
+        let provisional = EntityId::new("0").expect("valid provisional id");
+        let current = EntityId::new("current-report").expect("valid current report id");
+        let last = EntityId::new("last-report").expect("valid last report id");
+
+        assert_eq!(
+            select_scan_report_id(&provisional, Some(&current), Some(&last)),
+            Some(current.clone())
+        );
+        assert_eq!(
+            select_scan_report_id(&provisional, None, Some(&last)),
+            Some(last)
+        );
+    }
+
+    #[test]
+    fn concrete_start_report_id_is_preserved() {
+        let started = EntityId::new("started-report").expect("valid started report id");
+        let stale = EntityId::new("older-report").expect("valid stale report id");
+
+        assert_eq!(
+            select_scan_report_id(&started, Some(&stale), None),
+            Some(started)
+        );
     }
 }
