@@ -124,8 +124,8 @@ mod tests {
         compile_enforce_public_helper_surface();
         assert_eq!(
             HELPER_COVERAGE.len(),
-            146,
-            "142 typed helpers plus four explicit task variants"
+            147,
+            "143 public typed helpers plus four explicit task variants"
         );
     }
 }

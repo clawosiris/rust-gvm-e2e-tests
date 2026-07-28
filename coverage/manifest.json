@@ -2,7 +2,7 @@
   "schema_version": 1,
   "rust_gvm_sha": "04da5996bc7b08640c15e20e85d768960b36d939",
   "registry_count": 155,
-  "typed_helper_count": 142,
+  "typed_helper_count": 143,
   "helper_variant_count": 4,
   "commands": [
     {
@@ -1840,6 +1840,13 @@
       "disposition": "blocking-live",
       "lane": "devel-fast",
       "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_scan_report",
+      "wire_command": "get_scan_report",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
     },
     {
       "name": "get_scanner",

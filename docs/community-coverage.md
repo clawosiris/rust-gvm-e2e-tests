@@ -4,7 +4,7 @@
 
 - rust-gvm commit: `04da5996bc7b08640c15e20e85d768960b36d939`
 - registered wire commands: **155**
-- public typed helpers: **142**
+- public typed helpers: **143**
 - explicit helper-only variants: **4**
 - ordinary live runs use warm persistent volumes
 
@@ -289,6 +289,7 @@
 | `get_scan_config_nvt` | `get_nvts` | `blocking-live` | `devel-fast` |
 | `get_scan_config_nvts` | `get_nvts` | `blocking-live` | `devel-fast` |
 | `get_scan_configs` | `get_configs` | `blocking-live` | `devel-fast` |
+| `get_scan_report` | `get_scan_report` | `conditional-community` | `discovery-selected` |
 | `get_scanner` | `get_scanners` | `blocking-live` | `devel-fast` |
 | `get_scanners` | `get_scanners` | `blocking-live` | `devel-fast` |
 | `get_schedules` | `get_schedules` | `blocking-live` | `devel-fast` |

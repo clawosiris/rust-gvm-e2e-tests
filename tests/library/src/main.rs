@@ -3556,6 +3556,14 @@ fn conditional_helper_available(helper_name: &str, version: GmpVersion) -> Resul
     Ok(version >= minimum)
 }
 
+fn conditional_helper_call_allowed(
+    helper_name: &str,
+    advertised: bool,
+    version: GmpVersion,
+) -> Result<bool, AppError> {
+    Ok(advertised && conditional_helper_available(helper_name, version)?)
+}
+
 async fn run_report_export_checks(
     client: &mut GmpClient<UnixSocketConnection>,
     report_id: &EntityId,
@@ -3629,19 +3637,30 @@ async fn run_conditional_report_drilldowns(
             }
         };
     }
-    if available.contains("get_scan_report") {
-        let response = client
-            .get_scan_report(
-                report_id,
-                gvm_gmp::commands::reports::GetScanReportOpts::default(),
-            )
-            .await?;
-        assert_status(&response, 200, "typed get_scan_report")?;
-        ensure(
-            response_contains(&response, "<report ")?,
-            "typed get_scan_report omitted its report payload",
-        )?;
-        log_pass("typed get_scan_report", "valid structured report response");
+    let scan_report_advertised = available.contains("get_scan_report");
+    let version = client.version();
+    if scan_report_advertised {
+        if !conditional_helper_call_allowed("get_scan_report", true, version)? {
+            let minimum = conditional_helper_minimum_version("get_scan_report")?;
+            runtime::observe(
+                "helper:get_scan_report",
+                Outcome::ConditionalUnavailable,
+                &format!("GMP {version}; typed semantic capability requires GMP >= {minimum}"),
+            );
+        } else {
+            let response = client
+                .get_scan_report(
+                    report_id,
+                    gvm_gmp::commands::reports::GetScanReportOpts::default(),
+                )
+                .await?;
+            assert_status(&response, 200, "typed get_scan_report")?;
+            ensure(
+                response_contains(&response, "<report ")?,
+                "typed get_scan_report omitted its report payload",
+            )?;
+            log_pass("typed get_scan_report", "valid structured report response");
+        }
     }
     conditional_read!(
         "get_report_vulns",
@@ -5675,6 +5694,22 @@ mod tests {
         assert!(
             conditional_helper_available("get_report_export", GmpVersion(22, 8))
                 .expect("export helper has conditional coverage")
+        );
+    }
+
+    #[test]
+    fn scan_report_helper_call_path_requires_advertisement_and_semantic_version() {
+        assert!(
+            !conditional_helper_call_allowed("get_scan_report", true, GmpVersion(22, 7))
+                .expect("scan report helper has conditional coverage")
+        );
+        assert!(
+            conditional_helper_call_allowed("get_scan_report", true, GmpVersion(22, 8))
+                .expect("scan report helper has conditional coverage")
+        );
+        assert!(
+            !conditional_helper_call_allowed("get_scan_report", false, GmpVersion(22, 8))
+                .expect("unadvertised scan report helper must not be called")
         );
     }
 

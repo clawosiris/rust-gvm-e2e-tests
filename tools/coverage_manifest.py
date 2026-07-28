@@ -204,6 +204,13 @@ EXTRA_HELPERS = {
     "create_oci_image_target_task": ("create_task", "excluded-community"),
 }
 
+# These public client methods are intentionally implemented outside typed.rs.
+# Keep them in the generated helper inventory so their semantic availability
+# contracts receive the same coverage scrutiny as the typed.rs surface.
+DIRECT_CLIENT_HELPERS = {
+    "get_scan_report",
+}
+
 HELPER_DISPOSITION_OVERRIDES = {
     "create_credential_store_credential": "conditional-community",
     "get_report_export": "conditional-community",
@@ -251,9 +258,10 @@ def command_names(source: Path) -> list[str]:
 def typed_helpers(source: Path) -> list[str]:
     text = (source / "crates/gvm-client/src/typed.rs").read_text()
     names = re.findall(r"^\s+pub async fn ([a-z0-9_]+)\s*\(", text, flags=re.MULTILINE)
+    names.extend(DIRECT_CLIENT_HELPERS)
     if len(names) != len(set(names)):
         raise ValueError("upstream typed helper surface contains duplicate names")
-    return names
+    return sorted(names)
 
 
 def command_disposition(name: str) -> str:

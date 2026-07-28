@@ -1586,6 +1586,12 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
         lane: "devel-fast",
     },
     CoverageEntry {
+        name: "get_scan_report",
+        wire_command: "get_scan_report",
+        disposition: Disposition::ConditionalCommunity,
+        lane: "discovery-selected",
+    },
+    CoverageEntry {
         name: "get_scanner",
         wire_command: "get_scanners",
         disposition: Disposition::BlockingLive,
@@ -1926,6 +1932,7 @@ pub fn compile_enforce_public_helper_surface() {
     let _ = GmpClient::<UnixSocketConnection>::get_scan_config_nvt;
     let _ = GmpClient::<UnixSocketConnection>::get_scan_config_nvts;
     let _ = GmpClient::<UnixSocketConnection>::get_scan_configs;
+    let _ = GmpClient::<UnixSocketConnection>::get_scan_report;
     let _ = GmpClient::<UnixSocketConnection>::get_scanner;
     let _ = GmpClient::<UnixSocketConnection>::get_scanners;
     let _ = GmpClient::<UnixSocketConnection>::get_schedules;
