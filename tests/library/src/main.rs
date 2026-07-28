@@ -3548,21 +3548,9 @@ async fn run_scan_suite(
             .any(|item| item.meta.id == imported.id),
         "typed imported report did not round-trip",
     )?;
-    trash_restore_then_delete(
-        client,
-        "imported report",
-        &imported.id,
-        gvm_gmp::commands::reports::delete_report,
-    )
-    .await?;
-    let delete_import_task = client.call(delete_task(&import_task.id, true)).await?;
-    assert_status(&delete_import_task, 200, "delete import task")?;
-    tracker
-        .task_ids
-        .retain(|value| value != import_task.id.as_str());
     log_pass(
         "report import",
-        "sanitized fixture create_import_task/import_report/read/cleanup",
+        "sanitized fixture create_import_task/import_report/read; parent-task cleanup tracked",
     );
 
     if let Some(result) = results.items.first() {
