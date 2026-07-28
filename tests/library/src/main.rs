@@ -1418,7 +1418,9 @@ struct ReportFormatParamEvidence {
     name_depth: Option<usize>,
 }
 
-fn select_configurable_report_format(response: &Response) -> Result<EntityId, AppError> {
+fn parse_report_format_params(
+    response: &Response,
+) -> Result<Vec<ReportFormatParamEvidence>, AppError> {
     let mut reader = Reader::from_str(response.as_str()?);
     let mut formats = Vec::new();
     let mut current: Option<ReportFormatParamEvidence> = None;
@@ -1520,14 +1522,53 @@ fn select_configurable_report_format(response: &Response) -> Result<EntityId, Ap
         }
     }
 
-    if let Some(format) = formats
-        .iter()
-        .find(|format| format.id.is_some() && format.parameter_count > 0)
-    {
-        return parse_entity_id(format.id.as_deref().expect("id was checked"));
+    if current.is_some() {
+        return Err(AppError::Assertion(
+            "get_report_formats params=1 response ended before report_format closed".to_string(),
+        ));
+    }
+    if formats.is_empty() {
+        return Err(AppError::Assertion(
+            "get_report_formats params=1 returned no report formats".to_string(),
+        ));
+    }
+    for format in &formats {
+        let id = format.id.as_deref().ok_or_else(|| {
+            AppError::Assertion(
+                "get_report_formats params=1 returned a report format without an id".to_string(),
+            )
+        })?;
+        parse_entity_id(id)?;
     }
 
-    let evidence = formats
+    Ok(formats)
+}
+
+fn select_ordinary_report_format(
+    formats: &[ReportFormatParamEvidence],
+) -> Result<EntityId, AppError> {
+    formats
+        .iter()
+        .find_map(|format| format.id.as_deref())
+        .map(parse_entity_id)
+        .transpose()?
+        .ok_or_else(|| {
+            AppError::Assertion(
+                "get_report_formats params=1 returned no usable report formats".to_string(),
+            )
+        })
+}
+
+fn select_configurable_report_format(formats: &[ReportFormatParamEvidence]) -> Option<EntityId> {
+    formats
+        .iter()
+        .find(|format| format.parameter_count > 0)
+        .and_then(|format| format.id.as_deref())
+        .map(|id| parse_entity_id(id).expect("report-format ids were validated during parsing"))
+}
+
+fn report_format_parameter_evidence(formats: &[ReportFormatParamEvidence]) -> String {
+    formats
         .iter()
         .map(|format| {
             format!(
@@ -1542,10 +1583,71 @@ fn select_configurable_report_format(response: &Response) -> Result<EntityId, Ap
             )
         })
         .collect::<Vec<_>>()
-        .join(", ");
-    Err(AppError::Assertion(format!(
-        "report config lifecycle requires a report format with configurable parameters; get_report_formats params=1 returned [{evidence}]"
-    )))
+        .join(", ")
+}
+
+async fn run_report_config_lifecycle(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    tracker: &mut CleanupTracker,
+    report_format_id: &EntityId,
+) -> Result<(), AppError> {
+    let report_config = client
+        .send(create_report_config_request(
+            &config.name("report-config"),
+            report_format_id,
+            &config.name("report-config-comment"),
+        ))
+        .await?;
+    assert_status(&report_config, 201, "create_report_config")?;
+    let report_config_id = response_id(&report_config, "create_report_config")?;
+    tracker.track_report_config(&report_config_id);
+    let configs = client
+        .get_report_configs_parsed(gvm_gmp::commands::report_configs::GetReportConfigsOpts {
+            filter: Some(format!("uuid={report_config_id}")),
+            ..Default::default()
+        })
+        .await?;
+    ensure(
+        configs
+            .items
+            .iter()
+            .any(|entry| entry.meta.id == report_config_id),
+        "typed report config did not round-trip",
+    )?;
+    let modify_config = client
+        .send(gvm_gmp::commands::report_configs::modify_report_config(
+            report_config_id.as_str(),
+            gvm_gmp::commands::report_configs::ModifyReportConfigOpts {
+                comment: Some(config.name("report-config-modified")),
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&modify_config, 200, "modify_report_config")?;
+    let cloned_report_config = client
+        .clone_report_config(report_config_id.as_str())
+        .await?;
+    ensure(
+        cloned_report_config.status == 201,
+        "typed clone_report_config failed",
+    )?;
+    tracker.track_report_config(&cloned_report_config.id);
+    let rename_clone = client
+        .send(gvm_gmp::commands::report_configs::modify_report_config(
+            cloned_report_config.id.as_str(),
+            gvm_gmp::commands::report_configs::ModifyReportConfigOpts {
+                name: Some(config.name("report-config-clone")),
+                comment: Some(config.name("report-config-clone-comment")),
+            },
+        ))
+        .await?;
+    assert_status(&rename_clone, 200, "rename cloned report config")?;
+    log_pass(
+        "isolated report config lifecycle",
+        "create/get/modify/clone; cleanup is tracked",
+    );
+    Ok(())
 }
 
 async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
@@ -2661,13 +2763,15 @@ async fn run_isolated_suite(
     log_pass("isolated host asset", "typed create/get/modify/failure");
 
     // rust-gvm's typed ReportFormat omits parameter metadata. Ask gvmd for the
-    // authenticated `params=1` view so that report-config creation is backed by
-    // a live, configurable source rather than a feed-specific UUID or name.
+    // authenticated `params=1` view, but keep report-format coverage independent
+    // of whether this installation exposes configurable report formats.
     let report_formats = client
         .send(get_report_formats_with_params_request())
         .await?;
     assert_status(&report_formats, 200, "get_report_formats with params")?;
-    let report_format_id = select_configurable_report_format(&report_formats)?;
+    let report_format_params = parse_report_format_params(&report_formats)?;
+    let ordinary_report_format_id = select_ordinary_report_format(&report_format_params)?;
+    let configurable_report_format_id = select_configurable_report_format(&report_format_params);
     let create_format = client
         .create_report_format(
             &config.name("report-format-created"),
@@ -2694,7 +2798,9 @@ async fn run_isolated_suite(
         "isolated report format create",
         "typed server contract requires import or copy",
     );
-    let cloned_format = client.clone_report_format(&report_format_id).await?;
+    let cloned_format = client
+        .clone_report_format(&ordinary_report_format_id)
+        .await?;
     tracker.track_report_format(&cloned_format.id);
     let modify_format = client
         .send(gvm_gmp::commands::report_formats::modify_report_format(
@@ -2709,7 +2815,7 @@ async fn run_isolated_suite(
 
     let exported_format = client
         .send(gvm_gmp::commands::report_formats::get_report_format(
-            &report_format_id,
+            &ordinary_report_format_id,
         ))
         .await?;
     assert_status(&exported_format, 200, "export report format for import")?;
@@ -2735,61 +2841,22 @@ async fn run_isolated_suite(
         assert_status(&verified, 200, "verify_report_format")?;
     }
 
-    let report_config = client
-        .send(create_report_config_request(
-            &config.name("report-config"),
-            &imported_format.id,
-            &config.name("report-config-comment"),
-        ))
-        .await?;
-    assert_status(&report_config, 201, "create_report_config")?;
-    let report_config_id = response_id(&report_config, "create_report_config")?;
-    tracker.track_report_config(&report_config_id);
-    let configs = client
-        .get_report_configs_parsed(gvm_gmp::commands::report_configs::GetReportConfigsOpts {
-            filter: Some(format!("uuid={report_config_id}")),
-            ..Default::default()
-        })
-        .await?;
-    ensure(
-        configs
-            .items
-            .iter()
-            .any(|entry| entry.meta.id == report_config_id),
-        "typed report config did not round-trip",
-    )?;
-    let modify_config = client
-        .send(gvm_gmp::commands::report_configs::modify_report_config(
-            report_config_id.as_str(),
-            gvm_gmp::commands::report_configs::ModifyReportConfigOpts {
-                comment: Some(config.name("report-config-modified")),
-                ..Default::default()
-            },
-        ))
-        .await?;
-    assert_status(&modify_config, 200, "modify_report_config")?;
-    let cloned_report_config = client
-        .clone_report_config(report_config_id.as_str())
-        .await?;
-    ensure(
-        cloned_report_config.status == 201,
-        "typed clone_report_config failed",
-    )?;
-    tracker.track_report_config(&cloned_report_config.id);
-    let rename_clone = client
-        .send(gvm_gmp::commands::report_configs::modify_report_config(
-            cloned_report_config.id.as_str(),
-            gvm_gmp::commands::report_configs::ModifyReportConfigOpts {
-                name: Some(config.name("report-config-clone")),
-                comment: Some(config.name("report-config-clone-comment")),
-            },
-        ))
-        .await?;
-    assert_status(&rename_clone, 200, "rename cloned report config")?;
     log_pass(
-        "isolated report resources",
-        "format/config create/get/modify",
+        "isolated report format lifecycle",
+        "clone/modify/export/import/verify; cleanup is tracked",
     );
+    if let Some(report_format_id) = configurable_report_format_id {
+        run_report_config_lifecycle(&mut client, config, tracker, &report_format_id).await?;
+    } else {
+        runtime::observe(
+            "isolated report config lifecycle",
+            Outcome::ConditionalUnavailable,
+            &format!(
+                "get_report_formats params=1 returned no configurable report format: [{}]",
+                report_format_parameter_evidence(&report_format_params)
+            ),
+        );
+    }
 
     let sync_configs = client
         .get_scan_configs(GetScanConfigsOpts {
@@ -5634,6 +5701,56 @@ mod tests {
     }
 
     #[test]
+    fn report_format_lifecycle_selects_an_ordinary_format_without_parameters() {
+        let response = Response::from(
+            r#"<get_report_formats_response status="200" status_text="OK">
+                <report_format id="plain"><name>Plain XML</name></report_format>
+                <report_format id="configurable"><name>Configurable XML</name><param><name>Node Distance</name></param></report_format>
+            </get_report_formats_response>"#,
+        );
+
+        let formats =
+            parse_report_format_params(&response).expect("report-format response should be valid");
+        let selected = select_ordinary_report_format(&formats)
+            .expect("the first valid report format should drive format coverage");
+
+        assert_eq!(selected.as_str(), "plain");
+    }
+
+    #[test]
+    fn report_config_lifecycle_is_unavailable_when_all_formats_have_zero_parameters() {
+        let response = Response::from(
+            r#"<get_report_formats_response status="200" status_text="OK">
+                <report_format id="plain"><name>Plain XML</name></report_format>
+                <report_format id="csv"><name>CSV</name></report_format>
+            </get_report_formats_response>"#,
+        );
+
+        let formats = parse_report_format_params(&response)
+            .expect("zero-parameter report formats are still valid");
+
+        assert!(select_configurable_report_format(&formats).is_none());
+        assert_eq!(
+            report_format_parameter_evidence(&formats),
+            "plain (Plain XML, 0 parameter(s)), csv (CSV, 0 parameter(s))"
+        );
+    }
+
+    #[test]
+    fn report_format_selection_rejects_an_empty_response() {
+        let response =
+            Response::from(r#"<get_report_formats_response status="200" status_text="OK"/>"#);
+
+        let error = parse_report_format_params(&response)
+            .expect_err("an empty report-format response cannot drive the lifecycle");
+
+        assert_eq!(
+            error.to_string(),
+            "get_report_formats params=1 returned no report formats"
+        );
+    }
+
+    #[test]
     fn report_config_lifecycle_selects_a_configurable_format_after_a_nonconfigurable_one() {
         let response = Response::from(
             r#"<get_report_formats_response status="200" status_text="OK">
@@ -5642,28 +5759,12 @@ mod tests {
             </get_report_formats_response>"#,
         );
 
-        let selected = select_configurable_report_format(&response)
+        let formats =
+            parse_report_format_params(&response).expect("report-format response should be valid");
+        let selected = select_configurable_report_format(&formats)
             .expect("the later configurable report format should be selected");
 
         assert_eq!(selected.as_str(), "configurable");
-    }
-
-    #[test]
-    fn report_config_lifecycle_reports_all_nonconfigurable_formats() {
-        let response = Response::from(
-            r#"<get_report_formats_response status="200" status_text="OK">
-                <report_format id="plain"><name>Plain XML</name></report_format>
-                <report_format id="csv"><name>CSV</name></report_format>
-            </get_report_formats_response>"#,
-        );
-
-        let error = select_configurable_report_format(&response)
-            .expect_err("formats without params cannot create report configs");
-
-        assert_eq!(
-            error.to_string(),
-            "report config lifecycle requires a report format with configurable parameters; get_report_formats params=1 returned [plain (Plain XML, 0 parameter(s)), csv (CSV, 0 parameter(s))]"
-        );
     }
 
     #[test]
