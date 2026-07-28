@@ -1433,6 +1433,12 @@ fn modify_setting_request(setting_id: &EntityId, value: &str) -> XmlCommand {
         .child_with_text("value", &encoded_value)
 }
 
+fn delete_user_directly_request(user_id: &EntityId) -> impl gvm_protocol::Request {
+    // gvmd deletes users directly; unlike ordinary resources, users are not
+    // restorable from the trashcan.
+    gvm_gmp::commands::users::delete_user(user_id, true)
+}
+
 #[derive(Debug)]
 struct ReportFormatParamEvidence {
     id: Option<String>,
@@ -3037,10 +3043,8 @@ async fn run_isolated_suite(
     })
     .await?;
     tracker.role_ids.retain(|id| id != role.id.as_str());
-    trash_restore_then_delete(&mut client, "user", &user.id, |id, ultimate| {
-        gvm_gmp::commands::users::delete_user(id, ultimate)
-    })
-    .await?;
+    let deleted_user = client.send(delete_user_directly_request(&user.id)).await?;
+    assert_status(&deleted_user, 200, "delete user directly")?;
     tracker.user_ids.retain(|id| id != user.id.as_str());
 
     tracker.cleanup_inner().await?;
@@ -5882,6 +5886,16 @@ mod tests {
             typed_xml,
             r#"<modify_setting setting_id="setting-id"><value>Europe/Berlin</value></modify_setting>"#
         );
+    }
+
+    #[test]
+    fn isolated_user_cleanup_uses_one_direct_delete_request() {
+        let user_id = EntityId::new("user-id").expect("valid user id");
+        let request = delete_user_directly_request(&user_id);
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("delete-user request should be UTF-8");
+
+        assert_eq!(xml, r#"<delete_user ultimate="1" user_id="user-id"/>"#);
     }
 
     #[test]
