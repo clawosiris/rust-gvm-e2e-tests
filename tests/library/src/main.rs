@@ -1409,6 +1409,10 @@ fn get_report_formats_with_params_request() -> XmlCommand {
     XmlCommand::new("get_report_formats").attribute("params", "1")
 }
 
+fn sync_config_request() -> XmlCommand {
+    XmlCommand::new("sync_config")
+}
+
 #[derive(Debug)]
 struct ReportFormatParamEvidence {
     id: Option<String>,
@@ -2867,14 +2871,33 @@ async fn run_isolated_suite(
     let sync_config = sync_configs.items.first().ok_or_else(|| {
         AppError::Assertion("isolated sync requires a warm feed config".to_string())
     })?;
-    let sync = client.sync_scan_config(&sync_config.meta.id).await?;
+    let typed_sync = client.sync_scan_config(&sync_config.meta.id).await;
     ensure(
-        matches!(sync.status, 200 | 202),
-        "typed sync_scan_config returned an unexpected status",
+        matches!(
+            typed_sync,
+            Err(GvmError::Parse(
+                gvm_gmp::responses::ParseError::ServerError {
+                    status: 400,
+                    ref message,
+                }
+            )) if message == "Bogus command name"
+        ),
+        "typed sync_scan_config did not produce the expected current server error",
+    )?;
+    runtime::observe(
+        "typed sync_scan_config",
+        Outcome::KnownUpstreamBug,
+        "rust-gvm#414 reproduced: config_id makes gvmd reject sync_config as a bogus command",
+    );
+
+    let sync = client.send(sync_config_request()).await?;
+    ensure(
+        matches!(sync.status_code(), Some(200 | 202)),
+        "canonical parameterless sync_config fallback for rust-gvm#414 returned an unexpected status",
     )?;
     log_pass(
         "isolated config sync",
-        "typed sync request on dedicated database",
+        "canonical parameterless sync request on dedicated database",
     );
 
     let test_alert = client
@@ -5758,6 +5781,25 @@ mod tests {
             .expect("report-format request should be UTF-8");
 
         assert_eq!(xml, r#"<get_report_formats params="1"/>"#);
+    }
+
+    #[test]
+    fn sync_config_request_is_parameterless_as_required_by_gmp() {
+        let request = sync_config_request();
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("sync-config request should be UTF-8");
+
+        assert_eq!(xml, "<sync_config/>");
+    }
+
+    #[test]
+    fn typed_sync_config_builder_has_the_current_incompatible_config_id() {
+        let config_id = EntityId::new("feed-config").expect("valid config id");
+        let request = gvm_gmp::commands::scan_configs::sync_config(&config_id);
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("typed sync-config request should be UTF-8");
+
+        assert_eq!(xml, r#"<sync_config config_id="feed-config"/>"#);
     }
 
     #[test]
