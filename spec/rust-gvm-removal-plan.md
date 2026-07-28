@@ -4,7 +4,7 @@
 
 ## Objective
 
-Safely remove the E2E test infrastructure from `clawosiris/rust-gvm` after validating that `clawosiris/rust-gvm-e2e-tests` provides equivalent coverage.
+Safely remove the E2E test infrastructure from `greenbone-hive/rust-gvm` after validating that `clawosiris/rust-gvm-e2e-tests` provides equivalent coverage.
 
 ## Prerequisites
 

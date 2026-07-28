@@ -1,6 +1,6 @@
 # rust-gvm-e2e-tests
 
-End-to-end integration tests for the [rust-gvm](https://github.com/clawosiris/rust-gvm) ecosystem — validating Rust GVM/OpenVAS tooling against a real Greenbone Community Edition container stack.
+End-to-end integration tests for the [rust-gvm](https://github.com/greenbone-hive/rust-gvm) ecosystem — validating Rust GVM/OpenVAS tooling against a real Greenbone Community Edition container stack.
 
 ## Architecture
 
@@ -167,7 +167,7 @@ rust-gvm-e2e-tests/
 |-------|--------|-------------|
 | **1** | ✅ Done | Library + CLI tests via Unix socket |
 | **2** | 🔜 Planned | Multi-version GVM stack testing ([#16](../../issues/16)) |
-| **3** | Planned | REST/gRPC API tests (rust-gvm-api) |
+| **3** | Planned | REST/gRPC API tests ([rust-gvm-api](https://github.com/greenbone-hive/rust-gvm-api)) |
 | **4** | Planned | MCP server tests (openvas-mcp-server) |
 
 ## License
