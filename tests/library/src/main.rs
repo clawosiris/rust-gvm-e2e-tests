@@ -1373,6 +1373,17 @@ fn resource_names_request() -> impl gvm_protocol::Request {
     })
 }
 
+fn create_report_config_request(
+    name: &str,
+    report_format_id: &EntityId,
+    comment: &str,
+) -> XmlCommand {
+    XmlCommand::new("create_report_config")
+        .child_with_text("name", name)
+        .child_with_attr("report_format", "id", report_format_id.as_str())
+        .child_with_text("comment", comment)
+}
+
 async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
     let mut rejected_client = connect_client(config).await?;
     let rejected = rejected_client
@@ -2539,15 +2550,11 @@ async fn run_isolated_suite(
     }
 
     let report_config = client
-        .send(
-            gvm_gmp::commands::report_configs::create_report_config_opts(
-                &config.name("report-config"),
-                report_format.meta.id.as_str(),
-                gvm_gmp::commands::report_configs::CreateReportConfigOpts {
-                    comment: Some(config.name("report-config-comment")),
-                },
-            ),
-        )
+        .send(create_report_config_request(
+            &config.name("report-config"),
+            &imported_format.id,
+            &config.name("report-config-comment"),
+        ))
         .await?;
     assert_status(&report_config, 201, "create_report_config")?;
     let report_config_id = response_id(&report_config, "create_report_config")?;
@@ -5333,6 +5340,27 @@ mod tests {
             .expect("resource-names request should be UTF-8");
 
         assert_eq!(xml, r#"<get_resource_names type="TARGET"/>"#);
+    }
+
+    #[test]
+    fn report_config_request_references_the_created_report_format_by_id() {
+        let report_format_id = EntityId::new("created-report-format").expect("valid id");
+        let request = create_report_config_request(
+            "report-config",
+            &report_format_id,
+            "report-config-comment",
+        );
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("report-config request should be UTF-8");
+
+        assert_eq!(
+            xml,
+            concat!(
+                "<create_report_config><name>report-config</name>",
+                "<report_format id=\"created-report-format\"/>",
+                "<comment>report-config-comment</comment></create_report_config>"
+            )
+        );
     }
 
     #[test]
