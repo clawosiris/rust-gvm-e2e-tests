@@ -2915,6 +2915,12 @@ async fn run_isolated_suite(
             "gvmd advertises sync_config in authenticated help but rejects the canonical parameterless command as bogus",
         );
     }
+    // Keep subsequent isolated operations independent of whether gvmd closes
+    // the sync command's GMP connection after a success or capability error.
+    client = connect_client(config).await?;
+    client
+        .authenticate(&config.username, &config.password)
+        .await?;
 
     let test_alert = client
         .create_alert(
