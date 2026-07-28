@@ -3607,13 +3607,10 @@ async fn run_scan_suite(
         );
     }
 
-    trash_restore_then_delete(
-        client,
-        "scan report",
-        &report_id,
-        gvm_gmp::commands::reports::delete_report,
-    )
-    .await?;
+    let delete_report = client
+        .send(gvm_gmp::commands::reports::delete_report(&report_id, true))
+        .await?;
+    assert_status(&delete_report, 200, "ultimate delete scan report")?;
     let absent_report = client.send(get_report(&report_id)).await?;
     assert_status(&absent_report, 404, "verify report cleanup")?;
     let delete_task_response = client.call(delete_task(&task.id, true)).await?;
