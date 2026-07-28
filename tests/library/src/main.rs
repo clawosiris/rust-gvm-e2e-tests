@@ -2895,6 +2895,13 @@ async fn run_isolated_suite(
         "rust-gvm#414 reproduced: config_id makes gvmd reject sync_config as a bogus command",
     );
 
+    // gvmd closes the GMP connection after rejecting the bogus typed command.
+    // Reconnect before exercising the canonical fallback so a dead socket does
+    // not mask the parameterless sync_config contract.
+    client = connect_client(config).await?;
+    client
+        .authenticate(&config.username, &config.password)
+        .await?;
     let sync = client.send(sync_config_request()).await?;
     ensure(
         matches!(sync.status_code(), Some(200 | 202)),
