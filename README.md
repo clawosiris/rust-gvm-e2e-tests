@@ -88,6 +88,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 python3 -m unittest discover -s tools -p 'test_*.py'
 bash -n docker/scripts/*.sh tests/cli/*.sh
+bash docker/scripts/test-community-lane-artifacts.sh
 docker compose -f docker/docker-compose.yml config --quiet
 ```
 

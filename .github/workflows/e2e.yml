@@ -90,6 +90,7 @@ jobs:
           cargo test --workspace
           cargo clippy --workspace --all-targets -- -D warnings
           bash -n docker/scripts/*.sh tests/cli/*.sh
+          bash docker/scripts/test-community-lane-artifacts.sh
           docker compose -f "${COMPOSE_FILE}" config --quiet
 
   build-runner:
@@ -171,6 +172,9 @@ jobs:
       E2E_RECORD_BASELINE: ${{ inputs['record-baseline'] && '1' || '0' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          # Lane cleanup runs after checkout and handles stale root-owned artifacts.
+          clean: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: community-runner-${{ github.run_id }}
@@ -203,6 +207,9 @@ jobs:
       E2E_TASK_PROGRESS_TIMEOUT_SECS: 1800
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          # Lane cleanup runs after checkout and handles stale root-owned artifacts.
+          clean: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: community-runner-${{ github.run_id }}
@@ -235,6 +242,9 @@ jobs:
       E2E_RECORD_BASELINE: ${{ inputs['record-baseline'] && '1' || '0' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          # Lane cleanup runs after checkout and handles stale root-owned artifacts.
+          clean: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: community-runner-${{ github.run_id }}
@@ -280,6 +290,9 @@ jobs:
       E2E_SSH_SOCKET_PATH: ${{ secrets.E2E_SSH_SOCKET_PATH }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          # Lane cleanup runs after checkout and handles stale root-owned artifacts.
+          clean: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: community-runner-${{ github.run_id }}
@@ -306,6 +319,9 @@ jobs:
       E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          # Lane cleanup runs after checkout and handles stale root-owned artifacts.
+          clean: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: community-runner-${{ github.run_id }}

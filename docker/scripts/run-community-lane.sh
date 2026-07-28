@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/community-lane-artifacts.sh"
+
 lane="${1:?usage: run-community-lane.sh <devel-fast|devel-scan|devel-isolated|devel-transport|differential>}"
-case "${lane}" in
-  devel-fast|devel-scan|devel-isolated|devel-transport|differential) ;;
-  *) echo "unsupported Community lane: ${lane}" >&2; exit 2 ;;
-esac
+validate_community_lane "${lane}"
 
 compose_file="${COMPOSE_FILE:-docker/docker-compose.yml}"
 if [[ "${lane}" == "devel-isolated" ]]; then
@@ -22,6 +22,9 @@ export E2E_SCAN_TARGET_HOST="${E2E_SCAN_TARGET_HOST:-scan-fixture}"
 export E2E_TASK_PROGRESS_TIMEOUT_SECS="${E2E_TASK_PROGRESS_TIMEOUT_SECS:-900}"
 
 mkdir -p artifacts
+# This runs in the already-loaded runner image as root so stale root-owned
+# selected-lane artifacts cannot block the host-side writers below.
+prepare_community_lane_artifacts "${compose_file}" "${lane}"
 
 cleanup() {
   status=$?
