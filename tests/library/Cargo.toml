@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+base64 = "0.22"
 gvm-client = { git = "https://github.com/clawosiris/rust-gvm.git", branch = "devel" }
 gvm-connection = { git = "https://github.com/clawosiris/rust-gvm.git", branch = "devel", features = ["ssh", "tls"] }
 gvm-gmp = { git = "https://github.com/clawosiris/rust-gvm.git", branch = "devel" }

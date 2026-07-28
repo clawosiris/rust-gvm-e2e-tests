@@ -765,6 +765,7 @@ dependencies = [
 name = "gvm-community-e2e"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "gvm-client",
  "gvm-connection",
  "gvm-gmp",

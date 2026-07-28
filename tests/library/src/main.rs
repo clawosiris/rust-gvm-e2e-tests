@@ -15,6 +15,8 @@ use std::str::FromStr;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
 use gvm_client::{parse_version_text, GmpClient, GvmError};
 use gvm_connection::{
     GvmConnection, SshAuth, SshConfig, SshConnection, TlsClientIdentity, TlsConfig, TlsConnection,
@@ -1422,6 +1424,13 @@ fn get_report_formats_with_params_request() -> XmlCommand {
 
 fn sync_config_request() -> XmlCommand {
     XmlCommand::new("sync_config")
+}
+
+fn modify_setting_request(setting_id: &EntityId, value: &str) -> XmlCommand {
+    let encoded_value = BASE64_STANDARD.encode(value);
+    XmlCommand::new("modify_setting")
+        .attribute("setting_id", setting_id.as_str())
+        .child_with_text("value", &encoded_value)
 }
 
 #[derive(Debug)]
@@ -2997,17 +3006,11 @@ async fn run_isolated_suite(
     {
         let original = setting.value.clone().unwrap_or_default();
         let write_same_value = client
-            .send(gvm_gmp::commands::system::modify_setting(
-                &setting.id,
-                &original,
-            ))
+            .send(modify_setting_request(&setting.id, &original))
             .await?;
         assert_status(&write_same_value, 200, "modify_setting snapshot")?;
         let restore = client
-            .send(gvm_gmp::commands::system::modify_setting(
-                &setting.id,
-                &original,
-            ))
+            .send(modify_setting_request(&setting.id, &original))
             .await?;
         assert_status(&restore, 200, "modify_setting restore")?;
         log_pass("isolated setting", "snapshot and restore exact value");
@@ -5858,6 +5861,27 @@ mod tests {
             .expect("sync-config request should be UTF-8");
 
         assert_eq!(xml, "<sync_config/>");
+    }
+
+    #[test]
+    fn setting_modify_request_base64_encodes_the_value_required_by_gmp() {
+        let setting_id = EntityId::new("setting-id").expect("valid setting id");
+        let request = modify_setting_request(&setting_id, "Europe/Berlin");
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("modify-setting request should be UTF-8");
+
+        assert_eq!(
+            xml,
+            r#"<modify_setting setting_id="setting-id"><value>RXVyb3BlL0Jlcmxpbg==</value></modify_setting>"#
+        );
+
+        let typed = gvm_gmp::commands::system::modify_setting(&setting_id, "Europe/Berlin");
+        let typed_xml = String::from_utf8(gvm_protocol::Request::to_bytes(&typed))
+            .expect("typed modify-setting request should be UTF-8");
+        assert_eq!(
+            typed_xml,
+            r#"<modify_setting setting_id="setting-id"><value>Europe/Berlin</value></modify_setting>"#
+        );
     }
 
     #[test]
