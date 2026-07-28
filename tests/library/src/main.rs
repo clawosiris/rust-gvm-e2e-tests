@@ -1374,6 +1374,18 @@ fn resource_names_request() -> impl gvm_protocol::Request {
     })
 }
 
+const E2E_SCHEDULE_ICALENDAR: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//e2e//EN\r\nBEGIN:VEVENT\r\nDTSTART:20260401T060000Z\r\nDURATION:PT0S\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\nEND:VCALENDAR";
+const E2E_SCHEDULE_TIMEZONE: &str = "UTC";
+
+fn e2e_schedule_opts(comment: String, name: Option<String>) -> ScheduleOpts {
+    ScheduleOpts {
+        comment: Some(comment),
+        icalendar: Some(E2E_SCHEDULE_ICALENDAR.into()),
+        timezone: Some(E2E_SCHEDULE_TIMEZONE.into()),
+        name,
+    }
+}
+
 fn create_port_range_request(port_list_id: &EntityId, start: u16, end: u16) -> XmlCommand {
     XmlCommand::new("create_port_range")
         .child_with_attr("port_list", "id", port_list_id.as_str())
@@ -3805,16 +3817,10 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     log_pass("crud 08", "verify credential absent");
 
     // --- schedule CRUD ---
-    let ical = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//e2e//EN\r\nBEGIN:VEVENT\r\nDTSTART:20260401T060000Z\r\nDURATION:PT0S\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\nEND:VCALENDAR";
     let sched_resp = client
         .call(create_schedule(
             &config.name("schedule"),
-            ScheduleOpts {
-                icalendar: Some(ical.into()),
-                timezone: Some("UTC".into()),
-                comment: Some("e2e test schedule".into()),
-                ..Default::default()
-            },
+            e2e_schedule_opts("e2e test schedule".into(), None),
         ))
         .await?;
     assert_status(&sched_resp, 201, "create_schedule")?;
@@ -3829,11 +3835,10 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     let modified = client
         .send(gvm_gmp::commands::schedules::modify_schedule(
             &sched_id,
-            ScheduleOpts {
-                comment: Some(config.name("schedule-modified")),
-                name: Some(config.name("schedule-renamed")),
-                ..Default::default()
-            },
+            e2e_schedule_opts(
+                config.name("schedule-modified"),
+                Some(config.name("schedule-renamed")),
+            ),
         ))
         .await?;
     assert_status(&modified, 200, "modify_schedule")?;
@@ -5528,6 +5533,36 @@ mod tests {
             .expect("resource-names request should be UTF-8");
 
         assert_eq!(xml, r#"<get_resource_names type="TARGET"/>"#);
+    }
+
+    #[test]
+    fn schedule_modification_preserves_the_created_icalendar_contract() {
+        let create_opts = e2e_schedule_opts("schedule-created".into(), None);
+        let modify_opts =
+            e2e_schedule_opts("schedule-modified".into(), Some("schedule-renamed".into()));
+
+        assert_eq!(create_opts.icalendar, modify_opts.icalendar);
+        assert_eq!(create_opts.timezone, modify_opts.timezone);
+        assert_eq!(modify_opts.comment.as_deref(), Some("schedule-modified"));
+        assert_eq!(modify_opts.name.as_deref(), Some("schedule-renamed"));
+    }
+
+    #[test]
+    fn typed_schedule_modify_request_uses_live_id_and_icalendar_contract() {
+        let schedule_id = EntityId::new("created-schedule").expect("valid id");
+        let request = gvm_gmp::commands::schedules::modify_schedule(
+            &schedule_id,
+            e2e_schedule_opts("schedule-modified".into(), Some("schedule-renamed".into())),
+        );
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("schedule-modify request should be UTF-8");
+
+        assert_eq!(
+            xml,
+            format!(
+                "<modify_schedule schedule_id=\"created-schedule\"><name>schedule-renamed</name><comment>schedule-modified</comment><icalendar>{E2E_SCHEDULE_ICALENDAR}</icalendar><timezone>{E2E_SCHEDULE_TIMEZONE}</timezone></modify_schedule>"
+            )
+        );
     }
 
     #[test]
