@@ -80,6 +80,12 @@ use tokio::time::sleep;
 use gvm_community_e2e::runtime::{self, FeatureState, Outcome};
 use gvm_community_e2e::{CoverageEntry, Disposition, COMMAND_COVERAGE, HELPER_COVERAGE};
 
+fn tls_certificate_data() -> String {
+    include_str!("../../../fixtures/e2e-certificate.pem.b64")
+        .trim()
+        .to_string()
+}
+
 fn main() -> ExitCode {
     match Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => match runtime.block_on(async_main()) {
@@ -2945,9 +2951,7 @@ async fn run_isolated_suite(
         .create_tls_certificate(
             &config.name("tls-certificate"),
             gvm_gmp::commands::tls_certificates::TlsCertificateOpts {
-                certificate: Some(
-                    include_str!("../../../fixtures/e2e-certificate.pem").to_string(),
-                ),
+                certificate: Some(tls_certificate_data()),
                 comment: Some(config.name("tls-certificate-comment")),
                 ..Default::default()
             },
@@ -5639,6 +5643,24 @@ fn log_line(message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tls_certificate_create_request_uses_base64_encoded_pem() {
+        let certificate = tls_certificate_data();
+        let request = gvm_gmp::commands::tls_certificates::create_tls_certificate(
+            "tls-certificate",
+            gvm_gmp::commands::tls_certificates::TlsCertificateOpts {
+                certificate: Some(certificate.clone()),
+                ..Default::default()
+            },
+        );
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("TLS-certificate request should be UTF-8");
+
+        assert!(xml.contains(&format!("<certificate>{certificate}</certificate>")));
+        assert!(!xml.contains("BEGIN CERTIFICATE"));
+        assert!(!certificate.chars().any(char::is_whitespace));
+    }
 
     #[test]
     fn stop_task_accepts_only_synchronous_or_submitted_success() {
