@@ -852,7 +852,12 @@ async fn cleanup_previous_runs(config: &EnvConfig) -> Result<(), AppError> {
     for task_id in e2e_entity_ids(tasks.as_str()?, "task")? {
         let task_id = parse_entity_id(&task_id)?;
         let stop = client.send(stop_task(&task_id)).await?;
-        assert_cleanup_status(&stop, &[200, 400, 404], "preflight stop_task", &task_id)?;
+        assert_cleanup_status(
+            &stop,
+            &[200, 202, 400, 404],
+            "preflight stop_task",
+            &task_id,
+        )?;
         let delete = client.send(delete_task(&task_id, true)).await?;
         assert_cleanup_status(&delete, &[200, 404], "preflight delete_task", &task_id)?;
         removed += 1;
@@ -3397,7 +3402,7 @@ async fn run_scan_suite(
     let report_id = resolve_scan_report_id(client, &task.id, &started_report_id).await?;
     if matches!(task_status.as_str(), "Running" | "Stop Requested") {
         let stop_response = client.call(stop_task(&task.id)).await?;
-        assert_status(&stop_response, 200, "stop_task")?;
+        assert_stop_task_status(&stop_response, "stop_task")?;
         let stopped = wait_task_state(client, &task.id, Duration::from_secs(120), |status| {
             matches!(
                 status,
@@ -3424,7 +3429,7 @@ async fn run_scan_suite(
             .await?;
             if resumed_state == "Running" {
                 let stop = client.call(stop_task(&task.id)).await?;
-                assert_status(&stop, 200, "stop resumed task")?;
+                assert_stop_task_status(&stop, "stop resumed task")?;
                 wait_task_state(client, &task.id, Duration::from_secs(120), |status| {
                     matches!(
                         status,
@@ -5265,6 +5270,21 @@ fn assert_status(response: &Response, expected: u16, label: &str) -> Result<(), 
     )
 }
 
+fn assert_stop_task_status(response: &Response, label: &str) -> Result<(), AppError> {
+    let actual = response.status_code().unwrap_or_default();
+    ensure(
+        stop_task_status_is_success(actual),
+        &format!(
+            "{label} returned status {actual}, expected 200 or 202. Response: {}",
+            response_summary(response)?
+        ),
+    )
+}
+
+fn stop_task_status_is_success(status: u16) -> bool {
+    matches!(status, 200 | 202)
+}
+
 fn response_id(response: &Response, label: &str) -> Result<EntityId, AppError> {
     let id = response.id().ok_or_else(|| {
         AppError::Assertion(format!("{label} response missing resource id attribute"))
@@ -5606,6 +5626,19 @@ fn log_line(message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_task_accepts_only_synchronous_or_submitted_success() {
+        assert!(stop_task_status_is_success(200));
+        assert!(stop_task_status_is_success(202));
+
+        for status in [0, 201, 204, 400, 404, 500] {
+            assert!(
+                !stop_task_status_is_success(status),
+                "unexpectedly accepted stop_task status {status}"
+            );
+        }
+    }
 
     #[test]
     fn run_id_is_sanitized_and_bounded() {
