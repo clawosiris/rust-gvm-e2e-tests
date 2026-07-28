@@ -1385,6 +1385,149 @@ fn create_report_config_request(
         .child_with_text("comment", comment)
 }
 
+fn get_report_formats_with_params_request() -> XmlCommand {
+    XmlCommand::new("get_report_formats").attribute("params", "1")
+}
+
+#[derive(Debug)]
+struct ReportFormatParamEvidence {
+    id: Option<String>,
+    name: String,
+    parameter_count: usize,
+    depth: usize,
+    name_depth: Option<usize>,
+}
+
+fn select_configurable_report_format(response: &Response) -> Result<EntityId, AppError> {
+    let mut reader = Reader::from_str(response.as_str()?);
+    let mut formats = Vec::new();
+    let mut current: Option<ReportFormatParamEvidence> = None;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref event) if event.name().as_ref() == b"report_format" => {
+                if current.is_none() {
+                    let id = event
+                        .attributes()
+                        .flatten()
+                        .find(|attribute| attribute.key.as_ref() == b"id")
+                        .map(|attribute| {
+                            attribute
+                                .decoded_and_normalized_value(
+                                    quick_xml::XmlVersion::default(),
+                                    reader.decoder(),
+                                )
+                                .map(|value| value.into_owned())
+                        })
+                        .transpose()?;
+                    current = Some(ReportFormatParamEvidence {
+                        id,
+                        name: String::new(),
+                        parameter_count: 0,
+                        depth: 1,
+                        name_depth: None,
+                    });
+                } else if let Some(format) = current.as_mut() {
+                    format.depth += 1;
+                }
+            }
+            Event::Start(ref event) => {
+                if let Some(format) = current.as_mut() {
+                    if format.depth == 1 && event.name().as_ref() == b"param" {
+                        format.parameter_count += 1;
+                    }
+                    if format.depth == 1 && event.name().as_ref() == b"name" {
+                        format.name_depth = Some(format.depth + 1);
+                    }
+                    format.depth += 1;
+                }
+            }
+            Event::Empty(ref event)
+                if event.name().as_ref() == b"report_format" && current.is_none() =>
+            {
+                let id = event
+                    .attributes()
+                    .flatten()
+                    .find(|attribute| attribute.key.as_ref() == b"id")
+                    .map(|attribute| {
+                        attribute
+                            .decoded_and_normalized_value(
+                                quick_xml::XmlVersion::default(),
+                                reader.decoder(),
+                            )
+                            .map(|value| value.into_owned())
+                    })
+                    .transpose()?;
+                formats.push(ReportFormatParamEvidence {
+                    id,
+                    name: String::new(),
+                    parameter_count: 0,
+                    depth: 0,
+                    name_depth: None,
+                });
+            }
+            Event::Empty(ref event) => {
+                if let Some(format) = current.as_mut() {
+                    if format.depth == 1 && event.name().as_ref() == b"param" {
+                        format.parameter_count += 1;
+                    }
+                }
+            }
+            Event::Text(ref event) => {
+                if let Some(format) = current.as_mut() {
+                    if format.name_depth == Some(format.depth) {
+                        format
+                            .name
+                            .push_str(&String::from_utf8_lossy(event.as_ref()));
+                    }
+                }
+            }
+            Event::End(ref event) => {
+                let closes_format = current.as_ref().is_some_and(|format| {
+                    format.depth == 1 && event.name().as_ref() == b"report_format"
+                });
+                if closes_format {
+                    formats.push(current.take().expect("report format is active"));
+                } else if let Some(format) = current.as_mut() {
+                    if format.name_depth == Some(format.depth) && event.name().as_ref() == b"name" {
+                        format.name_depth = None;
+                    }
+                    format.depth = format.depth.saturating_sub(1);
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    if let Some(format) = formats
+        .iter()
+        .find(|format| format.id.is_some() && format.parameter_count > 0)
+    {
+        return parse_entity_id(format.id.as_deref().expect("id was checked"));
+    }
+
+    let evidence = formats
+        .iter()
+        .map(|format| {
+            format!(
+                "{} ({}, {} parameter(s))",
+                format.id.as_deref().unwrap_or("<missing id>"),
+                if format.name.is_empty() {
+                    "<unnamed>"
+                } else {
+                    &format.name
+                },
+                format.parameter_count
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(AppError::Assertion(format!(
+        "report config lifecycle requires a report format with configurable parameters; get_report_formats params=1 returned [{evidence}]"
+    )))
+}
+
 async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
     let mut rejected_client = connect_client(config).await?;
     let rejected = rejected_client
@@ -2497,15 +2640,14 @@ async fn run_isolated_suite(
         .retain(|id| id != generic_asset_id.as_str());
     log_pass("isolated host asset", "typed create/get/modify/failure");
 
+    // rust-gvm's typed ReportFormat omits parameter metadata. Ask gvmd for the
+    // authenticated `params=1` view so that report-config creation is backed by
+    // a live, configurable source rather than a feed-specific UUID or name.
     let report_formats = client
-        .get_report_formats(GetReportFormatsOpts {
-            filter_string: Some("rows=1".to_string()),
-            ..Default::default()
-        })
+        .send(get_report_formats_with_params_request())
         .await?;
-    let report_format = report_formats.items.first().ok_or_else(|| {
-        AppError::Assertion("isolated lane requires a warm report format".to_string())
-    })?;
+    assert_status(&report_formats, 200, "get_report_formats with params")?;
+    let report_format_id = select_configurable_report_format(&report_formats)?;
     let create_format = client
         .create_report_format(
             &config.name("report-format-created"),
@@ -2532,7 +2674,7 @@ async fn run_isolated_suite(
         "isolated report format create",
         "typed server contract requires import or copy",
     );
-    let cloned_format = client.clone_report_format(&report_format.meta.id).await?;
+    let cloned_format = client.clone_report_format(&report_format_id).await?;
     tracker.track_report_format(&cloned_format.id);
     let modify_format = client
         .send(gvm_gmp::commands::report_formats::modify_report_format(
@@ -2547,7 +2689,7 @@ async fn run_isolated_suite(
 
     let exported_format = client
         .send(gvm_gmp::commands::report_formats::get_report_format(
-            &report_format.meta.id,
+            &report_format_id,
         ))
         .await?;
     assert_status(&exported_format, 200, "export report format for import")?;
@@ -5384,6 +5526,48 @@ mod tests {
                 "<report_format id=\"created-report-format\"/>",
                 "<comment>report-config-comment</comment></create_report_config>"
             )
+        );
+    }
+
+    #[test]
+    fn report_format_selection_requests_parameter_metadata() {
+        let request = get_report_formats_with_params_request();
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("report-format request should be UTF-8");
+
+        assert_eq!(xml, r#"<get_report_formats params="1"/>"#);
+    }
+
+    #[test]
+    fn report_config_lifecycle_selects_a_configurable_format_after_a_nonconfigurable_one() {
+        let response = Response::from(
+            r#"<get_report_formats_response status="200" status_text="OK">
+                <report_format id="plain"><name>Plain XML</name></report_format>
+                <report_format id="configurable"><name>Configurable XML</name><param><name>Node Distance</name><type>integer</type><value>10</value><default>10</default></param></report_format>
+            </get_report_formats_response>"#,
+        );
+
+        let selected = select_configurable_report_format(&response)
+            .expect("the later configurable report format should be selected");
+
+        assert_eq!(selected.as_str(), "configurable");
+    }
+
+    #[test]
+    fn report_config_lifecycle_reports_all_nonconfigurable_formats() {
+        let response = Response::from(
+            r#"<get_report_formats_response status="200" status_text="OK">
+                <report_format id="plain"><name>Plain XML</name></report_format>
+                <report_format id="csv"><name>CSV</name></report_format>
+            </get_report_formats_response>"#,
+        );
+
+        let error = select_configurable_report_format(&response)
+            .expect_err("formats without params cannot create report configs");
+
+        assert_eq!(
+            error.to_string(),
+            "report config lifecycle requires a report format with configurable parameters; get_report_formats params=1 returned [plain (Plain XML, 0 parameter(s)), csv (CSV, 0 parameter(s))]"
         );
     }
 
