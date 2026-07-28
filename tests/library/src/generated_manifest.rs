@@ -1492,14 +1492,14 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "get_report_export",
         wire_command: "get_reports",
-        disposition: Disposition::NightlyLive,
-        lane: "devel-scan",
+        disposition: Disposition::ConditionalCommunity,
+        lane: "discovery-selected",
     },
     CoverageEntry {
         name: "get_report_export_with_opts",
         wire_command: "get_reports",
-        disposition: Disposition::NightlyLive,
-        lane: "devel-scan",
+        disposition: Disposition::ConditionalCommunity,
+        lane: "discovery-selected",
     },
     CoverageEntry {
         name: "get_report_formats",

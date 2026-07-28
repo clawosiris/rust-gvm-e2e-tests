@@ -273,8 +273,8 @@
 | `get_report_configs_parsed` | `get_report_configs` | `isolated-live` | `devel-isolated` |
 | `get_report_cves_parsed` | `get_report_cves` | `conditional-community` | `discovery-selected` |
 | `get_report_errors` | `get_report_errors` | `conditional-community` | `discovery-selected` |
-| `get_report_export` | `get_reports` | `nightly-live` | `devel-scan` |
-| `get_report_export_with_opts` | `get_reports` | `nightly-live` | `devel-scan` |
+| `get_report_export` | `get_reports` | `conditional-community` | `discovery-selected` |
+| `get_report_export_with_opts` | `get_reports` | `conditional-community` | `discovery-selected` |
 | `get_report_formats` | `get_report_formats` | `blocking-live` | `devel-fast` |
 | `get_report_hosts_parsed` | `get_report_hosts` | `conditional-community` | `discovery-selected` |
 | `get_report_operating_systems_parsed` | `get_report_operating_systems` | `conditional-community` | `discovery-selected` |

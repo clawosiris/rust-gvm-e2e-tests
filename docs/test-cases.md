@@ -31,9 +31,10 @@ The nightly/manual warm-volume lane scans the Compose `scan-fixture` HTTP
 service as a network host. It creates a `T:80` port list, target and task; checks
 typed task identity and illegal double-start behavior; observes start,
 stop/resume or terminal completion; validates task/report linkage; parses typed
-reports and results; exports through an advertised report format; runs every
-available report drill-down; and removes tickets/tasks/targets/supporting
-resources in dependency order.
+reports and results; exports through an advertised report format when the
+typed semantic helper's GMP capability is available (otherwise records a
+`conditional-unavailable` result); runs every available report drill-down; and
+removes tickets/tasks/targets/supporting resources in dependency order.
 
 The fixture being a container does not make this container-image scanning.
 No OCI target is created or required.

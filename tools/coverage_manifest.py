@@ -206,6 +206,8 @@ EXTRA_HELPERS = {
 
 HELPER_DISPOSITION_OVERRIDES = {
     "create_credential_store_credential": "conditional-community",
+    "get_report_export": "conditional-community",
+    "get_report_export_with_opts": "conditional-community",
     "modify_credential_store_credential": "conditional-community",
 }
 

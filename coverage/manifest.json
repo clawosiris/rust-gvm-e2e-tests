@@ -1732,16 +1732,16 @@
     {
       "name": "get_report_export",
       "wire_command": "get_reports",
-      "disposition": "nightly-live",
-      "lane": "devel-scan",
-      "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane."
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
     },
     {
       "name": "get_report_export_with_opts",
       "wire_command": "get_reports",
-      "disposition": "nightly-live",
-      "lane": "devel-scan",
-      "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane."
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
     },
     {
       "name": "get_report_formats",

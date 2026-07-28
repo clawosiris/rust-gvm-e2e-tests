@@ -46,6 +46,13 @@ class CoveragePolicyTests(unittest.TestCase):
                 "create_oci_image_target_task",
             },
         )
+
+    def test_semantic_report_export_helpers_are_conditional(self):
+        for helper in ("get_report_export", "get_report_export_with_opts"):
+            self.assertEqual(
+                MANIFEST.HELPER_DISPOSITION_OVERRIDES[helper],
+                "conditional-community",
+            )
         self.assertTrue(
             all(
                 disposition == "excluded-community"

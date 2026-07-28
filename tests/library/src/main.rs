@@ -77,7 +77,7 @@ use tokio::runtime::Builder;
 use tokio::time::sleep;
 
 use gvm_community_e2e::runtime::{self, FeatureState, Outcome};
-use gvm_community_e2e::{Disposition, COMMAND_COVERAGE};
+use gvm_community_e2e::{Disposition, COMMAND_COVERAGE, HELPER_COVERAGE};
 
 fn main() -> ExitCode {
     match Builder::new_multi_thread().enable_all().build() {
@@ -2033,41 +2033,15 @@ async fn run_config_scanner_lifecycles(
         .items
         .first()
         .ok_or_else(|| AppError::Assertion("scanner lifecycle requires a scanner".to_string()))?;
-    let scanner_type = match base_scanner.scanner_type.as_deref() {
-        Some("3" | "CVE") => gvm_gmp::ScannerType::CveScannerType,
-        Some("5" | "OSP") => gvm_gmp::ScannerType::GreenBoneSensorType,
-        Some("6") => gvm_gmp::ScannerType::OpenVasdScannerType,
-        _ => gvm_gmp::ScannerType::OpenVasScanner,
-    };
-    let scanner = client
-        .create_scanner(
-            &config.name("scanner"),
-            gvm_gmp::commands::scanners::ScannerOpts {
-                comment: Some(config.name("scanner-comment")),
-                host: base_scanner.host.clone(),
-                port: base_scanner.port,
-                scanner_type: Some(scanner_type),
-                credential_id: base_scanner
-                    .credential
-                    .as_ref()
-                    .map(|credential| credential.id.clone()),
-            },
-        )
-        .await?;
-    ensure(scanner.status == 201, "typed create_scanner failed")?;
+    let scanner = client.clone_scanner(&base_scanner.meta.id).await?;
+    ensure(scanner.status == 201, "typed clone_scanner failed")?;
     tracker.track_scanner(&scanner.id);
     let modified = client
         .modify_scanner(
             &scanner.id,
             gvm_gmp::commands::scanners::ScannerOpts {
                 comment: Some(config.name("scanner-comment-modified")),
-                host: base_scanner.host.clone(),
-                port: base_scanner.port,
-                scanner_type: Some(scanner_type),
-                credential_id: base_scanner
-                    .credential
-                    .as_ref()
-                    .map(|credential| credential.id.clone()),
+                ..Default::default()
             },
         )
         .await?;
@@ -2108,7 +2082,7 @@ async fn run_config_scanner_lifecycles(
         .retain(|tracked| tracked != scanner.id.as_str());
     log_pass(
         "scanner lifecycle",
-        "typed create/get/modify/verify/trash/restore/delete/failure",
+        "typed clone/get/modify/verify/trash/restore/delete/failure",
     );
 
     client.disconnect().await?;
@@ -3233,20 +3207,7 @@ async fn run_scan_suite(
         .find(|item| item.active)
         .or_else(|| formats.items.first())
         .ok_or_else(|| AppError::Assertion("scan lane requires a report format".to_string()))?;
-    let export = client
-        .get_report_export(&report_id, &format.meta.id)
-        .await?;
-    ensure(!export.bytes.is_empty(), "typed report export was empty")?;
-    let export_with_opts = client
-        .get_report_export_with_opts(
-            &report_id,
-            gvm_gmp::commands::reports::GetReportExportOpts::new(format.meta.id.clone()),
-        )
-        .await?;
-    ensure(
-        !export_with_opts.bytes.is_empty(),
-        "typed report export with options was empty",
-    )?;
+    run_report_export_checks(client, &report_id, &format.meta.id).await?;
 
     run_conditional_report_drilldowns(client, &report_id).await?;
 
@@ -3380,10 +3341,82 @@ async fn run_scan_suite(
     log_pass(
         "scan",
         &format!(
-            "task states, report {}, {} typed result(s), exports, cleanup",
+            "task states, report {}, {} typed result(s), report coverage, cleanup",
             report_id,
             results.items.len()
         ),
+    );
+    Ok(())
+}
+
+fn conditional_helper_minimum_version(helper_name: &str) -> Result<GmpVersion, AppError> {
+    let helper = HELPER_COVERAGE
+        .iter()
+        .find(|entry| entry.name == helper_name)
+        .ok_or_else(|| {
+            AppError::Assertion(format!("missing coverage entry for helper {helper_name}"))
+        })?;
+    ensure(
+        helper.disposition == Disposition::ConditionalCommunity,
+        &format!("helper {helper_name} must be conditional in the coverage manifest"),
+    )?;
+    let semantic_name = helper_name
+        .strip_suffix("_with_opts")
+        .unwrap_or(helper_name);
+    gvm_gmp::capabilities::minimum_version_for_command(semantic_name).ok_or_else(|| {
+        AppError::Assertion(format!(
+            "conditional helper {helper_name} has no semantic capability version gate"
+        ))
+    })
+}
+
+fn conditional_helper_available(helper_name: &str, version: GmpVersion) -> Result<bool, AppError> {
+    let minimum = conditional_helper_minimum_version(helper_name)?;
+    Ok(version >= minimum)
+}
+
+async fn run_report_export_checks(
+    client: &mut GmpClient<UnixSocketConnection>,
+    report_id: &EntityId,
+    report_format_id: &EntityId,
+) -> Result<(), AppError> {
+    let version = client.version();
+    let export_available = conditional_helper_available("get_report_export", version)?;
+    let export_with_opts_available =
+        conditional_helper_available("get_report_export_with_opts", version)?;
+    ensure(
+        export_available == export_with_opts_available,
+        "report export helpers disagreed on semantic capability availability",
+    )?;
+    if !export_available {
+        let minimum = conditional_helper_minimum_version("get_report_export")?;
+        for helper in ["get_report_export", "get_report_export_with_opts"] {
+            runtime::observe(
+                &format!("helper:{helper}"),
+                Outcome::ConditionalUnavailable,
+                &format!("GMP {version}; typed semantic capability requires GMP >= {minimum}"),
+            );
+        }
+        return Ok(());
+    }
+
+    let export = client
+        .get_report_export(report_id, report_format_id)
+        .await?;
+    ensure(!export.bytes.is_empty(), "typed report export was empty")?;
+    let export_with_opts = client
+        .get_report_export_with_opts(
+            report_id,
+            gvm_gmp::commands::reports::GetReportExportOpts::new(report_format_id.clone()),
+        )
+        .await?;
+    ensure(
+        !export_with_opts.bytes.is_empty(),
+        "typed report export with options was empty",
+    )?;
+    log_pass(
+        "typed get_report_export",
+        "typed export helper responses were nonempty",
     );
     Ok(())
 }
@@ -5300,6 +5333,36 @@ mod tests {
             .expect("resource-names request should be UTF-8");
 
         assert_eq!(xml, r#"<get_resource_names type="TARGET"/>"#);
+    }
+
+    #[test]
+    fn scanner_clone_request_preserves_the_live_scanner_endpoint() {
+        let scanner_id = EntityId::new("socket-backed-scanner").expect("valid scanner id");
+        let request = gvm_gmp::commands::scanners::clone_scanner(&scanner_id);
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("scanner clone request should be UTF-8");
+
+        assert_eq!(
+            xml,
+            "<create_scanner><copy>socket-backed-scanner</copy></create_scanner>"
+        );
+        assert!(!xml.contains("<host>"));
+    }
+
+    #[test]
+    fn report_export_helpers_follow_the_semantic_version_gate() {
+        assert!(
+            !conditional_helper_available("get_report_export", GmpVersion(22, 7))
+                .expect("export helper has conditional coverage")
+        );
+        assert!(
+            !conditional_helper_available("get_report_export_with_opts", GmpVersion(22, 7))
+                .expect("export-with-options helper has conditional coverage")
+        );
+        assert!(
+            conditional_helper_available("get_report_export", GmpVersion(22, 8))
+                .expect("export helper has conditional coverage")
+        );
     }
 
     #[test]
