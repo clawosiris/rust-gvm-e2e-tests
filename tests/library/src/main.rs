@@ -78,7 +78,7 @@ use tokio::runtime::Builder;
 use tokio::time::sleep;
 
 use gvm_community_e2e::runtime::{self, FeatureState, Outcome};
-use gvm_community_e2e::{Disposition, COMMAND_COVERAGE, HELPER_COVERAGE};
+use gvm_community_e2e::{CoverageEntry, Disposition, COMMAND_COVERAGE, HELPER_COVERAGE};
 
 fn main() -> ExitCode {
     match Builder::new_multi_thread().enable_all().build() {
@@ -3609,7 +3609,7 @@ async fn run_scan_suite(
     Ok(())
 }
 
-fn conditional_helper_minimum_version(helper_name: &str) -> Result<GmpVersion, AppError> {
+fn conditional_helper_coverage(helper_name: &str) -> Result<&'static CoverageEntry, AppError> {
     let helper = HELPER_COVERAGE
         .iter()
         .find(|entry| entry.name == helper_name)
@@ -3620,10 +3620,25 @@ fn conditional_helper_minimum_version(helper_name: &str) -> Result<GmpVersion, A
         helper.disposition == Disposition::ConditionalCommunity,
         &format!("helper {helper_name} must be conditional in the coverage manifest"),
     )?;
-    let semantic_name = helper_name
-        .strip_suffix("_with_opts")
-        .unwrap_or(helper_name);
-    gvm_gmp::capabilities::minimum_version_for_command(semantic_name).ok_or_else(|| {
+    Ok(helper)
+}
+
+fn conditional_helper_semantic_name(helper_name: &str) -> &str {
+    // These public helper variants intentionally share one semantic capability
+    // entry. Keep aliases explicit: helper names are not wire-command names.
+    match helper_name {
+        "get_report_export_with_opts" => "get_report_export",
+        _ => helper_name,
+    }
+}
+
+fn conditional_helper_minimum_version(helper_name: &str) -> Result<GmpVersion, AppError> {
+    let helper = conditional_helper_coverage(helper_name)?;
+    gvm_gmp::capabilities::minimum_version_for_command(conditional_helper_semantic_name(
+        helper_name,
+    ))
+    .or_else(|| gvm_gmp::capabilities::minimum_version_for_command(helper.wire_command))
+    .ok_or_else(|| {
         AppError::Assertion(format!(
             "conditional helper {helper_name} has no semantic capability version gate"
         ))
@@ -3640,7 +3655,58 @@ fn conditional_helper_call_allowed(
     advertised: bool,
     version: GmpVersion,
 ) -> Result<bool, AppError> {
-    Ok(advertised && conditional_helper_available(helper_name, version)?)
+    let version_eligible = conditional_helper_available(helper_name, version)?;
+    Ok(advertised && version_eligible)
+}
+
+fn conditional_report_drilldown_call_allowed(
+    helper_name: &str,
+    available_commands: &BTreeSet<String>,
+    version: GmpVersion,
+) -> Result<bool, AppError> {
+    let helper = conditional_helper_coverage(helper_name)?;
+    conditional_helper_call_allowed(
+        helper_name,
+        available_commands.contains(helper.wire_command),
+        version,
+    )
+}
+
+#[cfg(test)]
+const CONDITIONAL_REPORT_DRILLDOWN_HELPERS: &[&str] = &[
+    "get_scan_report",
+    "get_report_vulns",
+    "get_report_vulnerabilities",
+    "get_report_tls_certificates",
+    "get_report_hosts_parsed",
+    "get_report_ports_parsed",
+    "get_report_applications_parsed",
+    "get_report_operating_systems_parsed",
+    "get_report_cves_parsed",
+    "get_report_errors",
+    "get_report_closed_cves",
+];
+
+fn observe_ineligible_conditional_report_drilldown(
+    helper_name: &str,
+    available_commands: &BTreeSet<String>,
+    version: GmpVersion,
+) -> Result<(), AppError> {
+    let helper = conditional_helper_coverage(helper_name)?;
+    if available_commands.contains(helper.wire_command)
+        && !conditional_helper_available(helper_name, version)?
+    {
+        let minimum = conditional_helper_minimum_version(helper_name)?;
+        runtime::observe(
+            &format!("helper:{helper_name}"),
+            Outcome::ConditionalUnavailable,
+            &format!(
+                "GMP {version}; wire command {} advertised; typed helper semantic capability requires GMP >= {minimum}",
+                helper.wire_command
+            ),
+        );
+    }
+    Ok(())
 }
 
 async fn run_report_export_checks(
@@ -3704,49 +3770,43 @@ async fn run_conditional_report_drilldowns(
         ignore_pagination: Some(true),
         ..Default::default()
     };
+    let version = client.version();
     macro_rules! conditional_read {
-        ($command:literal, $future:expr) => {
-            if available.contains($command) {
+        ($helper:literal, $future:expr) => {
+            if conditional_report_drilldown_call_allowed($helper, &available, version)? {
                 let response = $future.await?;
                 ensure(
                     response.status == 200,
-                    concat!("conditional typed ", $command, " did not return 200"),
+                    concat!("conditional typed ", $helper, " did not return 200"),
                 )?;
-                log_pass(concat!("typed ", $command), "valid parsed response");
+                log_pass(concat!("typed ", $helper), "valid parsed response");
+            } else {
+                observe_ineligible_conditional_report_drilldown($helper, &available, version)?;
             }
         };
     }
-    let scan_report_advertised = available.contains("get_scan_report");
-    let version = client.version();
-    if scan_report_advertised {
-        if !conditional_helper_call_allowed("get_scan_report", true, version)? {
-            let minimum = conditional_helper_minimum_version("get_scan_report")?;
-            runtime::observe(
-                "helper:get_scan_report",
-                Outcome::ConditionalUnavailable,
-                &format!("GMP {version}; typed semantic capability requires GMP >= {minimum}"),
-            );
-        } else {
-            let response = client
-                .get_scan_report(
-                    report_id,
-                    gvm_gmp::commands::reports::GetScanReportOpts::default(),
-                )
-                .await?;
-            assert_status(&response, 200, "typed get_scan_report")?;
-            ensure(
-                response_contains(&response, "<report ")?,
-                "typed get_scan_report omitted its report payload",
-            )?;
-            log_pass("typed get_scan_report", "valid structured report response");
-        }
+    if conditional_report_drilldown_call_allowed("get_scan_report", &available, version)? {
+        let response = client
+            .get_scan_report(
+                report_id,
+                gvm_gmp::commands::reports::GetScanReportOpts::default(),
+            )
+            .await?;
+        assert_status(&response, 200, "typed get_scan_report")?;
+        ensure(
+            response_contains(&response, "<report ")?,
+            "typed get_scan_report omitted its report payload",
+        )?;
+        log_pass("typed get_scan_report", "valid structured report response");
+    } else {
+        observe_ineligible_conditional_report_drilldown("get_scan_report", &available, version)?;
     }
     conditional_read!(
         "get_report_vulns",
         client.get_report_vulns(report_id, opts())
     );
     conditional_read!(
-        "get_report_vulns",
+        "get_report_vulnerabilities",
         client.get_report_vulnerabilities(report_id, opts())
     );
     conditional_read!(
@@ -3754,23 +3814,23 @@ async fn run_conditional_report_drilldowns(
         client.get_report_tls_certificates(report_id, opts())
     );
     conditional_read!(
-        "get_report_hosts",
+        "get_report_hosts_parsed",
         client.get_report_hosts_parsed(report_id, opts())
     );
     conditional_read!(
-        "get_report_ports",
+        "get_report_ports_parsed",
         client.get_report_ports_parsed(report_id, opts())
     );
     conditional_read!(
-        "get_report_applications",
+        "get_report_applications_parsed",
         client.get_report_applications_parsed(report_id, opts())
     );
     conditional_read!(
-        "get_report_operating_systems",
+        "get_report_operating_systems_parsed",
         client.get_report_operating_systems_parsed(report_id, opts())
     );
     conditional_read!(
-        "get_report_cves",
+        "get_report_cves_parsed",
         client.get_report_cves_parsed(report_id, opts())
     );
     conditional_read!(
@@ -5846,6 +5906,73 @@ mod tests {
         assert!(
             !conditional_helper_call_allowed("get_scan_report", false, GmpVersion(22, 8))
                 .expect("unadvertised scan report helper must not be called")
+        );
+    }
+
+    #[test]
+    fn report_drilldowns_skip_advertised_but_ineligible_helpers_without_invoking_them() {
+        let advertised: BTreeSet<String> = CONDITIONAL_REPORT_DRILLDOWN_HELPERS
+            .iter()
+            .map(|helper_name| {
+                conditional_helper_coverage(helper_name)
+                    .expect("report drilldown helper has conditional coverage")
+                    .wire_command
+                    .to_string()
+            })
+            .collect();
+
+        for helper_name in CONDITIONAL_REPORT_DRILLDOWN_HELPERS {
+            let mut invoked = false;
+            if conditional_report_drilldown_call_allowed(
+                helper_name,
+                &advertised,
+                GmpVersion(22, 7),
+            )
+            .expect("report drilldown helper has a semantic capability gate")
+            {
+                invoked = true;
+            }
+            assert!(
+                !invoked,
+                "GMP 22.7 must not invoke ineligible advertised helper {helper_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn report_drilldowns_allow_advertised_helpers_at_their_semantic_minimum() {
+        let advertised: BTreeSet<String> = CONDITIONAL_REPORT_DRILLDOWN_HELPERS
+            .iter()
+            .map(|helper_name| {
+                conditional_helper_coverage(helper_name)
+                    .expect("report drilldown helper has conditional coverage")
+                    .wire_command
+                    .to_string()
+            })
+            .collect();
+
+        for helper_name in CONDITIONAL_REPORT_DRILLDOWN_HELPERS {
+            let mut invoked = false;
+            if conditional_report_drilldown_call_allowed(
+                helper_name,
+                &advertised,
+                GmpVersion(22, 8),
+            )
+            .expect("report drilldown helper has a semantic capability gate")
+            {
+                invoked = true;
+            }
+            assert!(
+                invoked,
+                "GMP 22.8 must invoke advertised helper {helper_name}"
+            );
+        }
+
+        assert_eq!(
+            conditional_helper_coverage("get_report_vulnerabilities")
+                .expect("alias helper has conditional coverage")
+                .wire_command,
+            "get_report_vulns"
         );
     }
 
