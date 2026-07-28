@@ -2903,14 +2903,18 @@ async fn run_isolated_suite(
         .authenticate(&config.username, &config.password)
         .await?;
     let sync = client.send(sync_config_request()).await?;
-    ensure(
-        matches!(sync.status_code(), Some(200 | 202)),
-        "canonical parameterless sync_config fallback for rust-gvm#414 returned an unexpected status",
-    )?;
-    log_pass(
-        "isolated config sync",
-        "canonical parameterless sync request on dedicated database",
-    );
+    if canonical_sync_config_succeeded(&sync)? {
+        log_pass(
+            "isolated config sync",
+            "canonical parameterless sync request on dedicated database",
+        );
+    } else {
+        runtime::observe(
+            "canonical sync_config",
+            Outcome::KnownUpstreamBug,
+            "gvmd advertises sync_config in authenticated help but rejects the canonical parameterless command as bogus",
+        );
+    }
 
     let test_alert = client
         .create_alert(
@@ -5292,6 +5296,17 @@ fn stop_task_status_is_success(status: u16) -> bool {
     matches!(status, 200 | 202)
 }
 
+fn canonical_sync_config_succeeded(response: &Response) -> Result<bool, AppError> {
+    match (response.status_code(), response.status_text().as_deref()) {
+        (Some(200 | 202), _) => Ok(true),
+        (Some(400), Some("Bogus command name")) => Ok(false),
+        _ => Err(AppError::Assertion(format!(
+            "canonical parameterless sync_config returned an unexpected response: {}",
+            response_summary(response)?
+        ))),
+    }
+}
+
 fn response_id(response: &Response, label: &str) -> Result<EntityId, AppError> {
     let id = response.id().ok_or_else(|| {
         AppError::Assertion(format!("{label} response missing resource id attribute"))
@@ -5830,6 +5845,27 @@ mod tests {
             .expect("sync-config request should be UTF-8");
 
         assert_eq!(xml, "<sync_config/>");
+    }
+
+    #[test]
+    fn canonical_sync_config_distinguishes_success_from_advertised_but_bogus() {
+        for status in [200, 202] {
+            let xml = format!(r#"<sync_config_response status="{status}" status_text="OK"/>"#);
+            let response = Response::from(xml.as_str());
+            assert!(canonical_sync_config_succeeded(&response).expect("valid success response"));
+        }
+
+        let bogus = Response::from(
+            r#"<sync_config_response status="400" status_text="Bogus command name"/>"#,
+        );
+        assert!(
+            !canonical_sync_config_succeeded(&bogus).expect("known gvmd capability inconsistency")
+        );
+
+        let unrelated = Response::from(
+            r#"<sync_config_response status="400" status_text="Permission denied"/>"#,
+        );
+        assert!(canonical_sync_config_succeeded(&unrelated).is_err());
     }
 
     #[test]
