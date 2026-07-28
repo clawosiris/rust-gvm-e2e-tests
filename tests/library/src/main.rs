@@ -5833,6 +5833,31 @@ mod tests {
     }
 
     #[test]
+    fn import_report_fixture_builds_as_embedded_command_xml() {
+        let task_id = EntityId::new("import-task").expect("valid task id");
+        let report_xml = include_str!("../../../fixtures/import-report.xml")
+            .replace("{{RUN_NAME}}", "imported-report")
+            .replace("{{REPORT_ID}}", "89245cdb-8f0a-4ae9-8505-d60713578915");
+        let request = gvm_gmp::commands::reports::import_report(
+            &report_xml,
+            &task_id,
+            gvm_gmp::commands::reports::ImportReportOpts {
+                in_assets: Some(false),
+            },
+        )
+        .expect("report fixture must be valid embedded command XML");
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("import-report request should be UTF-8");
+
+        assert!(xml.starts_with(
+            r#"<create_report><task id="import-task"/><in_assets>0</in_assets><report "#
+        ));
+        assert!(!xml.contains("<?xml"));
+        assert!(!xml.contains("<!DOCTYPE"));
+        assert!(xml.ends_with("</report>\n</create_report>"));
+    }
+
+    #[test]
     fn typed_sync_config_builder_has_the_current_incompatible_config_id() {
         let config_id = EntityId::new("feed-config").expect("valid config id");
         let request = gvm_gmp::commands::scan_configs::sync_config(&config_id);
