@@ -61,6 +61,7 @@ use gvm_gmp::commands::tasks::{
 };
 use gvm_gmp::enums::{
     AlertCondition, AlertEvent, AlertMethod, CredentialType, EntityType, FilterType, ResourceType,
+    ScannerType,
 };
 use gvm_gmp::responses::feed::GetFeedsResponse;
 use gvm_gmp::responses::port_list::GetPortListsResponse;
@@ -2040,10 +2041,7 @@ async fn run_config_scanner_lifecycles(
     );
 
     let scanners = client.get_scanners(GetScannersOpts::default()).await?;
-    let base_scanner = scanners
-        .items
-        .first()
-        .ok_or_else(|| AppError::Assertion("scanner lifecycle requires a scanner".to_string()))?;
+    let base_scanner = select_cloneable_scanner(&scanners)?;
     let scanner = client.clone_scanner(&base_scanner.meta.id).await?;
     ensure(scanner.status == 201, "typed clone_scanner failed")?;
     tracker.track_scanner(&scanner.id);
@@ -2098,6 +2096,32 @@ async fn run_config_scanner_lifecycles(
 
     client.disconnect().await?;
     Ok(())
+}
+
+fn select_cloneable_scanner(
+    scanners: &GetScannersResponse,
+) -> Result<&gvm_gmp::responses::scanner::Scanner, AppError> {
+    scanners
+        .items
+        .iter()
+        .find(|scanner| {
+            scanner
+                .scanner_type
+                .as_deref()
+                .and_then(|kind| ScannerType::from_str(kind).ok())
+                .is_some_and(|kind| kind != ScannerType::CveScannerType)
+        })
+        .ok_or_else(|| {
+            let types = scanners
+                .items
+                .iter()
+                .map(|scanner| scanner.scanner_type.as_deref().unwrap_or("<missing>"))
+                .collect::<Vec<_>>();
+            AppError::Assertion(format!(
+                "scanner lifecycle requires a cloneable non-CVE scanner; get_scanners returned types [{}]",
+                types.join(", ")
+            ))
+        })
 }
 
 async fn run_isolated_suite(
@@ -5375,6 +5399,42 @@ mod tests {
             "<create_scanner><copy>socket-backed-scanner</copy></create_scanner>"
         );
         assert!(!xml.contains("<host>"));
+    }
+
+    #[test]
+    fn scanner_lifecycle_selects_a_cloneable_type_after_cve() {
+        let scanners = GetScannersResponse::from_response(&Response::from(
+            r#"<get_scanners_response status="200" status_text="OK">
+                <scanner id="cve"><name>CVE Scanner</name><type>CVE</type></scanner>
+                <scanner id="openvas"><name>OpenVAS Scanner</name><type>OpenVAS</type></scanner>
+            </get_scanners_response>"#,
+        ))
+        .expect("typed scanner response should parse");
+
+        let selected = select_cloneable_scanner(&scanners).expect("OpenVAS scanner is cloneable");
+
+        assert_eq!(selected.meta.id.as_str(), "openvas");
+        assert_eq!(selected.scanner_type.as_deref(), Some("OpenVAS"));
+    }
+
+    #[test]
+    fn scanner_lifecycle_reports_no_cloneable_scanner_types() {
+        let scanners = GetScannersResponse::from_response(&Response::from(
+            r#"<get_scanners_response status="200" status_text="OK">
+                <scanner id="cve"><name>CVE Scanner</name><type>CVE</type></scanner>
+                <scanner id="unknown"><name>Unknown Scanner</name><type>99</type></scanner>
+                <scanner id="missing"><name>Missing Type</name></scanner>
+            </get_scanners_response>"#,
+        ))
+        .expect("typed scanner response should parse");
+
+        let error = select_cloneable_scanner(&scanners)
+            .expect_err("CVE, unknown, and missing types are not cloneable");
+
+        assert_eq!(
+            error.to_string(),
+            "scanner lifecycle requires a cloneable non-CVE scanner; get_scanners returned types [CVE, 99, <missing>]"
+        );
     }
 
     #[test]
