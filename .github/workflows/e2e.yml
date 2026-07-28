@@ -171,14 +171,34 @@ jobs:
       E2E_CLEAN_VOLUMES: ${{ inputs.clean && '1' || '0' }}
       E2E_RECORD_BASELINE: ${{ inputs['record-baseline'] && '1' || '0' }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
-        with:
-          # Lane cleanup runs after checkout and handles stale root-owned artifacts.
-          clean: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: community-runner-${{ github.run_id }}
-      - run: docker load -i runner-image.tar && rm -f runner-image.tar
+          path: ${{ runner.temp }}/community-runner-${{ github.run_id }}
+      - name: Load exact Community runner image
+        id: runner-image
+        run: |
+          runner_tar="${RUNNER_TEMP}/community-runner-${GITHUB_RUN_ID}/runner-image.tar"
+          docker load --input "${runner_tar}"
+          runner_image_id="$(docker image inspect --format '{{.Id}}' "${RUNNER_IMAGE_NAME}:${RUNNER_IMAGE_TAG}")"
+          printf 'image-id=%s\n' "${runner_image_id}" >> "${GITHUB_OUTPUT}"
+          rm -f -- "${runner_tar}"
+      - name: Restore artifacts directory ownership
+        env:
+          RUNNER_IMAGE_ID: ${{ steps.runner-image.outputs.image-id }}
+        run: |
+          artifacts_dir="${GITHUB_WORKSPACE}/artifacts"
+          if [[ -d "${artifacts_dir}" && ! -L "${artifacts_dir}" ]]; then
+            host_uid="$(id -u)"
+            host_gid="$(id -g)"
+            docker run --rm --user 0:0 \
+              --mount "type=bind,src=${artifacts_dir},dst=/workspace/artifacts" \
+              --entrypoint /bin/chown \
+              "${RUNNER_IMAGE_ID}" "${host_uid}:${host_gid}" /workspace/artifacts
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          clean: false
       - run: bash docker/scripts/run-community-lane.sh devel-fast
       - if: failure()
         run: docker compose -f "${COMPOSE_FILE}" logs --tail=250 gvmd ospd-openvas openvasd pg-gvm
@@ -206,14 +226,34 @@ jobs:
       E2E_RECORD_BASELINE: ${{ inputs['record-baseline'] && '1' || '0' }}
       E2E_TASK_PROGRESS_TIMEOUT_SECS: 1800
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
-        with:
-          # Lane cleanup runs after checkout and handles stale root-owned artifacts.
-          clean: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: community-runner-${{ github.run_id }}
-      - run: docker load -i runner-image.tar && rm -f runner-image.tar
+          path: ${{ runner.temp }}/community-runner-${{ github.run_id }}
+      - name: Load exact Community runner image
+        id: runner-image
+        run: |
+          runner_tar="${RUNNER_TEMP}/community-runner-${GITHUB_RUN_ID}/runner-image.tar"
+          docker load --input "${runner_tar}"
+          runner_image_id="$(docker image inspect --format '{{.Id}}' "${RUNNER_IMAGE_NAME}:${RUNNER_IMAGE_TAG}")"
+          printf 'image-id=%s\n' "${runner_image_id}" >> "${GITHUB_OUTPUT}"
+          rm -f -- "${runner_tar}"
+      - name: Restore artifacts directory ownership
+        env:
+          RUNNER_IMAGE_ID: ${{ steps.runner-image.outputs.image-id }}
+        run: |
+          artifacts_dir="${GITHUB_WORKSPACE}/artifacts"
+          if [[ -d "${artifacts_dir}" && ! -L "${artifacts_dir}" ]]; then
+            host_uid="$(id -u)"
+            host_gid="$(id -g)"
+            docker run --rm --user 0:0 \
+              --mount "type=bind,src=${artifacts_dir},dst=/workspace/artifacts" \
+              --entrypoint /bin/chown \
+              "${RUNNER_IMAGE_ID}" "${host_uid}:${host_gid}" /workspace/artifacts
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          clean: false
       - run: bash docker/scripts/run-community-lane.sh devel-scan
       - if: failure()
         run: docker compose -f "${COMPOSE_FILE}" logs --tail=350 gvmd ospd-openvas openvasd pg-gvm scan-fixture
@@ -241,14 +281,34 @@ jobs:
       E2E_CLEAN_VOLUMES: ${{ inputs.clean && '1' || '0' }}
       E2E_RECORD_BASELINE: ${{ inputs['record-baseline'] && '1' || '0' }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
-        with:
-          # Lane cleanup runs after checkout and handles stale root-owned artifacts.
-          clean: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: community-runner-${{ github.run_id }}
-      - run: docker load -i runner-image.tar && rm -f runner-image.tar
+          path: ${{ runner.temp }}/community-runner-${{ github.run_id }}
+      - name: Load exact Community runner image
+        id: runner-image
+        run: |
+          runner_tar="${RUNNER_TEMP}/community-runner-${GITHUB_RUN_ID}/runner-image.tar"
+          docker load --input "${runner_tar}"
+          runner_image_id="$(docker image inspect --format '{{.Id}}' "${RUNNER_IMAGE_NAME}:${RUNNER_IMAGE_TAG}")"
+          printf 'image-id=%s\n' "${runner_image_id}" >> "${GITHUB_OUTPUT}"
+          rm -f -- "${runner_tar}"
+      - name: Restore artifacts directory ownership
+        env:
+          RUNNER_IMAGE_ID: ${{ steps.runner-image.outputs.image-id }}
+        run: |
+          artifacts_dir="${GITHUB_WORKSPACE}/artifacts"
+          if [[ -d "${artifacts_dir}" && ! -L "${artifacts_dir}" ]]; then
+            host_uid="$(id -u)"
+            host_gid="$(id -g)"
+            docker run --rm --user 0:0 \
+              --mount "type=bind,src=${artifacts_dir},dst=/workspace/artifacts" \
+              --entrypoint /bin/chown \
+              "${RUNNER_IMAGE_ID}" "${host_uid}:${host_gid}" /workspace/artifacts
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          clean: false
       - run: bash docker/scripts/run-community-lane.sh devel-isolated
       - if: failure()
         run: COMPOSE_PROJECT_NAME=rust-gvm-e2e-isolated docker compose -f "${COMPOSE_FILE}" logs --tail=350 gvmd pg-gvm
@@ -289,14 +349,34 @@ jobs:
       E2E_SSH_KEY_PASSPHRASE: ${{ secrets.E2E_SSH_KEY_PASSPHRASE }}
       E2E_SSH_SOCKET_PATH: ${{ secrets.E2E_SSH_SOCKET_PATH }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
-        with:
-          # Lane cleanup runs after checkout and handles stale root-owned artifacts.
-          clean: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: community-runner-${{ github.run_id }}
-      - run: docker load -i runner-image.tar && rm -f runner-image.tar
+          path: ${{ runner.temp }}/community-runner-${{ github.run_id }}
+      - name: Load exact Community runner image
+        id: runner-image
+        run: |
+          runner_tar="${RUNNER_TEMP}/community-runner-${GITHUB_RUN_ID}/runner-image.tar"
+          docker load --input "${runner_tar}"
+          runner_image_id="$(docker image inspect --format '{{.Id}}' "${RUNNER_IMAGE_NAME}:${RUNNER_IMAGE_TAG}")"
+          printf 'image-id=%s\n' "${runner_image_id}" >> "${GITHUB_OUTPUT}"
+          rm -f -- "${runner_tar}"
+      - name: Restore artifacts directory ownership
+        env:
+          RUNNER_IMAGE_ID: ${{ steps.runner-image.outputs.image-id }}
+        run: |
+          artifacts_dir="${GITHUB_WORKSPACE}/artifacts"
+          if [[ -d "${artifacts_dir}" && ! -L "${artifacts_dir}" ]]; then
+            host_uid="$(id -u)"
+            host_gid="$(id -g)"
+            docker run --rm --user 0:0 \
+              --mount "type=bind,src=${artifacts_dir},dst=/workspace/artifacts" \
+              --entrypoint /bin/chown \
+              "${RUNNER_IMAGE_ID}" "${host_uid}:${host_gid}" /workspace/artifacts
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          clean: false
       - run: bash docker/scripts/run-community-lane.sh devel-transport
       - if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -318,14 +398,34 @@ jobs:
       GVM_VERSION: ${{ needs.build-runner.outputs.gvm-version }}
       E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
-        with:
-          # Lane cleanup runs after checkout and handles stale root-owned artifacts.
-          clean: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: community-runner-${{ github.run_id }}
-      - run: docker load -i runner-image.tar && rm -f runner-image.tar
+          path: ${{ runner.temp }}/community-runner-${{ github.run_id }}
+      - name: Load exact Community runner image
+        id: runner-image
+        run: |
+          runner_tar="${RUNNER_TEMP}/community-runner-${GITHUB_RUN_ID}/runner-image.tar"
+          docker load --input "${runner_tar}"
+          runner_image_id="$(docker image inspect --format '{{.Id}}' "${RUNNER_IMAGE_NAME}:${RUNNER_IMAGE_TAG}")"
+          printf 'image-id=%s\n' "${runner_image_id}" >> "${GITHUB_OUTPUT}"
+          rm -f -- "${runner_tar}"
+      - name: Restore artifacts directory ownership
+        env:
+          RUNNER_IMAGE_ID: ${{ steps.runner-image.outputs.image-id }}
+        run: |
+          artifacts_dir="${GITHUB_WORKSPACE}/artifacts"
+          if [[ -d "${artifacts_dir}" && ! -L "${artifacts_dir}" ]]; then
+            host_uid="$(id -u)"
+            host_gid="$(id -g)"
+            docker run --rm --user 0:0 \
+              --mount "type=bind,src=${artifacts_dir},dst=/workspace/artifacts" \
+              --entrypoint /bin/chown \
+              "${RUNNER_IMAGE_ID}" "${host_uid}:${host_gid}" /workspace/artifacts
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          clean: false
       - run: bash docker/scripts/run-community-lane.sh differential
       - if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

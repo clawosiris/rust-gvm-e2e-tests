@@ -41,6 +41,12 @@ Ordinary fast and scan jobs intentionally reuse warm feed volumes. Initializing
 a fresh feed is known to exceed the normal two-hour readiness budget. Volume
 deletion happens only with the explicit `clean` workflow input.
 
+Before checkout, each self-hosted lane loads the run's already-built runner
+image from runner-temporary storage and uses that exact image as root to restore
+host ownership of an existing, non-symlink `artifacts` directory itself.
+Checkout then runs with `clean: false`; the lane script retains responsibility
+for deleting only the selected lane's known artifact files.
+
 The test details are in [docs/test-cases.md](docs/test-cases.md). Each lane
 publishes structured JSON with pass/fail/known-upstream-bug/conditional/excluded
 counts, exact rust-gvm SHA, GMP version, runtime tags/digests, feature/help
