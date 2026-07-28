@@ -1,6 +1,8 @@
 # rust-gvm-e2e-tests
 
-Real-stack conformance tests for rust-gvm against Greenbone Community Edition.
+Real-stack conformance tests for
+[rust-gvm](https://github.com/greenbone-hive/rust-gvm) against Greenbone
+Community Edition.
 The harness talks directly to `gvmd`, validates public typed response models,
 and cross-checks deterministic behavior with gvm-tools/python-gvm.
 

@@ -80,7 +80,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
       - name: Fetch authoritative rust-gvm/devel
-        run: git clone --depth 1 --branch devel https://github.com/clawosiris/rust-gvm.git /tmp/rust-gvm
+        run: git clone --depth 1 --branch devel https://github.com/greenbone-hive/rust-gvm.git /tmp/rust-gvm
       - name: Verify generated inventory and source tests
         run: |
           python3 tools/coverage_manifest.py --check --rust-gvm-source /tmp/rust-gvm
@@ -127,7 +127,7 @@ jobs:
             gvm_version="${PAYLOAD_GVM_VERSION:-${gvm_version}}"
           fi
           git init -q /tmp/rust-gvm
-          git -C /tmp/rust-gvm remote add origin https://github.com/clawosiris/rust-gvm.git
+          git -C /tmp/rust-gvm remote add origin https://github.com/greenbone-hive/rust-gvm.git
           git -C /tmp/rust-gvm fetch --depth 1 origin "${rust_ref}"
           rust_sha="$(git -C /tmp/rust-gvm rev-parse FETCH_HEAD)"
           {

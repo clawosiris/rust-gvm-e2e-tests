@@ -52,7 +52,7 @@ namespace. It covers:
 - dedicated `empty_trashcan` execution.
 
 Global mutations never run against the ordinary warm-volume project.
-Until [rust-gvm #405](https://github.com/clawosiris/rust-gvm/issues/405) is
+Until [rust-gvm #405](https://github.com/greenbone-hive/rust-gvm/issues/405) is
 fixed, the exact typed `create_permission` rejection is recorded as
 `known-upstream-bug`; a canonical nested-subject request then creates the
 permission so read/modify/trash/restore/delete coverage still runs. Any other
@@ -74,7 +74,7 @@ identity sets with python-gvm for version, configs, scanners, port lists, feeds,
 report formats, and cross-client target creation/visibility/deletion. Any
 unexpected mismatch is blocking. Both clients issue an explicit unbounded
 `usage_type=scan` config query because
-[rust-gvm #404](https://github.com/clawosiris/rust-gvm/issues/404) tracks the
+[rust-gvm #404](https://github.com/greenbone-hive/rust-gvm/issues/404) tracks the
 ergonomic `get_scan_configs` wrapper's missing scope. Feed equality
 intentionally excludes the momentary `currently_syncing` flag, which can change
 between sequential client reads; stable feed type, name, and status remain
