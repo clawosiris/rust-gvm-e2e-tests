@@ -1374,6 +1374,14 @@ fn resource_names_request() -> impl gvm_protocol::Request {
     })
 }
 
+fn create_port_range_request(port_list_id: &EntityId, start: u16, end: u16) -> XmlCommand {
+    XmlCommand::new("create_port_range")
+        .child_with_attr("port_list", "id", port_list_id.as_str())
+        .child_with_text("start", &start.to_string())
+        .child_with_text("end", &end.to_string())
+        .child_with_text("type", "TCP")
+}
+
 fn create_report_config_request(
     name: &str,
     report_format_id: &EntityId,
@@ -3706,12 +3714,7 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     log_pass("crud 02", "get port_list");
 
     let range = client
-        .send(gvm_gmp::commands::port_lists::create_port_range(
-            &pl_id,
-            gvm_gmp::PortRangeType::Tcp,
-            101,
-            102,
-        ))
+        .send(create_port_range_request(&pl_id, 101, 102))
         .await?;
     assert_status(&range, 201, "create_port_range")?;
     let range_id = response_id(&range, "create_port_range")?;
@@ -5506,6 +5509,44 @@ mod tests {
             .expect("resource-names request should be UTF-8");
 
         assert_eq!(xml, r#"<get_resource_names type="TARGET"/>"#);
+    }
+
+    #[test]
+    fn port_range_request_references_the_live_port_list_with_gmp_child_elements() {
+        let port_list_id = EntityId::new("created-port-list").expect("valid id");
+        let request = create_port_range_request(&port_list_id, 101, 102);
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("port-range request should be UTF-8");
+
+        assert_eq!(
+            xml,
+            concat!(
+                "<create_port_range><port_list id=\"created-port-list\"/>",
+                "<start>101</start><end>102</end><type>TCP</type></create_port_range>"
+            )
+        );
+    }
+
+    #[test]
+    fn typed_port_range_builder_uses_gvmd_incompatible_attributes() {
+        let port_list_id = EntityId::new("created-port-list").expect("valid id");
+        let request = gvm_gmp::commands::port_lists::create_port_range(
+            &port_list_id,
+            gvm_gmp::PortRangeType::Tcp,
+            101,
+            102,
+        );
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("typed port-range request should be UTF-8");
+
+        assert_eq!(
+            xml,
+            concat!(
+                "<create_port_range end=\"102\" port_list_id=\"created-port-list\" ",
+                "start=\"101\" type=\"TCP\"/>"
+            )
+        );
+        assert!(!xml.contains("<port_list"));
     }
 
     #[test]
