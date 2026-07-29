@@ -60,7 +60,7 @@ Build the runner, start the warm stack, and execute a lane:
 
 ```bash
 docker build -f docker/Dockerfile.runner \
-  --build-arg RUST_GVM_REF=04da5996bc7b08640c15e20e85d768960b36d939 \
+  --build-arg RUST_GVM_REF=e47dd8cabb199503517d8854358811601c923fe6 \
   -t rust-gvm-e2e-runner:ci .
 bash docker/scripts/run-community-lane.sh devel-fast
 ```

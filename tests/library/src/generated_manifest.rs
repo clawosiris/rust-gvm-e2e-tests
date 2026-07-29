@@ -7,7 +7,7 @@ use gvm_connection::UnixSocketConnection;
 
 use crate::{CoverageEntry, Disposition};
 
-pub const RUST_GVM_SHA: &str = "04da5996bc7b08640c15e20e85d768960b36d939";
+pub const RUST_GVM_SHA: &str = "e47dd8cabb199503517d8854358811601c923fe6";
 
 pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {

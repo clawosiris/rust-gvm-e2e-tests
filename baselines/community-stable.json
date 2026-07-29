@@ -2,7 +2,7 @@
   "schema_version": 1,
   "gvm_image_tag": "stable",
   "gmp_version": "22.7",
-  "rust_gvm_sha": "04da5996bc7b08640c15e20e85d768960b36d939",
+  "rust_gvm_sha": "e47dd8cabb199503517d8854358811601c923fe6",
   "features": {
     "ENABLE_AGENTS": {
       "compiled_in": false,

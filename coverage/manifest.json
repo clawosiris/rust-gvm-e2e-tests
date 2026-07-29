@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "rust_gvm_sha": "04da5996bc7b08640c15e20e85d768960b36d939",
+  "rust_gvm_sha": "e47dd8cabb199503517d8854358811601c923fe6",
   "registry_count": 155,
   "typed_helper_count": 143,
   "helper_variant_count": 4,
