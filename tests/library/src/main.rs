@@ -2620,10 +2620,11 @@ async fn run_isolated_suite(
     // The stable gvmd permission-modify failure closes the GMP socket after
     // returning its response. Continue the remaining access-control lifecycle
     // on a fresh authenticated connection.
-    client = connect_client(config).await?;
-    client
-        .authenticate(&config.username, &config.password)
-        .await?;
+    client = reconnect_authenticated(
+        config,
+        Duration::from_secs(config.task_progress_timeout_secs),
+    )
+    .await?;
 
     let modify_group = client
         .send(gvm_gmp::commands::groups::modify_group(
@@ -2927,10 +2928,11 @@ async fn run_isolated_suite(
     // gvmd closes the GMP connection after rejecting the bogus typed command.
     // Reconnect before exercising the canonical fallback so a dead socket does
     // not mask the parameterless sync_config contract.
-    client = connect_client(config).await?;
-    client
-        .authenticate(&config.username, &config.password)
-        .await?;
+    client = reconnect_authenticated(
+        config,
+        Duration::from_secs(config.task_progress_timeout_secs),
+    )
+    .await?;
     let sync = client.send(sync_config_request()).await?;
     if canonical_sync_config_succeeded(&sync)? {
         log_pass(
@@ -2946,10 +2948,11 @@ async fn run_isolated_suite(
     }
     // Keep subsequent isolated operations independent of whether gvmd closes
     // the sync command's GMP connection after a success or capability error.
-    client = connect_client(config).await?;
-    client
-        .authenticate(&config.username, &config.password)
-        .await?;
+    client = reconnect_authenticated(
+        config,
+        Duration::from_secs(config.task_progress_timeout_secs),
+    )
+    .await?;
 
     let test_alert = client
         .create_alert(
@@ -5329,6 +5332,43 @@ async fn create_role_permission(
 async fn connect_client(config: &EnvConfig) -> Result<GmpClient<UnixSocketConnection>, AppError> {
     let connection = UnixSocketConnection::with_path(&config.socket_path);
     Ok(GmpClient::connect(connection).await?)
+}
+
+async fn reconnect_authenticated(
+    config: &EnvConfig,
+    timeout: Duration,
+) -> Result<GmpClient<UnixSocketConnection>, AppError> {
+    let started = tokio::time::Instant::now();
+    let mut last_error = String::from("no connection attempt completed");
+
+    while started.elapsed() <= timeout {
+        match connect_client(config).await {
+            Ok(mut client) => {
+                match client
+                    .authenticate(&config.username, &config.password)
+                    .await
+                {
+                    Ok(_) => return Ok(client),
+                    Err(GvmError::Connection(error)) => {
+                        last_error = format!("authentication connection failed: {error}");
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Err(error) => {
+                last_error = format!("connection failed: {error}");
+            }
+        }
+        log_line(&format!(
+            "authenticated reconnect unavailable ({last_error}); retrying"
+        ));
+        sleep(Duration::from_secs(1)).await;
+    }
+
+    Err(AppError::Assertion(format!(
+        "authenticated reconnect did not succeed within {} seconds; last error: {last_error}",
+        timeout.as_secs()
+    )))
 }
 
 fn assert_status(response: &Response, expected: u16, label: &str) -> Result<(), AppError> {
