@@ -396,7 +396,11 @@ mod tests {
         let parsed = baseline().expect("baseline parses");
         assert_eq!(parsed.schema_version, 1);
         assert_eq!(parsed.gvm_image_tag, "stable");
-        assert_eq!(parsed.help_commands.len(), 126);
+        assert_eq!(parsed.help_commands.len(), 127);
+        assert!(parsed
+            .help_commands
+            .iter()
+            .any(|name| name == "get_audit_report"));
         assert!(parsed.help_commands.iter().any(|name| name == "get_tasks"));
         assert_eq!(
             parsed.conditional_commands.get("get_report_hosts"),

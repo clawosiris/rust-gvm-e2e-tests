@@ -90,6 +90,7 @@
     "get_aggregates",
     "get_alerts",
     "get_assets",
+    "get_audit_report",
     "get_configs",
     "get_credentials",
     "get_feeds",
