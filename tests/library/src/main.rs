@@ -19,8 +19,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use gvm_client::{parse_version_text, GmpClient, GvmError};
 use gvm_connection::{
-    GvmConnection, SshAuth, SshConfig, SshConnection, TlsClientIdentity, TlsConfig, TlsConnection,
-    UnixSocketConnection,
+    ConnectionError, GvmConnection, SshAuth, SshConfig, SshConnection, TlsClientIdentity,
+    TlsConfig, TlsConnection, UnixSocketConnection,
 };
 use gvm_gmp::commands::alerts::{delete_alert, get_alert, get_alerts, AlertOpts, GetAlertsOpts};
 use gvm_gmp::commands::authentication::authenticate;
@@ -3438,6 +3438,7 @@ async fn run_scan_suite(
 
     let task_status = wait_task_state(
         client,
+        config,
         &task.id,
         Duration::from_secs(config.task_progress_timeout_secs),
         |status| status != "New" && status != "Requested",
@@ -3449,6 +3450,7 @@ async fn run_scan_suite(
         assert_stop_task_status(&stop_response, "stop_task")?;
         let stopped = wait_task_state(
             client,
+            config,
             &task.id,
             Duration::from_secs(config.task_progress_timeout_secs),
             |status| {
@@ -3471,6 +3473,7 @@ async fn run_scan_suite(
             )?;
             let resumed_state = wait_task_state(
                 client,
+                config,
                 &task.id,
                 Duration::from_secs(config.task_progress_timeout_secs),
                 |status| !matches!(status, "Stopped" | "Interrupted" | "Requested"),
@@ -3481,6 +3484,7 @@ async fn run_scan_suite(
                 assert_stop_task_status(&stop, "stop resumed task")?;
                 wait_task_state(
                     client,
+                    config,
                     &task.id,
                     Duration::from_secs(config.task_progress_timeout_secs),
                     |status| {
@@ -5196,6 +5200,7 @@ fn parse_python_target_id(
 
 async fn wait_task_state(
     client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
     task_id: &EntityId,
     timeout: Duration,
     accept: impl Fn(&str) -> bool,
@@ -5204,13 +5209,32 @@ async fn wait_task_state(
     let mut last_status = String::from("unknown");
 
     while started.elapsed() <= timeout {
-        let response = client
+        let response = match client
             .get_tasks(GetTasksOpts {
                 filter_string: Some(format!("uuid={task_id}")),
                 details: Some(true),
                 ..Default::default()
             })
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(GvmError::Connection(
+                error @ (ConnectionError::NotConnected
+                | ConnectionError::SendFailed(_)
+                | ConnectionError::ReadFailed(_)),
+            )) => {
+                log_line(&format!(
+                    "task status poll connection failed ({error}); reconnecting"
+                ));
+                *client = connect_client(config).await?;
+                client
+                    .authenticate(&config.username, &config.password)
+                    .await?;
+                sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
         let task = response
             .items
             .iter()
