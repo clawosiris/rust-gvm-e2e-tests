@@ -3447,12 +3447,17 @@ async fn run_scan_suite(
     if matches!(task_status.as_str(), "Running" | "Stop Requested") {
         let stop_response = client.call(stop_task(&task.id)).await?;
         assert_stop_task_status(&stop_response, "stop_task")?;
-        let stopped = wait_task_state(client, &task.id, Duration::from_secs(120), |status| {
-            matches!(
-                status,
-                "Stopped" | "Interrupted" | "Done" | "Internal Error"
-            )
-        })
+        let stopped = wait_task_state(
+            client,
+            &task.id,
+            Duration::from_secs(config.task_progress_timeout_secs),
+            |status| {
+                matches!(
+                    status,
+                    "Stopped" | "Interrupted" | "Done" | "Internal Error"
+                )
+            },
+        )
         .await?;
         if matches!(stopped.as_str(), "Stopped" | "Interrupted") {
             let resumed = client.resume_task(&task.id).await?;
@@ -3474,12 +3479,17 @@ async fn run_scan_suite(
             if resumed_state == "Running" {
                 let stop = client.call(stop_task(&task.id)).await?;
                 assert_stop_task_status(&stop, "stop resumed task")?;
-                wait_task_state(client, &task.id, Duration::from_secs(120), |status| {
-                    matches!(
-                        status,
-                        "Stopped" | "Interrupted" | "Done" | "Internal Error"
-                    )
-                })
+                wait_task_state(
+                    client,
+                    &task.id,
+                    Duration::from_secs(config.task_progress_timeout_secs),
+                    |status| {
+                        matches!(
+                            status,
+                            "Stopped" | "Interrupted" | "Done" | "Internal Error"
+                        )
+                    },
+                )
                 .await?;
             }
         }
