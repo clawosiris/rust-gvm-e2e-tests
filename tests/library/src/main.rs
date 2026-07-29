@@ -2617,6 +2617,14 @@ async fn run_isolated_suite(
             "rust-gvm emitted a gvmd-compatible subject",
         );
     }
+    // The stable gvmd permission-modify failure closes the GMP socket after
+    // returning its response. Continue the remaining access-control lifecycle
+    // on a fresh authenticated connection.
+    client = connect_client(config).await?;
+    client
+        .authenticate(&config.username, &config.password)
+        .await?;
+
     let modify_group = client
         .send(gvm_gmp::commands::groups::modify_group(
             &group.id,
