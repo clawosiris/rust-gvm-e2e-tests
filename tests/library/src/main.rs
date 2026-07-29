@@ -3420,6 +3420,14 @@ async fn run_scan_suite(
         Err(error) => return Err(error.into()),
     }
 
+    // gvmd may close the GMP connection after returning the duplicate-start
+    // outcome. Poll the active task on a fresh authenticated connection so
+    // the idempotency probe cannot terminate the scan lifecycle.
+    *client = connect_client(config).await?;
+    client
+        .authenticate(&config.username, &config.password)
+        .await?;
+
     let task_status = wait_task_state(
         client,
         &task.id,
