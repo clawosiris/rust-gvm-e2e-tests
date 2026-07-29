@@ -19,8 +19,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use gvm_client::{parse_version_text, GmpClient, GvmError};
 use gvm_connection::{
-    ConnectionError, GvmConnection, SshAuth, SshConfig, SshConnection, TlsClientIdentity,
-    TlsConfig, TlsConnection, UnixSocketConnection,
+    GvmConnection, SshAuth, SshConfig, SshConnection, TlsClientIdentity, TlsConfig, TlsConnection,
+    UnixSocketConnection,
 };
 use gvm_gmp::commands::alerts::{delete_alert, get_alert, get_alerts, AlertOpts, GetAlertsOpts};
 use gvm_gmp::commands::authentication::authenticate;
@@ -3428,14 +3428,6 @@ async fn run_scan_suite(
         Err(error) => return Err(error.into()),
     }
 
-    // gvmd may close the GMP connection after returning the duplicate-start
-    // outcome. Poll the active task on a fresh authenticated connection so
-    // the idempotency probe cannot terminate the scan lifecycle.
-    *client = connect_client(config).await?;
-    client
-        .authenticate(&config.username, &config.password)
-        .await?;
-
     let task_status = wait_task_state(
         client,
         config,
@@ -5218,18 +5210,35 @@ async fn wait_task_state(
             .await
         {
             Ok(response) => response,
-            Err(GvmError::Connection(
-                error @ (ConnectionError::NotConnected
-                | ConnectionError::SendFailed(_)
-                | ConnectionError::ReadFailed(_)),
-            )) => {
+            Err(GvmError::Connection(error)) => {
                 log_line(&format!(
                     "task status poll connection failed ({error}); reconnecting"
                 ));
-                *client = connect_client(config).await?;
-                client
+                let mut replacement = match connect_client(config).await {
+                    Ok(replacement) => replacement,
+                    Err(reconnect_error) => {
+                        log_line(&format!(
+                            "task status poll reconnect failed ({reconnect_error}); retrying"
+                        ));
+                        sleep(Duration::from_secs(1)).await;
+                        continue;
+                    }
+                };
+                match replacement
                     .authenticate(&config.username, &config.password)
-                    .await?;
+                    .await
+                {
+                    Ok(_) => *client = replacement,
+                    Err(GvmError::Connection(authentication_error)) => {
+                        log_line(&format!(
+                            "task status poll authentication connection failed \
+                             ({authentication_error}); retrying"
+                        ));
+                        sleep(Duration::from_secs(1)).await;
+                        continue;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
                 sleep(Duration::from_secs(1)).await;
                 continue;
             }
