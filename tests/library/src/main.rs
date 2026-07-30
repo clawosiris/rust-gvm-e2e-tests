@@ -3490,7 +3490,14 @@ async fn run_scan_suite(
         }
     }
 
-    let report_response = client.call(get_report(&report_id)).await?;
+    let report_response = send_idempotent_with_reconnect(
+        client,
+        config,
+        Duration::from_secs(config.task_progress_timeout_secs),
+        "get_report after scan completion",
+        || get_report(&report_id),
+    )
+    .await?;
     assert_status(&report_response, 200, "get_report")?;
     ensure(
         response_contains(&report_response, "<report ")?
