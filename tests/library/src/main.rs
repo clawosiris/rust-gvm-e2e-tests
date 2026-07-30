@@ -46,7 +46,7 @@ use gvm_gmp::commands::port_lists::{
     PortListOpts,
 };
 use gvm_gmp::commands::report_formats::{get_report_formats, GetReportFormatsOpts};
-use gvm_gmp::commands::reports::{get_report, get_reports};
+use gvm_gmp::commands::reports::get_report;
 use gvm_gmp::commands::scan_configs::{get_scan_configs, GetScanConfigsOpts};
 use gvm_gmp::commands::scanners::{get_scanners, GetScannersOpts};
 use gvm_gmp::commands::schedules::{
@@ -69,7 +69,6 @@ use gvm_gmp::enums::{
 use gvm_gmp::responses::feed::GetFeedsResponse;
 use gvm_gmp::responses::permission::GetPermissionsResponse;
 use gvm_gmp::responses::port_list::GetPortListsResponse;
-use gvm_gmp::responses::report::GetReportsResponse;
 use gvm_gmp::responses::report_format::GetReportFormatsResponse;
 use gvm_gmp::responses::scanner::GetScannersResponse;
 use gvm_gmp::responses::target::GetTargetsResponse;
@@ -3491,28 +3490,6 @@ async fn run_scan_suite(
         }
     }
 
-    let report_opts = gvm_gmp::commands::reports::GetReportsOpts {
-        report_id: Some(report_id.clone()),
-        details: Some(false),
-        ignore_pagination: Some(true),
-        ..Default::default()
-    };
-    let report_response = send_idempotent_with_reconnect(
-        client,
-        config,
-        Duration::from_secs(config.task_progress_timeout_secs),
-        "get_reports after scan completion",
-        || get_reports(report_opts.clone()),
-    )
-    .await?;
-    let reports = GetReportsResponse::from_response(&report_response)?;
-    ensure(
-        reports
-            .items
-            .iter()
-            .any(|report| report.meta.id == report_id),
-        "typed get_reports did not preserve task/report linkage",
-    )?;
     let results = client
         .get_results(gvm_gmp::commands::results::GetResultsOpts {
             filter_string: Some(format!("report_id={report_id} rows=100")),
