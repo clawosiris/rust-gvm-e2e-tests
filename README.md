@@ -1,174 +1,107 @@
 # rust-gvm-e2e-tests
 
-End-to-end integration tests for the [rust-gvm](https://github.com/clawosiris/rust-gvm) ecosystem — validating Rust GVM/OpenVAS tooling against a real Greenbone Community Edition container stack.
+Real-stack conformance tests for
+[rust-gvm](https://github.com/greenbone-hive/rust-gvm) against Greenbone
+Community Edition.
+The harness talks directly to `gvmd`, validates public typed response models,
+and cross-checks deterministic behavior with gvm-tools/python-gvm.
 
-## Architecture
+## Community coverage architecture
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                   rust-gvm-e2e-tests                     │
-│                                                          │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │ Layer 1       │  │ Layer 2       │  │ Validation    │  │
-│  │ rust-gvm lib  │  │ gvm-rools CLI │  │ gvm-tools     │  │
-│  │ (GMP socket)  │  │ (gvm-cli)     │  │ (cross-check) │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬────────┘  │
-│         └────────┬────────┘                  │           │
-│                  ▼                           ▼           │
-│  ┌─────────────────────────────────────────────────────┐ │
-│  │           GVM Community Stack (Docker Compose)       │ │
-│  │  gvmd · ospd-openvas · openvasd · PostgreSQL · Redis │ │
-│  │  + feed containers (VTs, SCAP, CERT, data-objects)   │ │
-│  └─────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────┘
-```
+Coverage policy has one source of truth:
 
-## What This Tests
+- [coverage/manifest.json](coverage/manifest.json) is the machine inventory;
+- [docs/community-coverage.md](docs/community-coverage.md) is generated from it;
+- `tests/library/src/generated_manifest.rs` compile-references every typed
+  helper and compares all registered wire commands with
+  `COMMAND_CAPABILITIES`;
+- [baselines/community-stable.json](baselines/community-stable.json) pins the
+  Community tag, GMP version, rust-gvm SHA, features, and conditional
+  availability discovered from version/features/help.
 
-This repo validates the **full stack** — from Rust client code through CLI tools down to a real gvmd instance with real feed data. It catches issues that unit tests and mock servers cannot:
-
-- Feed-dependent behavior (scan configs only exist after feed sync)
-- Server-side validation quirks (e.g., `PORT_LIST` required for `create_target`)
-- Real PostgreSQL state management
-- Scanner registration and scan execution
-- Protocol compatibility with actual gvmd versions
-
-## Test Suites
-
-See [docs/test-cases.md](docs/test-cases.md) for a detailed breakdown of all 60+ test points.
-
-
-### Suite 1: Smoke Tests (rust-gvm library)
-Core protocol validation via Unix socket connection to gvmd.
-
-| Test | Description |
-|------|-------------|
-| 01 | Version negotiation (GMP 22.7+) |
-| 02 | Authentication |
-| 03 | List scan configs (feed-dependent) |
-| 04 | List scanners |
-| 05 | List report formats |
-| 06 | List port lists |
-| 07 | Create target (with port list) |
-| 08 | Get target by UUID |
-| 09 | Delete target |
-| 10 | Verify deletion |
-
-Extended (opt-in with `run-scan: true`):
-- Create task with real scan config → start → poll → stop → get report
-
-### Suite 2: CRUD Tests
-Full create → get → delete → verify-absent lifecycle for:
-- Port lists, Credentials, Schedules, Filters
-- Tasks, Notes, Overrides, Tags, Alerts
-
-### Suite 3: SecInfo Tests
-Read-only queries against feed data:
-- `get_feeds` — feed status
-- `get_cves`, `get_cpes` — vulnerability data
-- `get_cert_bund_advisories`, `get_dfn_cert_advisories` — CERT data
-- `get_nvts` — vulnerability tests
-
-### Suite 4: CLI Tests (gvm-rools)
-Tests `gvm-cli` command-line tool end-to-end.
-
-| Test | Description |
-|------|-------------|
-| 01 | `get_version` (unauthenticated) |
-| 02 | Authenticated `get_scanners` |
-| 03 | Pretty-print `get_scan_configs` |
-| 04 | Create target via XML |
-| 05 | Delete target |
-| 06 | `--duration` timing output |
-| 07 | Wrong password non-zero exit |
-| 08 | `--raw` XML passthrough |
-| 09 | Non-existent socket error |
-
-### Validation: gvm-tools Cross-Check
-By default, all test results are validated against python `gvm-tools` to ensure consistency between implementations. This runs on success (configurable) and always on failure for fault isolation.
-
-## Running
-
-### Manual (GitHub Actions)
-Trigger via **workflow_dispatch** at [Actions → E2E Tests → Run workflow](../../actions/workflows/e2e.yml):
-
-| Input | Default | Description |
-|-------|---------|-------------|
-| `rust-gvm-ref` | `devel` | rust-gvm branch/tag/SHA to test |
-| `gvm-rools-ref` | `main` | gvm-rools branch/tag/SHA to test |
-| `gvm-version` | `stable` | GVM runtime image tag to test |
-| `run-scan` | `false` | Run extended scan test (~10min+) |
-| `clean` | `false` | Destroy volumes for fresh environment |
-| `validate-gvm-tools` | `true` | Cross-validate results with gvm-tools |
-
-`gvm-version` is applied to the runtime stack images (`gvmd`, `ospd-openvas`, `openvas-scanner`, `pg-gvm`, `redis-server`, `gpg-data`, and `gsad`). The default `stable` tag is the supported CI baseline. Other tags, such as `oldstable`, `edge`, or release-specific tags like `22.4`/`23.x`, are useful for compatibility checks when the Greenbone registry publishes the tag across all runtime images. Use `clean=true` when switching stack versions on a persistent runner to avoid reusing incompatible database or feed volumes.
-
-### Cross-Repo Triggering
-Component repos can trigger E2E tests via `repository_dispatch`:
+Regenerate or check against a current rust-gvm checkout:
 
 ```bash
-gh api repos/clawosiris/rust-gvm-e2e-tests/dispatches \
-  -f event_type=component-updated \
-  -f client_payload='{"component":"rust-gvm","ref":"my-branch","gvm-version":"stable"}'
+python3 tools/coverage_manifest.py --rust-gvm-source ../rust-gvm
+python3 tools/coverage_manifest.py --check --rust-gvm-source ../rust-gvm
 ```
 
-## Infrastructure
+Adding/removing a registry command or public typed helper without updating the
+policy fails generation, compilation, or inventory tests.
 
-### Self-Hosted Runner
-Tests run on a permanent Hetzner VPS runner with Docker. Persistent volumes keep GVM feed data between runs:
-- **Clean run** (`clean=true`): Full feed sync (~60-90 min)
-- **Warm run** (`clean=false`): Reuses cached feed data (~13 min)
+## Executable lanes
 
-### Runner Image
-A custom Docker image (`rust-gvm-e2e-runner`) is built in CI with:
-- Pre-compiled `gvm-community-e2e` binary (Rust test harness)
-- Pre-compiled `gvm-cli` from gvm-rools (CLI tests)
-- `python-gvm` / `gvm-tools` for validation cross-checks
+| Lane | Role | Volumes |
+|---|---|---|
+| `devel-fast` | Blocking typed discovery, safe reads, reversible CRUD, CLI | Warm shared |
+| `devel-scan` | Deterministic TCP fixture scan, task state, report/result/export | Warm shared |
+| `devel-isolated` | Admin, global setting restore, trashcan operations | Separate project |
+| `devel-transport` | Explicit TLS, mTLS, SSH endpoints | Opt-in |
+| `differential` | Blocking semantic parity with python-gvm | Opt-in |
 
-### GVM Community Stack
-Standard Greenbone Community Edition containers:
-- `gvmd` — vulnerability manager (core)
-- `ospd-openvas` — scanner daemon
-- `openvasd` — notus service
-- `pg-gvm` — PostgreSQL backend
-- `redis-server` — scanner KV store
-- Feed containers — VTs, SCAP, CERT, data-objects, report-formats
+Ordinary fast and scan jobs intentionally reuse warm feed volumes. Initializing
+a fresh feed is known to exceed the normal two-hour readiness budget. Volume
+deletion happens only with the explicit `clean` workflow input.
 
-## Repository Structure
+Before checkout, each self-hosted lane loads the run's already-built runner
+image from runner-temporary storage and uses that exact image as root to restore
+host ownership of an existing, non-symlink `artifacts` directory itself.
+Checkout then runs with `clean: false`; the lane script retains responsibility
+for deleting only the selected lane's known artifact files.
 
-```
-rust-gvm-e2e-tests/
-├── .github/workflows/
-│   └── e2e.yml                 # CI workflow
-├── docker/
-│   ├── docker-compose.yml      # GVM Community stack
-│   ├── Dockerfile.runner       # Test runner image
-│   └── scripts/
-│       ├── wait-ready.sh       # Stack readiness check
-│       ├── run-smoke.sh        # Test orchestrator
-│       └── validate-against-gvm-tools.py  # Cross-validation
-├── tests/
-│   ├── library/                # Rust test harness
-│   │   ├── Cargo.toml
-│   │   └── src/main.rs
-│   └── cli/                    # CLI bash tests
-│       └── smoke.sh
-├── spec/
-│   └── e2e-test-spec.md        # Design specification
-├── journal/
-│   └── *.md                    # Development journal
-├── Cargo.toml                  # Workspace root
-└── README.md
+The test details are in [docs/test-cases.md](docs/test-cases.md). Each lane
+publishes structured JSON with pass/fail/known-upstream-bug/conditional/excluded
+counts, exact rust-gvm SHA, GMP version, runtime tags/digests, feature/help
+evidence, and all observations.
+
+## Run locally on a Docker host
+
+Build the runner, start the warm stack, and execute a lane:
+
+```bash
+docker build -f docker/Dockerfile.runner \
+  --build-arg RUST_GVM_REF=e47dd8cabb199503517d8854358811601c923fe6 \
+  -t rust-gvm-e2e-runner:ci .
+bash docker/scripts/run-community-lane.sh devel-fast
 ```
 
-## Roadmap
+The lane script uses a unique `E2E_RUN_ID`, records exact images, and always
+stops containers while preserving volumes. Override `E2E_RUN_ID` for
+reproduction. Set `E2E_RECORD_BASELINE=1` only to produce a reviewed candidate
+artifact; normal runs enforce the checked-in baseline.
 
-| Phase | Status | Description |
-|-------|--------|-------------|
-| **1** | ✅ Done | Library + CLI tests via Unix socket |
-| **2** | 🔜 Planned | Multi-version GVM stack testing ([#16](../../issues/16)) |
-| **3** | Planned | REST/gRPC API tests (rust-gvm-api) |
-| **4** | Planned | MCP server tests (openvas-mcp-server) |
+## Cleanup safety
+
+Every created entity begins with `rust-gvm-e2e-<run-id>-`. Preflight cleanup
+only selects that namespace (plus the historical fixed names from issue #7).
+Deletion is dependency ordered: tickets/tasks before targets/configs/scanners,
+then access/report resources and supporting entities. Final cleanup
+authenticates independently, accepts only explicit success/already-absent
+statuses, and also runs during unwind.
+
+## Community boundary
+
+Agent management and OCI/container-image target management/scanning are never
+required. Those exact issue #118 capabilities are visible as
+`excluded-community`; all other uncertain Community functionality is probed
+and recorded conditionally. The `scan-fixture` Nginx container is an ordinary
+network service target, not an OCI image target.
+
+## Validation
+
+```bash
+cargo fmt --all --check
+cargo check --workspace --all-targets
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+python3 -m unittest discover -s tools -p 'test_*.py'
+bash -n docker/scripts/*.sh tests/cli/*.sh
+bash docker/scripts/test-community-lane-artifacts.sh
+docker compose -f docker/docker-compose.yml config --quiet
+```
+
+The authoritative live validation runs on the repository’s self-hosted Docker
+runner through [Community E2E](.github/workflows/e2e.yml).
 
 ## License
 

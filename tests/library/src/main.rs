@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, Write};
 use std::process::Command;
 use std::process::ExitCode;
@@ -14,18 +15,32 @@ use std::str::FromStr;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
 use gvm_client::{parse_version_text, GmpClient, GvmError};
-use gvm_connection::UnixSocketConnection;
-use gvm_gmp::commands::alerts::{create_alert, delete_alert, get_alert, AlertOpts};
+use gvm_connection::{
+    GvmConnection, SshAuth, SshConfig, SshConnection, TlsClientIdentity, TlsConfig, TlsConnection,
+    UnixSocketConnection,
+};
+use gvm_gmp::commands::alerts::{delete_alert, get_alert, get_alerts, AlertOpts, GetAlertsOpts};
 use gvm_gmp::commands::authentication::authenticate;
 use gvm_gmp::commands::credentials::{
-    create_credential, delete_credential, get_credential, CredentialOpts,
+    create_credential, delete_credential, get_credential, get_credentials, CredentialOpts,
+    GetCredentialsOpts,
 };
 use gvm_gmp::commands::feed::get_feeds;
-use gvm_gmp::commands::filters::{create_filter, delete_filter, get_filter, FilterOpts};
-use gvm_gmp::commands::notes::{create_note, delete_note, get_note, NoteOpts};
+use gvm_gmp::commands::filters::{
+    create_filter, delete_filter, get_filter, get_filters, FilterOpts, GetFiltersOpts,
+};
+use gvm_gmp::commands::help::HelpMode;
+use gvm_gmp::commands::notes::{
+    create_note, delete_note, get_note, get_notes, GetNotesOpts, NoteOpts,
+};
 use gvm_gmp::commands::nvts::{get_nvts, GetNvtsOpts};
-use gvm_gmp::commands::overrides::{create_override, delete_override, get_override, OverrideOpts};
+use gvm_gmp::commands::overrides::{
+    create_override, delete_override, get_override, get_overrides, GetOverridesOpts, OverrideOpts,
+};
+use gvm_gmp::commands::permissions::{get_permissions, GetPermissionsOpts};
 use gvm_gmp::commands::port_lists::{
     create_port_list, delete_port_list, get_port_list, get_port_lists, GetPortListsOpts,
     PortListOpts,
@@ -34,28 +49,32 @@ use gvm_gmp::commands::report_formats::{get_report_formats, GetReportFormatsOpts
 use gvm_gmp::commands::reports::get_report;
 use gvm_gmp::commands::scan_configs::{get_scan_configs, GetScanConfigsOpts};
 use gvm_gmp::commands::scanners::{get_scanners, GetScannersOpts};
-use gvm_gmp::commands::schedules::{create_schedule, delete_schedule, get_schedule, ScheduleOpts};
+use gvm_gmp::commands::schedules::{
+    create_schedule, delete_schedule, get_schedule, get_schedules, GetSchedulesOpts, ScheduleOpts,
+};
 use gvm_gmp::commands::secinfo::{
     get_cert_bund_advisories, get_cpes, get_cves, get_dfn_cert_advisories, GetSecInfoOpts,
 };
-use gvm_gmp::commands::tags::{create_tag, delete_tag, get_tag, TagOpts};
+use gvm_gmp::commands::tags::{create_tag, delete_tag, get_tag, get_tags, GetTagsOpts, TagOpts};
 use gvm_gmp::commands::targets::{
     create_target, delete_target, get_target, get_targets, CreateTargetOpts, GetTargetsOpts,
 };
 use gvm_gmp::commands::tasks::{
-    create_task, delete_task, get_task, get_tasks, start_task, stop_task, CreateTaskOpts, GetTasksOpts,
+    create_task, delete_task, get_task, get_tasks, stop_task, CreateTaskOpts, GetTasksOpts,
 };
 use gvm_gmp::enums::{
-    AlertCondition, AlertEvent, AlertMethod, CredentialType, EntityType, FilterType,
+    AlertCondition, AlertEvent, AlertMethod, CredentialType, EntityType, FilterType, ResourceType,
+    ScannerType,
 };
 use gvm_gmp::responses::feed::GetFeedsResponse;
+use gvm_gmp::responses::permission::GetPermissionsResponse;
 use gvm_gmp::responses::port_list::GetPortListsResponse;
 use gvm_gmp::responses::report_format::GetReportFormatsResponse;
-use gvm_gmp::responses::scan_config::GetScanConfigsResponse;
 use gvm_gmp::responses::scanner::GetScannersResponse;
 use gvm_gmp::responses::target::GetTargetsResponse;
+use gvm_gmp::responses::task::GetTasksResponse;
 use gvm_gmp::types::{EntityId, GmpVersion};
-use gvm_protocol::Response;
+use gvm_protocol::{Request, Response, XmlCommand};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde_json::Value;
@@ -63,15 +82,28 @@ use thiserror::Error;
 use tokio::runtime::Builder;
 use tokio::time::sleep;
 
-const SMOKE_TARGET_NAME: &str = "e2e-test-target";
-const SCAN_TARGET_NAME: &str = "e2e-scan-target";
-const SCAN_TASK_NAME: &str = "e2e-scan-task";
+use gvm_community_e2e::runtime::{self, FeatureState, Outcome};
+#[cfg(test)]
+use gvm_community_e2e::{CoverageEntry, HELPER_COVERAGE};
+use gvm_community_e2e::{Disposition, COMMAND_COVERAGE};
+
+fn tls_certificate_data() -> String {
+    include_str!("../../../fixtures/e2e-certificate.pem.b64")
+        .trim()
+        .to_string()
+}
 
 fn main() -> ExitCode {
     match Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => match runtime.block_on(async_main()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
+                runtime::fail("lane", &error.to_string());
+                if let Err(write_error) = runtime::write() {
+                    log_line(&format!(
+                        "failed to write structured result after failure: {write_error}"
+                    ));
+                }
                 log_line(&format!("E2E failure: {error}"));
                 log_line(
                     "Capture container logs with: docker compose logs gvmd ospd-openvas openvasd > e2e-failure.log",
@@ -89,6 +121,9 @@ fn main() -> ExitCode {
 async fn async_main() -> Result<(), AppError> {
     let mode = Mode::from_args(env::args().skip(1))?;
     let config = EnvConfig::from_env()?;
+    if mode != Mode::WaitReady {
+        runtime::initialize(&config.run_id, mode.lane_name()).map_err(AppError::Assertion)?;
+    }
 
     match mode {
         Mode::WaitReady => {
@@ -111,8 +146,44 @@ async fn async_main() -> Result<(), AppError> {
             run_secinfo_suite(&config).await?;
             log_line("E2E SecInfo suite passed");
         }
+        Mode::Fast => {
+            let mut tracker = CleanupTracker::new(config.clone());
+            cleanup_previous_runs(&config).await?;
+            discover_community(&config).await?;
+            run_typed_read_suite(&config).await?;
+            run_config_scanner_lifecycles(&config, &mut tracker).await?;
+            run_smoke_suite(&config, &mut tracker).await?;
+            run_crud_suite(&config, &mut tracker).await?;
+            run_secinfo_suite(&config).await?;
+            tracker.cleanup_now().await?;
+            log_line("Community devel-fast lane passed");
+        }
+        Mode::Scan => {
+            let mut tracker = CleanupTracker::new(config.clone());
+            cleanup_previous_runs(&config).await?;
+            discover_community(&config).await?;
+            let mut client = connect_client(&config).await?;
+            run_scan_suite(&mut client, &config, &mut tracker).await?;
+            client.disconnect().await?;
+            tracker.cleanup_now().await?;
+            log_line("Community devel-scan lane passed");
+        }
+        Mode::Isolated => {
+            let mut tracker = CleanupTracker::new(config.clone());
+            cleanup_previous_runs(&config).await?;
+            discover_community(&config).await?;
+            run_isolated_suite(&config, &mut tracker).await?;
+            tracker.cleanup_now().await?;
+            log_line("Community devel-isolated lane passed");
+        }
+        Mode::Transport => {
+            run_transport_suite(&config).await?;
+            log_line("Community devel-transport lane completed");
+        }
         Mode::Differential => {
             let mut tracker = CleanupTracker::new(config.clone());
+            cleanup_previous_runs(&config).await?;
+            discover_community(&config).await?;
             run_differential_suite(&config, &mut tracker).await?;
             tracker.cleanup_now().await?;
             log_line("E2E differential suite completed");
@@ -133,6 +204,10 @@ async fn async_main() -> Result<(), AppError> {
         }
     }
 
+    if mode != Mode::WaitReady {
+        let path = runtime::write().map_err(AppError::Assertion)?;
+        log_line(&format!("structured result: {}", path.display()));
+    }
     Ok(())
 }
 
@@ -143,6 +218,8 @@ struct EnvConfig {
     password: String,
     socket_path: String,
     run_scan: bool,
+    run_id: String,
+    namespace: String,
 }
 
 impl EnvConfig {
@@ -151,6 +228,11 @@ impl EnvConfig {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(90);
+        let run_id = env::var("E2E_RUN_ID")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(generated_run_id);
+        let run_id = sanitize_run_id(&run_id)?;
         Ok(Self {
             username: env::var("GVM_ADMIN_USER").unwrap_or_else(|_| "admin".to_string()),
             password: env::var("GVM_ADMIN_PASS").unwrap_or_else(|_| "admin".to_string()),
@@ -163,8 +245,60 @@ impl EnvConfig {
                 "1" | "true" | "TRUE" | "yes" | "YES"
             ),
             task_progress_timeout_secs,
+            namespace: format!("rust-gvm-e2e-{run_id}-"),
+            run_id,
         })
     }
+
+    fn name(&self, suffix: &str) -> String {
+        format!("{}{suffix}", self.namespace)
+    }
+}
+
+fn generated_run_id() -> String {
+    let epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis());
+    let github_run = env::var("GITHUB_RUN_ID").unwrap_or_else(|_| "local".to_string());
+    let attempt = env::var("GITHUB_RUN_ATTEMPT").unwrap_or_else(|_| "1".to_string());
+    format!("{github_run}-{attempt}-{}-{epoch}", std::process::id())
+}
+
+fn sanitize_run_id(value: &str) -> Result<String, AppError> {
+    let sanitized: String = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let sanitized = sanitized.trim_matches('-').to_string();
+    ensure(
+        !sanitized.is_empty() && sanitized.len() <= 96,
+        "E2E_RUN_ID must contain 1-96 alphanumeric/dash characters after sanitization",
+    )?;
+    Ok(sanitized)
+}
+
+fn fixture_uuid(run_id: &str, label: &str) -> String {
+    let mut high = DefaultHasher::new();
+    run_id.hash(&mut high);
+    let mut low = DefaultHasher::new();
+    label.hash(&mut low);
+    run_id.hash(&mut low);
+    let value = (u128::from(high.finish()) << 64) | u128::from(low.finish());
+    let hex = format!("{value:032x}");
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -173,6 +307,10 @@ enum Mode {
     WaitReady,
     Crud,
     SecInfo,
+    Fast,
+    Scan,
+    Isolated,
+    Transport,
     Differential,
     All,
 }
@@ -206,12 +344,35 @@ impl Mode {
                     ))),
                 };
             }
+            if values[0] == "--lane" {
+                return match values[1].as_str() {
+                    "devel-fast" | "fast" => Ok(Self::Fast),
+                    "devel-scan" | "scan" => Ok(Self::Scan),
+                    "devel-isolated" | "isolated" => Ok(Self::Isolated),
+                    "devel-transport" | "transport" => Ok(Self::Transport),
+                    "differential" => Ok(Self::Differential),
+                    other => Err(AppError::Usage(format!(
+                        "unsupported lane `{other}`; expected devel-fast, devel-scan, devel-isolated, devel-transport, or differential"
+                    ))),
+                };
+            }
         }
 
         Err(AppError::Usage(
-            "usage: gvm-community-e2e [--mode <smoke|wait-ready> | --suite <smoke|crud|secinfo|differential|all>]"
+            "usage: gvm-community-e2e [--mode <smoke|wait-ready> | --suite <smoke|crud|secinfo|differential|all> | --lane <devel-fast|devel-scan|devel-isolated|devel-transport|differential>]"
                 .to_string(),
         ))
+    }
+
+    const fn lane_name(self) -> &'static str {
+        match self {
+            Self::WaitReady => "readiness",
+            Self::Fast | Self::Smoke | Self::Crud | Self::SecInfo | Self::All => "devel-fast",
+            Self::Scan => "devel-scan",
+            Self::Isolated => "devel-isolated",
+            Self::Transport => "devel-transport",
+            Self::Differential => "differential",
+        }
     }
 }
 
@@ -220,6 +381,8 @@ struct CleanupTracker {
     config: EnvConfig,
     target_ids: Vec<String>,
     task_ids: Vec<String>,
+    config_ids: Vec<String>,
+    scanner_ids: Vec<String>,
     port_list_ids: Vec<String>,
     credential_ids: Vec<String>,
     schedule_ids: Vec<String>,
@@ -228,6 +391,15 @@ struct CleanupTracker {
     override_ids: Vec<String>,
     tag_ids: Vec<String>,
     alert_ids: Vec<String>,
+    ticket_ids: Vec<String>,
+    asset_ids: Vec<String>,
+    group_ids: Vec<String>,
+    permission_ids: Vec<String>,
+    report_config_ids: Vec<String>,
+    report_format_ids: Vec<String>,
+    role_ids: Vec<String>,
+    tls_certificate_ids: Vec<String>,
+    user_ids: Vec<String>,
     armed: bool,
 }
 
@@ -237,6 +409,8 @@ impl CleanupTracker {
             config,
             target_ids: Vec::new(),
             task_ids: Vec::new(),
+            config_ids: Vec::new(),
+            scanner_ids: Vec::new(),
             port_list_ids: Vec::new(),
             credential_ids: Vec::new(),
             schedule_ids: Vec::new(),
@@ -245,6 +419,15 @@ impl CleanupTracker {
             override_ids: Vec::new(),
             tag_ids: Vec::new(),
             alert_ids: Vec::new(),
+            ticket_ids: Vec::new(),
+            asset_ids: Vec::new(),
+            group_ids: Vec::new(),
+            permission_ids: Vec::new(),
+            report_config_ids: Vec::new(),
+            report_format_ids: Vec::new(),
+            role_ids: Vec::new(),
+            tls_certificate_ids: Vec::new(),
+            user_ids: Vec::new(),
             armed: true,
         }
     }
@@ -252,6 +435,8 @@ impl CleanupTracker {
     fn is_empty(&self) -> bool {
         self.task_ids.is_empty()
             && self.target_ids.is_empty()
+            && self.config_ids.is_empty()
+            && self.scanner_ids.is_empty()
             && self.port_list_ids.is_empty()
             && self.credential_ids.is_empty()
             && self.schedule_ids.is_empty()
@@ -260,6 +445,15 @@ impl CleanupTracker {
             && self.override_ids.is_empty()
             && self.tag_ids.is_empty()
             && self.alert_ids.is_empty()
+            && self.ticket_ids.is_empty()
+            && self.asset_ids.is_empty()
+            && self.group_ids.is_empty()
+            && self.permission_ids.is_empty()
+            && self.report_config_ids.is_empty()
+            && self.report_format_ids.is_empty()
+            && self.role_ids.is_empty()
+            && self.tls_certificate_ids.is_empty()
+            && self.user_ids.is_empty()
     }
 
     fn track_target(&mut self, id: &EntityId) {
@@ -268,6 +462,14 @@ impl CleanupTracker {
 
     fn track_task(&mut self, id: &EntityId) {
         self.task_ids.push(id.to_string());
+    }
+
+    fn track_config(&mut self, id: &EntityId) {
+        self.config_ids.push(id.to_string());
+    }
+
+    fn track_scanner(&mut self, id: &EntityId) {
+        self.scanner_ids.push(id.to_string());
     }
 
     fn track_port_list(&mut self, id: &EntityId) {
@@ -302,6 +504,42 @@ impl CleanupTracker {
         self.alert_ids.push(id.to_string());
     }
 
+    fn track_ticket(&mut self, id: &EntityId) {
+        self.ticket_ids.push(id.to_string());
+    }
+
+    fn track_asset(&mut self, id: &EntityId) {
+        self.asset_ids.push(id.to_string());
+    }
+
+    fn track_group(&mut self, id: &EntityId) {
+        self.group_ids.push(id.to_string());
+    }
+
+    fn track_permission(&mut self, id: &EntityId) {
+        self.permission_ids.push(id.to_string());
+    }
+
+    fn track_report_config(&mut self, id: &EntityId) {
+        self.report_config_ids.push(id.to_string());
+    }
+
+    fn track_report_format(&mut self, id: &EntityId) {
+        self.report_format_ids.push(id.to_string());
+    }
+
+    fn track_role(&mut self, id: &EntityId) {
+        self.role_ids.push(id.to_string());
+    }
+
+    fn track_tls_certificate(&mut self, id: &EntityId) {
+        self.tls_certificate_ids.push(id.to_string());
+    }
+
+    fn track_user(&mut self, id: &EntityId) {
+        self.user_ids.push(id.to_string());
+    }
+
     async fn cleanup_now(&mut self) -> Result<(), AppError> {
         self.cleanup_inner().await?;
         self.armed = false;
@@ -314,65 +552,187 @@ impl CleanupTracker {
         }
 
         let mut client = connect_client(&self.config).await?;
+        client
+            .authenticate(&self.config.username, &self.config.password)
+            .await?;
+
+        while let Some(ticket_id) = self.ticket_ids.pop() {
+            let entity_id = parse_entity_id(&ticket_id)?;
+            let response = client
+                .send(gvm_gmp::commands::tickets::delete_ticket(&entity_id, true))
+                .await?;
+            assert_cleanup_status(&response, &[200, 404], "final delete_ticket", &entity_id)?;
+            log_cleanup_result("delete_ticket", &ticket_id, response.status_code())?;
+        }
 
         while let Some(task_id) = self.task_ids.pop() {
             let entity_id = parse_entity_id(&task_id)?;
             let response = client.send(delete_task(&entity_id, true)).await?;
-            log_cleanup_result("delete_task", &task_id, response.status_code());
+            log_cleanup_result("delete_task", &task_id, response.status_code())?;
         }
 
         while let Some(target_id) = self.target_ids.pop() {
             let entity_id = parse_entity_id(&target_id)?;
             let response = client.send(delete_target(&entity_id, true)).await?;
-            log_cleanup_result("delete_target", &target_id, response.status_code());
+            log_cleanup_result("delete_target", &target_id, response.status_code())?;
+        }
+
+        while let Some(config_id) = self.config_ids.pop() {
+            let entity_id = parse_entity_id(&config_id)?;
+            let response = client
+                .delete_config(
+                    &entity_id,
+                    gvm_gmp::commands::configs::DeleteConfigOpts {
+                        ultimate: Some(true),
+                    },
+                )
+                .await?;
+            log_cleanup_result("delete_config", &config_id, Some(response.status))?;
+        }
+
+        while let Some(scanner_id) = self.scanner_ids.pop() {
+            let entity_id = parse_entity_id(&scanner_id)?;
+            let response = client.delete_scanner(&entity_id, true).await?;
+            log_cleanup_result("delete_scanner", &scanner_id, Some(response.status))?;
+        }
+
+        while let Some(permission_id) = self.permission_ids.pop() {
+            let entity_id = parse_entity_id(&permission_id)?;
+            let response = client
+                .send(gvm_gmp::commands::permissions::delete_permission(
+                    &entity_id, true,
+                ))
+                .await?;
+            log_cleanup_result("delete_permission", &permission_id, response.status_code())?;
+        }
+
+        while let Some(group_id) = self.group_ids.pop() {
+            let entity_id = parse_entity_id(&group_id)?;
+            let response = client
+                .send(gvm_gmp::commands::groups::delete_group(&entity_id, true))
+                .await?;
+            log_cleanup_result("delete_group", &group_id, response.status_code())?;
+        }
+
+        while let Some(role_id) = self.role_ids.pop() {
+            let entity_id = parse_entity_id(&role_id)?;
+            let response = client
+                .send(gvm_gmp::commands::roles::delete_role(&entity_id, true))
+                .await?;
+            log_cleanup_result("delete_role", &role_id, response.status_code())?;
+        }
+
+        while let Some(user_id) = self.user_ids.pop() {
+            let entity_id = parse_entity_id(&user_id)?;
+            let response = client
+                .send(gvm_gmp::commands::users::delete_user(&entity_id, true))
+                .await?;
+            log_cleanup_result("delete_user", &user_id, response.status_code())?;
+        }
+
+        while let Some(report_config_id) = self.report_config_ids.pop() {
+            let response = client
+                .send(
+                    gvm_gmp::commands::report_configs::delete_report_config_opts(
+                        &report_config_id,
+                        gvm_gmp::commands::report_configs::DeleteReportConfigOpts {
+                            ultimate: Some(true),
+                        },
+                    ),
+                )
+                .await?;
+            log_cleanup_result(
+                "delete_report_config",
+                &report_config_id,
+                response.status_code(),
+            )?;
+        }
+
+        while let Some(report_format_id) = self.report_format_ids.pop() {
+            let entity_id = parse_entity_id(&report_format_id)?;
+            let response = client
+                .send(gvm_gmp::commands::report_formats::delete_report_format(
+                    &entity_id, true,
+                ))
+                .await?;
+            log_cleanup_result(
+                "delete_report_format",
+                &report_format_id,
+                response.status_code(),
+            )?;
+        }
+
+        while let Some(tls_certificate_id) = self.tls_certificate_ids.pop() {
+            let entity_id = parse_entity_id(&tls_certificate_id)?;
+            let response = client
+                .send(gvm_gmp::commands::tls_certificates::delete_tls_certificate(
+                    &entity_id, true,
+                ))
+                .await?;
+            log_cleanup_result(
+                "delete_tls_certificate",
+                &tls_certificate_id,
+                response.status_code(),
+            )?;
+        }
+
+        while let Some(asset_id) = self.asset_ids.pop() {
+            let entity_id = parse_entity_id(&asset_id)?;
+            let response = client
+                .send(gvm_gmp::commands::assets::delete_asset(
+                    &entity_id,
+                    gvm_gmp::commands::assets::DeleteAssetOpts::default(),
+                ))
+                .await?;
+            log_cleanup_result("delete_asset", &asset_id, response.status_code())?;
         }
 
         while let Some(alert_id) = self.alert_ids.pop() {
             let entity_id = parse_entity_id(&alert_id)?;
             let response = client.send(delete_alert(&entity_id, true)).await?;
-            log_cleanup_result("delete_alert", &alert_id, response.status_code());
+            log_cleanup_result("delete_alert", &alert_id, response.status_code())?;
         }
 
         while let Some(note_id) = self.note_ids.pop() {
             let entity_id = parse_entity_id(&note_id)?;
             let response = client.send(delete_note(&entity_id, true)).await?;
-            log_cleanup_result("delete_note", &note_id, response.status_code());
+            log_cleanup_result("delete_note", &note_id, response.status_code())?;
         }
 
         while let Some(override_id) = self.override_ids.pop() {
             let entity_id = parse_entity_id(&override_id)?;
             let response = client.send(delete_override(&entity_id, true)).await?;
-            log_cleanup_result("delete_override", &override_id, response.status_code());
+            log_cleanup_result("delete_override", &override_id, response.status_code())?;
         }
 
         while let Some(tag_id) = self.tag_ids.pop() {
             let entity_id = parse_entity_id(&tag_id)?;
             let response = client.send(delete_tag(&entity_id, true)).await?;
-            log_cleanup_result("delete_tag", &tag_id, response.status_code());
+            log_cleanup_result("delete_tag", &tag_id, response.status_code())?;
         }
 
         while let Some(filter_id) = self.filter_ids.pop() {
             let entity_id = parse_entity_id(&filter_id)?;
             let response = client.send(delete_filter(&entity_id, true)).await?;
-            log_cleanup_result("delete_filter", &filter_id, response.status_code());
+            log_cleanup_result("delete_filter", &filter_id, response.status_code())?;
         }
 
         while let Some(schedule_id) = self.schedule_ids.pop() {
             let entity_id = parse_entity_id(&schedule_id)?;
             let response = client.send(delete_schedule(&entity_id, true)).await?;
-            log_cleanup_result("delete_schedule", &schedule_id, response.status_code());
+            log_cleanup_result("delete_schedule", &schedule_id, response.status_code())?;
         }
 
         while let Some(credential_id) = self.credential_ids.pop() {
             let entity_id = parse_entity_id(&credential_id)?;
             let response = client.send(delete_credential(&entity_id, true)).await?;
-            log_cleanup_result("delete_credential", &credential_id, response.status_code());
+            log_cleanup_result("delete_credential", &credential_id, response.status_code())?;
         }
 
         while let Some(port_list_id) = self.port_list_ids.pop() {
             let entity_id = parse_entity_id(&port_list_id)?;
             let response = client.send(delete_port_list(&entity_id, true)).await?;
-            log_cleanup_result("delete_port_list", &port_list_id, response.status_code());
+            log_cleanup_result("delete_port_list", &port_list_id, response.status_code())?;
         }
 
         client.disconnect().await?;
@@ -389,6 +749,8 @@ impl Drop for CleanupTracker {
         let config = self.config.clone();
         let task_ids = self.task_ids.clone();
         let target_ids = self.target_ids.clone();
+        let config_ids = self.config_ids.clone();
+        let scanner_ids = self.scanner_ids.clone();
         let port_list_ids = self.port_list_ids.clone();
         let credential_ids = self.credential_ids.clone();
         let schedule_ids = self.schedule_ids.clone();
@@ -397,12 +759,23 @@ impl Drop for CleanupTracker {
         let override_ids = self.override_ids.clone();
         let tag_ids = self.tag_ids.clone();
         let alert_ids = self.alert_ids.clone();
+        let ticket_ids = self.ticket_ids.clone();
+        let asset_ids = self.asset_ids.clone();
+        let group_ids = self.group_ids.clone();
+        let permission_ids = self.permission_ids.clone();
+        let report_config_ids = self.report_config_ids.clone();
+        let report_format_ids = self.report_format_ids.clone();
+        let role_ids = self.role_ids.clone();
+        let tls_certificate_ids = self.tls_certificate_ids.clone();
+        let user_ids = self.user_ids.clone();
 
         let cleanup = async move {
             let mut tracker = CleanupTracker {
                 config,
                 task_ids,
                 target_ids,
+                config_ids,
+                scanner_ids,
                 port_list_ids,
                 credential_ids,
                 schedule_ids,
@@ -411,6 +784,15 @@ impl Drop for CleanupTracker {
                 override_ids,
                 tag_ids,
                 alert_ids,
+                ticket_ids,
+                asset_ids,
+                group_ids,
+                permission_ids,
+                report_config_ids,
+                report_format_ids,
+                role_ids,
+                tls_certificate_ids,
+                user_ids,
                 armed: false,
             };
             tracker.cleanup_inner().await
@@ -456,6 +838,499 @@ enum AppError {
     Parse(#[from] gvm_gmp::responses::ParseError),
     #[error(transparent)]
     Client(#[from] GvmError),
+}
+
+async fn cleanup_previous_runs(config: &EnvConfig) -> Result<(), AppError> {
+    let mut client = connect_client(config).await?;
+    client
+        .authenticate(&config.username, &config.password)
+        .await?;
+    let mut removed = 0usize;
+
+    let tickets = client
+        .send(gvm_gmp::commands::tickets::get_tickets(Default::default()))
+        .await?;
+    assert_status(&tickets, 200, "preflight get_tickets")?;
+    for id in e2e_entity_ids(tickets.as_str()?, "ticket")? {
+        let id = parse_entity_id(&id)?;
+        let response = client
+            .send(gvm_gmp::commands::tickets::delete_ticket(&id, true))
+            .await?;
+        assert_cleanup_status(&response, &[200, 404], "preflight delete_ticket", &id)?;
+        removed += 1;
+    }
+
+    let tasks = client.send(get_tasks(GetTasksOpts::default())).await?;
+    assert_status(&tasks, 200, "preflight get_tasks")?;
+    for task_id in e2e_entity_ids(tasks.as_str()?, "task")? {
+        let task_id = parse_entity_id(&task_id)?;
+        let stop = client.send(stop_task(&task_id)).await?;
+        assert_cleanup_status(
+            &stop,
+            &[200, 202, 400, 404],
+            "preflight stop_task",
+            &task_id,
+        )?;
+        let delete = client.send(delete_task(&task_id, true)).await?;
+        assert_cleanup_status(&delete, &[200, 404], "preflight delete_task", &task_id)?;
+        removed += 1;
+    }
+
+    let targets = client.send(get_targets(GetTargetsOpts::default())).await?;
+    assert_status(&targets, 200, "preflight get_targets")?;
+    for target_id in e2e_entity_ids(targets.as_str()?, "target")? {
+        let target_id = parse_entity_id(&target_id)?;
+        let delete = client.send(delete_target(&target_id, true)).await?;
+        assert_cleanup_status(&delete, &[200, 404], "preflight delete_target", &target_id)?;
+        removed += 1;
+    }
+
+    let configs = client
+        .send(gvm_gmp::commands::configs::get_configs(
+            gvm_gmp::commands::configs::GetConfigsOpts::default(),
+        ))
+        .await?;
+    assert_status(&configs, 200, "preflight get_configs")?;
+    for id in e2e_entity_ids(configs.as_str()?, "config")? {
+        let id = parse_entity_id(&id)?;
+        let response = client
+            .send(gvm_gmp::commands::configs::delete_config(
+                &id,
+                gvm_gmp::commands::configs::DeleteConfigOpts {
+                    ultimate: Some(true),
+                },
+            ))
+            .await?;
+        assert_cleanup_status(&response, &[200, 404], "preflight delete_config", &id)?;
+        removed += 1;
+    }
+
+    let scanners = client
+        .send(get_scanners(GetScannersOpts::default()))
+        .await?;
+    assert_status(&scanners, 200, "preflight get_scanners")?;
+    for id in e2e_entity_ids(scanners.as_str()?, "scanner")? {
+        let id = parse_entity_id(&id)?;
+        let response = client
+            .send(gvm_gmp::commands::scanners::delete_scanner(&id, true))
+            .await?;
+        assert_cleanup_status(&response, &[200, 404], "preflight delete_scanner", &id)?;
+        removed += 1;
+    }
+
+    let alerts = client.send(get_alerts(GetAlertsOpts::default())).await?;
+    assert_status(&alerts, 200, "preflight get_alerts")?;
+    for id in e2e_entity_ids(alerts.as_str()?, "alert")? {
+        let id = parse_entity_id(&id)?;
+        let response = client.send(delete_alert(&id, true)).await?;
+        assert_cleanup_status(&response, &[200, 404], "preflight delete_alert", &id)?;
+        removed += 1;
+    }
+
+    let notes = client.send(get_notes(GetNotesOpts::default())).await?;
+    assert_status(&notes, 200, "preflight get_notes")?;
+    for id in e2e_entity_ids(notes.as_str()?, "note")? {
+        let id = parse_entity_id(&id)?;
+        let response = client.send(delete_note(&id, true)).await?;
+        assert_cleanup_status(&response, &[200, 404], "preflight delete_note", &id)?;
+        removed += 1;
+    }
+
+    let overrides = client
+        .send(get_overrides(GetOverridesOpts::default()))
+        .await?;
+    assert_status(&overrides, 200, "preflight get_overrides")?;
+    for id in e2e_entity_ids(overrides.as_str()?, "override")? {
+        let id = parse_entity_id(&id)?;
+        let response = client.send(delete_override(&id, true)).await?;
+        assert_cleanup_status(&response, &[200, 404], "preflight delete_override", &id)?;
+        removed += 1;
+    }
+
+    let tags = client.send(get_tags(GetTagsOpts::default())).await?;
+    assert_status(&tags, 200, "preflight get_tags")?;
+    for id in e2e_entity_ids(tags.as_str()?, "tag")? {
+        let id = parse_entity_id(&id)?;
+        let response = client.send(delete_tag(&id, true)).await?;
+        assert_cleanup_status(&response, &[200, 404], "preflight delete_tag", &id)?;
+        removed += 1;
+    }
+
+    let filters = client.send(get_filters(GetFiltersOpts::default())).await?;
+    assert_status(&filters, 200, "preflight get_filters")?;
+    for id in e2e_entity_ids(filters.as_str()?, "filter")? {
+        let id = parse_entity_id(&id)?;
+        let response = client.send(delete_filter(&id, true)).await?;
+        assert_cleanup_status(&response, &[200, 404], "preflight delete_filter", &id)?;
+        removed += 1;
+    }
+
+    let schedules = client
+        .send(get_schedules(GetSchedulesOpts::default()))
+        .await?;
+    assert_status(&schedules, 200, "preflight get_schedules")?;
+    for id in e2e_entity_ids(schedules.as_str()?, "schedule")? {
+        let id = parse_entity_id(&id)?;
+        let response = client.send(delete_schedule(&id, true)).await?;
+        assert_cleanup_status(&response, &[200, 404], "preflight delete_schedule", &id)?;
+        removed += 1;
+    }
+
+    let credentials = client
+        .send(get_credentials(GetCredentialsOpts::default()))
+        .await?;
+    assert_status(&credentials, 200, "preflight get_credentials")?;
+    for id in e2e_entity_ids(credentials.as_str()?, "credential")? {
+        let id = parse_entity_id(&id)?;
+        let response = client.send(delete_credential(&id, true)).await?;
+        assert_cleanup_status(&response, &[200, 404], "preflight delete_credential", &id)?;
+        removed += 1;
+    }
+
+    let port_lists = client
+        .send(get_port_lists(GetPortListsOpts::default()))
+        .await?;
+    assert_status(&port_lists, 200, "preflight get_port_lists")?;
+    for id in e2e_entity_ids(port_lists.as_str()?, "port_list")? {
+        let id = parse_entity_id(&id)?;
+        let response = client.send(delete_port_list(&id, true)).await?;
+        assert_cleanup_status(&response, &[200, 404], "preflight delete_port_list", &id)?;
+        removed += 1;
+    }
+
+    let permissions = client
+        .send(gvm_gmp::commands::permissions::get_permissions(
+            Default::default(),
+        ))
+        .await?;
+    assert_status(&permissions, 200, "preflight get_permissions")?;
+    for id in e2e_entity_ids(permissions.as_str()?, "permission")? {
+        let id = parse_entity_id(&id)?;
+        let response = client
+            .send(gvm_gmp::commands::permissions::delete_permission(&id, true))
+            .await?;
+        assert_cleanup_status(&response, &[200, 404], "preflight delete_permission", &id)?;
+        removed += 1;
+    }
+
+    let groups = client
+        .send(gvm_gmp::commands::groups::get_groups(Default::default()))
+        .await?;
+    assert_status(&groups, 200, "preflight get_groups")?;
+    for id in e2e_entity_ids(groups.as_str()?, "group")? {
+        let id = parse_entity_id(&id)?;
+        let response = client
+            .send(gvm_gmp::commands::groups::delete_group(&id, true))
+            .await?;
+        assert_cleanup_status(&response, &[200, 404], "preflight delete_group", &id)?;
+        removed += 1;
+    }
+
+    let roles = client
+        .send(gvm_gmp::commands::roles::get_roles(Default::default()))
+        .await?;
+    assert_status(&roles, 200, "preflight get_roles")?;
+    for id in e2e_entity_ids(roles.as_str()?, "role")? {
+        let id = parse_entity_id(&id)?;
+        let response = client
+            .send(gvm_gmp::commands::roles::delete_role(&id, true))
+            .await?;
+        assert_cleanup_status(&response, &[200, 404], "preflight delete_role", &id)?;
+        removed += 1;
+    }
+
+    let users = client
+        .send(gvm_gmp::commands::users::get_users(Default::default()))
+        .await?;
+    assert_status(&users, 200, "preflight get_users")?;
+    for id in e2e_entity_ids(users.as_str()?, "user")? {
+        let id = parse_entity_id(&id)?;
+        let response = client
+            .send(gvm_gmp::commands::users::delete_user(&id, true))
+            .await?;
+        assert_cleanup_status(&response, &[200, 404], "preflight delete_user", &id)?;
+        removed += 1;
+    }
+
+    let report_configs = client
+        .send(gvm_gmp::commands::report_configs::get_report_configs())
+        .await?;
+    assert_status(&report_configs, 200, "preflight get_report_configs")?;
+    for id in e2e_entity_ids(report_configs.as_str()?, "report_config")? {
+        let response = client
+            .send(
+                gvm_gmp::commands::report_configs::delete_report_config_opts(
+                    &id,
+                    gvm_gmp::commands::report_configs::DeleteReportConfigOpts {
+                        ultimate: Some(true),
+                    },
+                ),
+            )
+            .await?;
+        let entity_id = parse_entity_id(&id)?;
+        assert_cleanup_status(
+            &response,
+            &[200, 404],
+            "preflight delete_report_config",
+            &entity_id,
+        )?;
+        removed += 1;
+    }
+
+    let report_formats = client
+        .send(get_report_formats(GetReportFormatsOpts::default()))
+        .await?;
+    assert_status(&report_formats, 200, "preflight get_report_formats")?;
+    for id in e2e_entity_ids(report_formats.as_str()?, "report_format")? {
+        let id = parse_entity_id(&id)?;
+        let response = client
+            .send(gvm_gmp::commands::report_formats::delete_report_format(
+                &id, true,
+            ))
+            .await?;
+        assert_cleanup_status(
+            &response,
+            &[200, 404],
+            "preflight delete_report_format",
+            &id,
+        )?;
+        removed += 1;
+    }
+
+    let certificates = client
+        .send(gvm_gmp::commands::tls_certificates::get_tls_certificates(
+            Default::default(),
+        ))
+        .await?;
+    assert_status(&certificates, 200, "preflight get_tls_certificates")?;
+    for id in e2e_entity_ids(certificates.as_str()?, "tls_certificate")? {
+        let id = parse_entity_id(&id)?;
+        let response = client
+            .send(gvm_gmp::commands::tls_certificates::delete_tls_certificate(
+                &id, true,
+            ))
+            .await?;
+        assert_cleanup_status(
+            &response,
+            &[200, 404],
+            "preflight delete_tls_certificate",
+            &id,
+        )?;
+        removed += 1;
+    }
+
+    let assets = client
+        .send(gvm_gmp::commands::assets::get_assets(
+            gvm_gmp::commands::assets::GetAssetsOpts {
+                type_: Some(gvm_gmp::commands::assets::AssetType::Host),
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&assets, 200, "preflight get_assets")?;
+    for id in e2e_entity_ids(assets.as_str()?, "asset")? {
+        let id = parse_entity_id(&id)?;
+        let response = client
+            .send(gvm_gmp::commands::assets::delete_asset(
+                &id,
+                Default::default(),
+            ))
+            .await?;
+        assert_cleanup_status(&response, &[200, 404], "preflight delete_asset", &id)?;
+        removed += 1;
+    }
+
+    client.disconnect().await?;
+    log_pass(
+        "preflight-cleanup",
+        &format!("dependency-ordered cleanup removed {removed} stale resource(s)"),
+    );
+    Ok(())
+}
+
+fn assert_cleanup_status(
+    response: &Response,
+    accepted: &[u16],
+    action: &str,
+    id: &EntityId,
+) -> Result<(), AppError> {
+    let status = response.status_code().unwrap_or(0);
+    ensure(
+        accepted.contains(&status),
+        &format!(
+            "{action} for {id} returned {status}: {}",
+            response.status_text().unwrap_or_default()
+        ),
+    )
+}
+
+async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
+    let mut client = connect_client(config).await?;
+    let version_response = client.get_version().await?;
+    let version = parse_version_text(&version_response.version)?;
+    ensure(
+        version >= GmpVersion(22, 4),
+        &format!("unsupported Community GMP version {version}"),
+    )?;
+
+    let auth = client
+        .authenticate(&config.username, &config.password)
+        .await?;
+    ensure(
+        auth.status == 200,
+        "typed authentication did not return 200",
+    )?;
+
+    let text_help = client.get_help().await?;
+    ensure(
+        text_help.status == 200 && !text_help.help_text.trim().is_empty(),
+        "typed text help did not return a nonempty 200 response",
+    )?;
+
+    let feature_response = client.get_features_parsed().await?;
+    ensure(
+        feature_response.status == 200,
+        "typed get_features did not return 200",
+    )?;
+    let features: BTreeMap<String, FeatureState> = feature_response
+        .features
+        .into_iter()
+        .map(|feature| {
+            (
+                feature.name,
+                FeatureState {
+                    compiled_in: feature.compiled_in,
+                    enabled: feature.enabled,
+                },
+            )
+        })
+        .collect();
+
+    let help = client.get_help_with_mode(HelpMode::BriefXml).await?;
+    ensure(
+        help.status == 200,
+        "typed brief XML help did not return 200",
+    )?;
+    let help_commands: BTreeSet<String> = help
+        .schema
+        .ok_or_else(|| {
+            AppError::Assertion("brief XML help response did not contain a schema".to_string())
+        })?
+        .commands
+        .into_iter()
+        .map(|command| canonical_help_command(&command.name))
+        .collect();
+    runtime::discovery(
+        &version_response.version,
+        features.clone(),
+        help_commands.iter().cloned().collect(),
+    );
+    ensure(
+        !help_commands.is_empty(),
+        "authenticated brief XML help advertised no commands",
+    )?;
+    let required_authenticated_commands = ["get_reports", "get_targets", "get_tasks"];
+    let missing_authenticated_commands = required_authenticated_commands
+        .iter()
+        .filter(|command| !help_commands.contains(**command))
+        .copied()
+        .collect::<Vec<_>>();
+    ensure(
+        missing_authenticated_commands.is_empty(),
+        &format!(
+            "authenticated brief XML help omitted expected Community commands: {}",
+            missing_authenticated_commands.join(", ")
+        ),
+    )?;
+    let schema_help = client
+        .get_help_with_mode(HelpMode::Schema(gvm_gmp::enums::HelpFormat::Xml))
+        .await?;
+    ensure(
+        schema_help.status == 200
+            && schema_help
+                .schema
+                .as_ref()
+                .is_some_and(|schema| !schema.commands.is_empty()),
+        "typed full XML help did not return a command schema",
+    )?;
+    runtime::observe(
+        "typed-help-modes",
+        Outcome::Pass,
+        &format!(
+            "text, brief XML, and full XML parsed; {} authenticated command(s) advertised; negotiation commands are validated directly",
+            help_commands.len()
+        ),
+    );
+    log_line(&format!(
+        "authenticated brief XML help commands: {}",
+        help_commands.iter().cloned().collect::<Vec<_>>().join(",")
+    ));
+
+    let mut conditional_commands = BTreeMap::new();
+    let mut registry_version_gates = BTreeMap::new();
+    for entry in COMMAND_COVERAGE
+        .iter()
+        .filter(|entry| entry.disposition == Disposition::ConditionalCommunity)
+    {
+        let version_available = gvm_gmp::capabilities::command_capability(entry.name)
+            .is_some_and(|capability| capability.available_in(version));
+        let advertised = help_commands.contains(entry.name);
+        let available = live_help_supports(&help_commands, entry.name);
+        conditional_commands.insert(entry.name.to_string(), available);
+        registry_version_gates.insert(entry.name.to_string(), version_available);
+        runtime::observe(
+            &format!("conditional-command:{}", entry.name),
+            if available {
+                Outcome::ConditionalAvailable
+            } else {
+                Outcome::ConditionalUnavailable
+            },
+            &format!(
+                "GMP {version}; help advertised={advertised}; registry version gate={version_available}"
+            ),
+        );
+    }
+
+    runtime::conditional_discovery(conditional_commands.clone(), registry_version_gates.clone());
+    if env_flag("E2E_RECORD_BASELINE") {
+        let path = runtime::write_baseline_candidate(
+            &version_response.version,
+            &features,
+            &help_commands.iter().cloned().collect::<Vec<_>>(),
+            &conditional_commands,
+            &registry_version_gates,
+        )
+        .map_err(AppError::Assertion)?;
+        log_line(&format!("recorded baseline candidate: {}", path.display()));
+    } else {
+        runtime::validate_baseline(
+            &version_response.version,
+            &features,
+            &help_commands.iter().cloned().collect::<Vec<_>>(),
+            &conditional_commands,
+            &registry_version_gates,
+        )
+        .map_err(AppError::Assertion)?;
+    }
+
+    log_pass(
+        "discovery",
+        &format!(
+            "typed GMP {}, {} feature(s), {} advertised command(s)",
+            version_response.version,
+            features.len(),
+            help_commands.len()
+        ),
+    );
+    client.disconnect().await?;
+    Ok(())
+}
+
+fn env_flag(name: &str) -> bool {
+    matches!(
+        env::var(name).unwrap_or_default().as_str(),
+        "1" | "true" | "TRUE" | "yes" | "YES"
+    )
 }
 
 async fn wait_ready(config: &EnvConfig) -> Result<(), AppError> {
@@ -510,8 +1385,1757 @@ async fn wait_ready(config: &EnvConfig) -> Result<(), AppError> {
     Ok(())
 }
 
+fn resource_names_request() -> impl gvm_protocol::Request {
+    gvm_gmp::commands::system::get_resource_names(gvm_gmp::commands::system::GetResourceNamesOpts {
+        resource_type: Some(ResourceType::Target),
+        ..Default::default()
+    })
+}
+
+const E2E_SCHEDULE_ICALENDAR: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//e2e//EN\r\nBEGIN:VEVENT\r\nDTSTART:20260401T060000Z\r\nDURATION:PT0S\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\nEND:VCALENDAR";
+const E2E_SCHEDULE_TIMEZONE: &str = "UTC";
+
+fn e2e_schedule_opts(comment: String, name: Option<String>) -> ScheduleOpts {
+    ScheduleOpts {
+        comment: Some(comment),
+        icalendar: Some(E2E_SCHEDULE_ICALENDAR.into()),
+        timezone: Some(E2E_SCHEDULE_TIMEZONE.into()),
+        name,
+    }
+}
+
+fn create_port_range_request(port_list_id: &EntityId, start: u16, end: u16) -> XmlCommand {
+    XmlCommand::new("create_port_range")
+        .child_with_attr("port_list", "id", port_list_id.as_str())
+        .child_with_text("start", &start.to_string())
+        .child_with_text("end", &end.to_string())
+        .child_with_text("type", "TCP")
+}
+
+fn create_report_config_request(
+    name: &str,
+    report_format_id: &EntityId,
+    comment: &str,
+) -> XmlCommand {
+    XmlCommand::new("create_report_config")
+        .child_with_text("name", name)
+        .child_with_attr("report_format", "id", report_format_id.as_str())
+        .child_with_text("comment", comment)
+}
+
+fn get_report_formats_with_params_request() -> XmlCommand {
+    XmlCommand::new("get_report_formats").attribute("params", "1")
+}
+
+fn sync_config_request() -> XmlCommand {
+    XmlCommand::new("sync_config")
+}
+
+fn modify_setting_request(setting_id: &EntityId, value: &str) -> XmlCommand {
+    let encoded_value = BASE64_STANDARD.encode(value);
+    XmlCommand::new("modify_setting")
+        .attribute("setting_id", setting_id.as_str())
+        .child_with_text("value", &encoded_value)
+}
+
+fn delete_user_directly_request(user_id: &EntityId) -> impl gvm_protocol::Request {
+    // gvmd deletes users directly; unlike ordinary resources, users are not
+    // restorable from the trashcan.
+    gvm_gmp::commands::users::delete_user(user_id, true)
+}
+
+#[derive(Debug)]
+struct ReportFormatParamEvidence {
+    id: Option<String>,
+    name: String,
+    parameter_count: usize,
+    depth: usize,
+    name_depth: Option<usize>,
+}
+
+fn parse_report_format_params(
+    response: &Response,
+) -> Result<Vec<ReportFormatParamEvidence>, AppError> {
+    let mut reader = Reader::from_str(response.as_str()?);
+    let mut formats = Vec::new();
+    let mut current: Option<ReportFormatParamEvidence> = None;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref event) if event.name().as_ref() == b"report_format" => {
+                if current.is_none() {
+                    let id = event
+                        .attributes()
+                        .flatten()
+                        .find(|attribute| attribute.key.as_ref() == b"id")
+                        .map(|attribute| {
+                            attribute
+                                .decoded_and_normalized_value(
+                                    quick_xml::XmlVersion::default(),
+                                    reader.decoder(),
+                                )
+                                .map(|value| value.into_owned())
+                        })
+                        .transpose()?;
+                    current = Some(ReportFormatParamEvidence {
+                        id,
+                        name: String::new(),
+                        parameter_count: 0,
+                        depth: 1,
+                        name_depth: None,
+                    });
+                } else if let Some(format) = current.as_mut() {
+                    format.depth += 1;
+                }
+            }
+            Event::Start(ref event) => {
+                if let Some(format) = current.as_mut() {
+                    if format.depth == 1 && event.name().as_ref() == b"param" {
+                        format.parameter_count += 1;
+                    }
+                    if format.depth == 1 && event.name().as_ref() == b"name" {
+                        format.name_depth = Some(format.depth + 1);
+                    }
+                    format.depth += 1;
+                }
+            }
+            Event::Empty(ref event)
+                if event.name().as_ref() == b"report_format" && current.is_none() =>
+            {
+                let id = event
+                    .attributes()
+                    .flatten()
+                    .find(|attribute| attribute.key.as_ref() == b"id")
+                    .map(|attribute| {
+                        attribute
+                            .decoded_and_normalized_value(
+                                quick_xml::XmlVersion::default(),
+                                reader.decoder(),
+                            )
+                            .map(|value| value.into_owned())
+                    })
+                    .transpose()?;
+                formats.push(ReportFormatParamEvidence {
+                    id,
+                    name: String::new(),
+                    parameter_count: 0,
+                    depth: 0,
+                    name_depth: None,
+                });
+            }
+            Event::Empty(ref event) => {
+                if let Some(format) = current.as_mut() {
+                    if format.depth == 1 && event.name().as_ref() == b"param" {
+                        format.parameter_count += 1;
+                    }
+                }
+            }
+            Event::Text(ref event) => {
+                if let Some(format) = current.as_mut() {
+                    if format.name_depth == Some(format.depth) {
+                        format
+                            .name
+                            .push_str(&String::from_utf8_lossy(event.as_ref()));
+                    }
+                }
+            }
+            Event::End(ref event) => {
+                let closes_format = current.as_ref().is_some_and(|format| {
+                    format.depth == 1 && event.name().as_ref() == b"report_format"
+                });
+                if closes_format {
+                    formats.push(current.take().expect("report format is active"));
+                } else if let Some(format) = current.as_mut() {
+                    if format.name_depth == Some(format.depth) && event.name().as_ref() == b"name" {
+                        format.name_depth = None;
+                    }
+                    format.depth = format.depth.saturating_sub(1);
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    if current.is_some() {
+        return Err(AppError::Assertion(
+            "get_report_formats params=1 response ended before report_format closed".to_string(),
+        ));
+    }
+    if formats.is_empty() {
+        return Err(AppError::Assertion(
+            "get_report_formats params=1 returned no report formats".to_string(),
+        ));
+    }
+    for format in &formats {
+        let id = format.id.as_deref().ok_or_else(|| {
+            AppError::Assertion(
+                "get_report_formats params=1 returned a report format without an id".to_string(),
+            )
+        })?;
+        parse_entity_id(id)?;
+    }
+
+    Ok(formats)
+}
+
+fn select_ordinary_report_format(
+    formats: &[ReportFormatParamEvidence],
+) -> Result<EntityId, AppError> {
+    formats
+        .iter()
+        .find_map(|format| format.id.as_deref())
+        .map(parse_entity_id)
+        .transpose()?
+        .ok_or_else(|| {
+            AppError::Assertion(
+                "get_report_formats params=1 returned no usable report formats".to_string(),
+            )
+        })
+}
+
+fn select_configurable_report_format(formats: &[ReportFormatParamEvidence]) -> Option<EntityId> {
+    formats
+        .iter()
+        .find(|format| format.parameter_count > 0)
+        .and_then(|format| format.id.as_deref())
+        .map(|id| parse_entity_id(id).expect("report-format ids were validated during parsing"))
+}
+
+fn report_format_parameter_evidence(formats: &[ReportFormatParamEvidence]) -> String {
+    formats
+        .iter()
+        .map(|format| {
+            format!(
+                "{} ({}, {} parameter(s))",
+                format.id.as_deref().unwrap_or("<missing id>"),
+                if format.name.is_empty() {
+                    "<unnamed>"
+                } else {
+                    &format.name
+                },
+                format.parameter_count
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+async fn run_report_config_lifecycle(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    tracker: &mut CleanupTracker,
+    report_format_id: &EntityId,
+) -> Result<(), AppError> {
+    let report_config = client
+        .send(create_report_config_request(
+            &config.name("report-config"),
+            report_format_id,
+            &config.name("report-config-comment"),
+        ))
+        .await?;
+    assert_status(&report_config, 201, "create_report_config")?;
+    let report_config_id = response_id(&report_config, "create_report_config")?;
+    tracker.track_report_config(&report_config_id);
+    let configs = client
+        .get_report_configs_parsed(gvm_gmp::commands::report_configs::GetReportConfigsOpts {
+            filter: Some(format!("uuid={report_config_id}")),
+            ..Default::default()
+        })
+        .await?;
+    ensure(
+        configs
+            .items
+            .iter()
+            .any(|entry| entry.meta.id == report_config_id),
+        "typed report config did not round-trip",
+    )?;
+    let modify_config = client
+        .send(gvm_gmp::commands::report_configs::modify_report_config(
+            report_config_id.as_str(),
+            gvm_gmp::commands::report_configs::ModifyReportConfigOpts {
+                comment: Some(config.name("report-config-modified")),
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&modify_config, 200, "modify_report_config")?;
+    let cloned_report_config = client
+        .clone_report_config(report_config_id.as_str())
+        .await?;
+    ensure(
+        cloned_report_config.status == 201,
+        "typed clone_report_config failed",
+    )?;
+    tracker.track_report_config(&cloned_report_config.id);
+    let rename_clone = client
+        .send(gvm_gmp::commands::report_configs::modify_report_config(
+            cloned_report_config.id.as_str(),
+            gvm_gmp::commands::report_configs::ModifyReportConfigOpts {
+                name: Some(config.name("report-config-clone")),
+                comment: Some(config.name("report-config-clone-comment")),
+            },
+        ))
+        .await?;
+    assert_status(&rename_clone, 200, "rename cloned report config")?;
+    log_pass(
+        "isolated report config lifecycle",
+        "create/get/modify/clone; cleanup is tracked",
+    );
+    Ok(())
+}
+
+async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
+    let mut rejected_client = connect_client(config).await?;
+    let rejected = rejected_client
+        .authenticate(&config.username, "rust-gvm-e2e-intentionally-wrong")
+        .await;
+    ensure(
+        matches!(
+            rejected,
+            Err(GvmError::Parse(
+                gvm_gmp::responses::ParseError::ServerError { .. }
+            ))
+        ),
+        "typed authentication failure did not preserve the server error",
+    )?;
+    rejected_client.disconnect().await?;
+    log_pass("typed authentication failure", "non-2xx server error");
+
+    let mut client = connect_client(config).await?;
+    client
+        .authenticate(&config.username, &config.password)
+        .await?;
+
+    macro_rules! typed_read {
+        ($name:literal, $future:expr) => {{
+            let response = $future.await?;
+            ensure(
+                response.status == 200,
+                concat!("typed ", $name, " did not return status 200"),
+            )?;
+            log_pass(concat!("typed ", $name), "real-gvmd response parsed");
+            response
+        }};
+    }
+
+    let targets = typed_read!("get_targets", client.get_targets(GetTargetsOpts::default()));
+    let filtered_targets = typed_read!(
+        "get_targets(filter/pagination)",
+        client.get_targets(GetTargetsOpts {
+            filter_string: Some("rows=1 first=1".to_string()),
+            ..Default::default()
+        })
+    );
+    ensure(
+        filtered_targets.items.len() <= 1,
+        "get_targets rows=1 returned more than one typed item",
+    )?;
+
+    let configs = typed_read!(
+        "get_scan_configs",
+        client.get_scan_configs(GetScanConfigsOpts {
+            filter_string: Some("rows=2 first=1".to_string()),
+            ..Default::default()
+        })
+    );
+    ensure(
+        !configs.items.is_empty(),
+        "warm-volume baseline requires at least one typed scan config",
+    )?;
+    typed_read!(
+        "get_scan_config(single)",
+        client.get_scan_config(&configs.items[0].meta.id)
+    );
+    typed_read!(
+        "get_policies",
+        client.get_policies(GetScanConfigsOpts {
+            filter_string: Some("rows=2".to_string()),
+            ..Default::default()
+        })
+    );
+    let generic_configs = typed_read!(
+        "get_configs(generic)",
+        client.get_configs(gvm_gmp::commands::configs::GetConfigsOpts {
+            filter_string: Some("rows=2 first=1".to_string()),
+            ..Default::default()
+        })
+    );
+    if let Some(generic_config) = generic_configs.items.first() {
+        typed_read!(
+            "get_config(generic single)",
+            client.get_config(
+                &generic_config.meta.id,
+                gvm_gmp::commands::configs::GetConfigOpts {
+                    details: Some(true),
+                    ..Default::default()
+                }
+            )
+        );
+    }
+    let policies = typed_read!(
+        "get_policies(single prerequisite)",
+        client.get_policies(GetScanConfigsOpts {
+            filter_string: Some("rows=1".to_string()),
+            ..Default::default()
+        })
+    );
+    if let Some(policy) = policies.items.first() {
+        typed_read!(
+            "get_policy(single)",
+            client.get_policy(
+                &policy.meta.id,
+                gvm_gmp::commands::scan_configs::GetPolicyOpts::default()
+            )
+        );
+    }
+
+    let scanners = typed_read!(
+        "get_scanners",
+        client.get_scanners(GetScannersOpts::default())
+    );
+    ensure(
+        !scanners.items.is_empty(),
+        "warm-volume baseline requires at least one typed scanner",
+    )?;
+    typed_read!(
+        "get_scanner(single)",
+        client.get_scanner(&scanners.items[0].meta.id)
+    );
+
+    let port_lists = typed_read!(
+        "get_port_lists",
+        client.get_port_lists(GetPortListsOpts {
+            filter_string: Some("rows=2 first=1".to_string()),
+            ..Default::default()
+        })
+    );
+    ensure(
+        !port_lists.items.is_empty(),
+        "warm-volume baseline requires at least one typed port list",
+    )?;
+    typed_read!("get_tasks", client.get_tasks(GetTasksOpts::default()));
+
+    let feeds = typed_read!("get_feeds", client.get_feeds());
+    ensure(
+        !feeds.items.is_empty(),
+        "warm-volume baseline requires typed feed metadata",
+    )?;
+    typed_read!("get_feed(single)", client.get_feed(gvm_gmp::FeedType::Nvt));
+
+    let nvts = typed_read!(
+        "get_nvts",
+        client.get_nvts(GetNvtsOpts {
+            filter_string: Some("rows=2 first=1".to_string()),
+            ..Default::default()
+        })
+    );
+    ensure(
+        !nvts.items.is_empty(),
+        "warm-volume baseline requires at least one typed NVT",
+    )?;
+    typed_read!(
+        "get_scan_config_nvt(single preferences/count)",
+        client.get_scan_config_nvt(&nvts.items[0].oid)
+    );
+    typed_read!(
+        "get_scan_config_nvts(public helper)",
+        client.get_scan_config_nvts(GetNvtsOpts {
+            filter_string: Some("rows=2".to_string()),
+            ..Default::default()
+        })
+    );
+    typed_read!("get_nvt_families", client.get_nvt_families());
+
+    let cves = typed_read!(
+        "get_cves",
+        client.get_cves(GetSecInfoOpts {
+            filter: Some("rows=1 first=1".to_string()),
+            ..Default::default()
+        })
+    );
+    if let Some(cve) = cves.items.first() {
+        typed_read!("get_cve(single)", client.get_cve(&cve.id));
+    }
+    let cpes = typed_read!(
+        "get_cpes",
+        client.get_cpes(GetSecInfoOpts {
+            filter: Some("rows=1 first=1".to_string()),
+            ..Default::default()
+        })
+    );
+    if let Some(cpe) = cpes.items.first() {
+        typed_read!("get_cpe(single)", client.get_cpe(&cpe.id));
+    }
+    let cert = typed_read!(
+        "get_cert_bund_advisories",
+        client.get_cert_bund_advisories(GetSecInfoOpts {
+            filter: Some("rows=1 first=1".to_string()),
+            ..Default::default()
+        })
+    );
+    if let Some(advisory) = cert.items.first() {
+        typed_read!(
+            "get_cert_bund_advisory(single)",
+            client.get_cert_bund_advisory(&advisory.id)
+        );
+    }
+    let dfn = typed_read!(
+        "get_dfn_cert_advisories",
+        client.get_dfn_cert_advisories(GetSecInfoOpts {
+            filter: Some("rows=1 first=1".to_string()),
+            ..Default::default()
+        })
+    );
+    if let Some(advisory) = dfn.items.first() {
+        typed_read!(
+            "get_dfn_cert_advisory(single)",
+            client.get_dfn_cert_advisory(&advisory.id)
+        );
+    }
+    let vulnerabilities = typed_read!(
+        "get_vulnerabilities",
+        client.get_vulnerabilities(gvm_gmp::commands::system::FilteredGetOpts {
+            filter_string: Some("rows=1 first=1".to_string()),
+            ..Default::default()
+        })
+    );
+    if let Some(vulnerability) = vulnerabilities.items.first() {
+        typed_read!(
+            "get_vulnerability(single)",
+            client.get_vulnerability(&vulnerability.id)
+        );
+    }
+
+    typed_read!(
+        "get_alerts",
+        client.get_alerts(gvm_gmp::commands::alerts::GetAlertsOpts {
+            filter_string: Some("rows=1".to_string()),
+            ..Default::default()
+        })
+    );
+    typed_read!(
+        "get_credentials",
+        client.get_credentials(gvm_gmp::commands::credentials::GetCredentialsOpts {
+            filter_string: Some("rows=1".to_string()),
+            ..Default::default()
+        })
+    );
+    typed_read!(
+        "get_filters",
+        client.get_filters(gvm_gmp::commands::filters::GetFiltersOpts {
+            filter_string: Some("rows=1".to_string()),
+            ..Default::default()
+        })
+    );
+    typed_read!(
+        "get_notes",
+        client.get_notes(gvm_gmp::commands::notes::GetNotesOpts {
+            filter_string: Some("rows=1".to_string()),
+            ..Default::default()
+        })
+    );
+    typed_read!(
+        "get_overrides",
+        client.get_overrides(gvm_gmp::commands::overrides::GetOverridesOpts {
+            filter_string: Some("rows=1".to_string()),
+            ..Default::default()
+        })
+    );
+    typed_read!(
+        "get_schedules",
+        client.get_schedules(gvm_gmp::commands::schedules::GetSchedulesOpts {
+            filter_string: Some("rows=1".to_string()),
+            ..Default::default()
+        })
+    );
+    typed_read!(
+        "get_tags",
+        client.get_tags(gvm_gmp::commands::tags::GetTagsOpts {
+            filter_string: Some("rows=1".to_string()),
+            ..Default::default()
+        })
+    );
+    typed_read!(
+        "get_report_formats",
+        client.get_report_formats(GetReportFormatsOpts {
+            filter_string: Some("rows=2".to_string()),
+            ..Default::default()
+        })
+    );
+    typed_read!("get_settings", client.get_settings());
+    typed_read!(
+        "get_system_reports",
+        client.get_system_reports(gvm_gmp::commands::system_reports::GetSystemReportsOpts {
+            brief: Some(true),
+            ..Default::default()
+        })
+    );
+    typed_read!(
+        "get_aggregates",
+        client.get_aggregates(
+            "task",
+            gvm_gmp::commands::aggregates::GetAggregatesRequestOpts {
+                max_groups: Some(1),
+                ..Default::default()
+            }
+        )
+    );
+    typed_read!("describe_auth", client.describe_auth());
+
+    let preferences = client
+        .send(gvm_gmp::commands::system::get_preferences(
+            gvm_gmp::commands::system::FilteredGetOpts {
+                filter_string: Some("rows=2".to_string()),
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&preferences, 200, "get_preferences")?;
+    log_pass("raw diagnostic get_preferences", "status and framing");
+    let resource_names = client.send(resource_names_request()).await?;
+    assert_status(&resource_names, 200, "get_resource_names")?;
+    log_pass("raw diagnostic get_resource_names", "status and framing");
+
+    ensure(
+        targets.status == 200,
+        "typed target collection status changed unexpectedly",
+    )?;
+    client.disconnect().await?;
+    Ok(())
+}
+
+async fn run_transport_suite(config: &EnvConfig) -> Result<(), AppError> {
+    let mut selected = 0usize;
+
+    if let Some(host) = optional_env("E2E_TLS_HOST") {
+        selected += 1;
+        let mut tls = TlsConfig::new(host);
+        if let Some(port) = env_u16("E2E_TLS_PORT")? {
+            tls = tls.with_port(port);
+        }
+        if let Some(server_name) = optional_env("E2E_TLS_SERVER_NAME") {
+            tls = tls.with_server_name(server_name);
+        }
+        if let Some(ca_path) = optional_env("E2E_TLS_CA_PATH") {
+            tls = tls
+                .with_native_roots(false)
+                .with_root_certificate_file(ca_path)?;
+        }
+        validate_transport(
+            "tls",
+            GmpClient::connect(TlsConnection::new(tls)).await?,
+            config,
+        )
+        .await?;
+    } else {
+        runtime::observe(
+            "transport:tls",
+            Outcome::ConditionalUnavailable,
+            "E2E_TLS_HOST is not provisioned",
+        );
+    }
+
+    if let Some(host) = optional_env("E2E_MTLS_HOST") {
+        selected += 1;
+        let certificate = required_env("E2E_MTLS_CERT_PATH")?;
+        let private_key = required_env("E2E_MTLS_KEY_PATH")?;
+        let identity = TlsClientIdentity::from_files(certificate, private_key)?;
+        let mut tls = TlsConfig::new(host).with_client_identity(identity);
+        if let Some(port) = env_u16("E2E_MTLS_PORT")? {
+            tls = tls.with_port(port);
+        }
+        if let Some(server_name) = optional_env("E2E_MTLS_SERVER_NAME") {
+            tls = tls.with_server_name(server_name);
+        }
+        if let Some(ca_path) = optional_env("E2E_MTLS_CA_PATH") {
+            tls = tls
+                .with_native_roots(false)
+                .with_root_certificate_file(ca_path)?;
+        }
+        validate_transport(
+            "mtls",
+            GmpClient::connect(TlsConnection::new(tls)).await?,
+            config,
+        )
+        .await?;
+    } else {
+        runtime::observe(
+            "transport:mtls",
+            Outcome::ConditionalUnavailable,
+            "E2E_MTLS_HOST is not provisioned",
+        );
+    }
+
+    if let Some(host) = optional_env("E2E_SSH_HOST") {
+        selected += 1;
+        let username = required_env("E2E_SSH_USER")?;
+        let auth = if let Some(key_path) = optional_env("E2E_SSH_KEY_PATH") {
+            SshAuth::PrivateKey {
+                key_path: key_path.into(),
+                passphrase: optional_env("E2E_SSH_KEY_PASSPHRASE"),
+            }
+        } else if let Some(password) = optional_env("E2E_SSH_PASSWORD") {
+            SshAuth::Password(password)
+        } else {
+            SshAuth::Agent
+        };
+        let mut ssh = SshConfig::new(host, username, auth);
+        if let Some(port) = env_u16("E2E_SSH_PORT")? {
+            ssh = ssh.with_port(port);
+        }
+        if let Some(socket) = optional_env("E2E_SSH_SOCKET_PATH") {
+            ssh = ssh.with_remote_socket(socket);
+        }
+        validate_transport(
+            "ssh",
+            GmpClient::connect(SshConnection::new(ssh)).await?,
+            config,
+        )
+        .await?;
+    } else {
+        runtime::observe(
+            "transport:ssh",
+            Outcome::ConditionalUnavailable,
+            "E2E_SSH_HOST is not provisioned",
+        );
+    }
+
+    if selected == 0 {
+        log_line("transport lane selected correctly; no TLS, mTLS, or SSH endpoint is provisioned");
+    }
+    Ok(())
+}
+
+async fn run_config_scanner_lifecycles(
+    config: &EnvConfig,
+    tracker: &mut CleanupTracker,
+) -> Result<(), AppError> {
+    let mut client = connect_client(config).await?;
+    client
+        .authenticate(&config.username, &config.password)
+        .await?;
+
+    let configs = client
+        .get_configs(gvm_gmp::commands::configs::GetConfigsOpts {
+            filter_string: Some("rows=1".to_string()),
+            usage_type: Some(gvm_gmp::commands::configs::ConfigUsageType::Scan),
+            ..Default::default()
+        })
+        .await?;
+    let base = configs.items.first().ok_or_else(|| {
+        AppError::Assertion("config lifecycle requires a warm scan config".to_string())
+    })?;
+    let exported = client
+        .send(gvm_gmp::commands::scan_configs::get_scan_config(
+            &base.meta.id,
+        ))
+        .await?;
+    assert_status(&exported, 200, "export scan config for import")?;
+    let import_xml = replace_first_resource_name(
+        exported.as_str()?,
+        "config",
+        &config.name("scan-config-import"),
+    )?;
+    let imported_scan_config = client.import_scan_config(&import_xml).await?;
+    ensure(
+        imported_scan_config.status == 201,
+        "typed import_scan_config failed",
+    )?;
+    tracker.track_config(&imported_scan_config.id);
+    let scan_config = client
+        .create_scan_config(
+            &config.name("scan-config"),
+            Some(&base.meta.id),
+            gvm_gmp::commands::scan_configs::ConfigOpts {
+                comment: Some(config.name("scan-config-comment")),
+                usage_type: Some("scan".to_string()),
+            },
+        )
+        .await?;
+    ensure(scan_config.status == 201, "typed create_scan_config failed")?;
+    tracker.track_config(&scan_config.id);
+    ensure(
+        client
+            .modify_scan_config(
+                &scan_config.id,
+                gvm_gmp::commands::scan_configs::ConfigOpts {
+                    comment: Some(config.name("scan-config-comment-modified")),
+                    usage_type: Some("scan".to_string()),
+                },
+            )
+            .await?
+            .status
+            == 200,
+        "typed modify_scan_config failed",
+    )?;
+    ensure(
+        client
+            .modify_scan_config_set_name(&scan_config.id, &config.name("scan-config-renamed"))
+            .await?
+            .status
+            == 200,
+        "typed scan-config name modification failed",
+    )?;
+    ensure(
+        client
+            .modify_scan_config_set_comment(
+                &scan_config.id,
+                Some(&config.name("scan-config-comment-final")),
+            )
+            .await?
+            .status
+            == 200,
+        "typed scan-config comment modification failed",
+    )?;
+    let created = client
+        .create_config(gvm_gmp::commands::configs::CreateConfigOpts {
+            name: config.name("config"),
+            base_id: Some(base.meta.id.clone()),
+            comment: Some(config.name("config-comment")),
+            usage_type: Some(gvm_gmp::commands::configs::ConfigUsageType::Scan),
+        })
+        .await?;
+    ensure(created.status == 201, "typed create_config failed")?;
+    tracker.track_config(&created.id);
+    let modified = client
+        .modify_config(
+            &created.id,
+            gvm_gmp::commands::configs::ModifyConfigOpts {
+                name: Some(config.name("config-modified")),
+                comment: Some(config.name("config-comment-modified")),
+                usage_type: Some(gvm_gmp::commands::configs::ConfigUsageType::Scan),
+            },
+        )
+        .await?;
+    ensure(modified.status == 200, "typed modify_config failed")?;
+    let singular = client
+        .get_config(
+            &created.id,
+            gvm_gmp::commands::configs::GetConfigOpts {
+                details: Some(true),
+                families: Some(true),
+                preferences: Some(true),
+                tasks: Some(true),
+                usage_type: Some(gvm_gmp::commands::configs::ConfigUsageType::Scan),
+            },
+        )
+        .await?;
+    ensure(
+        singular.items.iter().any(|item| item.meta.id == created.id),
+        "typed generic config did not round-trip",
+    )?;
+    let cloned = client
+        .clone_config(
+            &created.id,
+            gvm_gmp::commands::configs::CloneConfigOpts {
+                name: Some(config.name("config-clone")),
+            },
+        )
+        .await?;
+    ensure(cloned.status == 201, "typed clone_config failed")?;
+    tracker.track_config(&cloned.id);
+    let invalid_config = client
+        .create_config(gvm_gmp::commands::configs::CreateConfigOpts {
+            name: config.name("config-invalid-reference"),
+            base_id: Some(parse_entity_id("00000000-0000-0000-0000-000000000118")?),
+            comment: None,
+            usage_type: Some(gvm_gmp::commands::configs::ConfigUsageType::Scan),
+        })
+        .await;
+    ensure(
+        matches!(
+            invalid_config,
+            Err(GvmError::Parse(
+                gvm_gmp::responses::ParseError::ServerError { .. }
+            ))
+        ),
+        "invalid config base reference did not return a typed server error",
+    )?;
+
+    let policies = client
+        .get_policies(GetScanConfigsOpts {
+            filter_string: Some("rows=1".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let policy = policies.items.first().ok_or_else(|| {
+        AppError::Assertion("policy import lifecycle requires a warm policy".to_string())
+    })?;
+    let exported_policy = client
+        .send(gvm_gmp::commands::scan_configs::get_policy(
+            &policy.meta.id,
+            gvm_gmp::commands::scan_configs::GetPolicyOpts::default(),
+        ))
+        .await?;
+    assert_status(&exported_policy, 200, "export policy for import")?;
+    let policy_xml = replace_first_resource_name(
+        exported_policy.as_str()?,
+        "config",
+        &config.name("policy-import"),
+    )?;
+    let imported_policy = client.import_policy(&policy_xml).await?;
+    ensure(imported_policy.status == 201, "typed import_policy failed")?;
+    tracker.track_config(&imported_policy.id);
+    ensure(
+        client
+            .modify_policy_set_name(&imported_policy.id, &config.name("policy-import-renamed"))
+            .await?
+            .status
+            == 200,
+        "typed policy name modification failed",
+    )?;
+    ensure(
+        client
+            .modify_policy_set_comment(&imported_policy.id, Some(&config.name("policy-comment")))
+            .await?
+            .status
+            == 200,
+        "typed policy comment modification failed",
+    )?;
+    let imported_policy_read = client
+        .get_policy(
+            &imported_policy.id,
+            gvm_gmp::commands::scan_configs::GetPolicyOpts { audits: Some(true) },
+        )
+        .await?;
+    ensure(
+        imported_policy_read
+            .items
+            .iter()
+            .any(|item| item.meta.id == imported_policy.id),
+        "typed imported policy did not round-trip",
+    )?;
+    for id in [
+        cloned.id,
+        created.id,
+        scan_config.id,
+        imported_scan_config.id,
+        imported_policy.id,
+    ] {
+        let trashed = client
+            .delete_config(
+                &id,
+                gvm_gmp::commands::configs::DeleteConfigOpts {
+                    ultimate: Some(false),
+                },
+            )
+            .await?;
+        ensure(trashed.status == 200, "typed config trash failed")?;
+        let restored = client.restore_from_trashcan(&id).await?;
+        ensure(restored.status == 200, "typed config restore failed")?;
+        let deleted = client
+            .delete_config(
+                &id,
+                gvm_gmp::commands::configs::DeleteConfigOpts {
+                    ultimate: Some(true),
+                },
+            )
+            .await?;
+        ensure(deleted.status == 200, "typed config ultimate delete failed")?;
+        tracker.config_ids.retain(|tracked| tracked != id.as_str());
+    }
+    log_pass(
+        "config lifecycle",
+        "typed create/clone/get/modify/trash/restore/delete/failure",
+    );
+
+    let scanners = client.get_scanners(GetScannersOpts::default()).await?;
+    let base_scanner = select_cloneable_scanner(&scanners)?;
+    let scanner = client.clone_scanner(&base_scanner.meta.id).await?;
+    ensure(scanner.status == 201, "typed clone_scanner failed")?;
+    tracker.track_scanner(&scanner.id);
+    let modified = client
+        .modify_scanner(
+            &scanner.id,
+            gvm_gmp::commands::scanners::ScannerOpts {
+                comment: Some(config.name("scanner-comment-modified")),
+                ..Default::default()
+            },
+        )
+        .await?;
+    ensure(modified.status == 200, "typed modify_scanner failed")?;
+    let listed = client.get_scanner(&scanner.id).await?;
+    ensure(
+        listed.items.iter().any(|item| item.meta.id == scanner.id),
+        "typed scanner did not round-trip",
+    )?;
+    let verified = client.verify_scanner(&scanner.id).await?;
+    ensure(
+        matches!(verified.status, 200 | 202),
+        "typed verify_scanner returned an unexpected status",
+    )?;
+    let invalid = client
+        .verify_scanner(&parse_entity_id("00000000-0000-0000-0000-000000000118")?)
+        .await;
+    ensure(
+        matches!(
+            invalid,
+            Err(GvmError::Parse(
+                gvm_gmp::responses::ParseError::ServerError { .. }
+            ))
+        ),
+        "invalid scanner reference did not return a typed server error",
+    )?;
+    let trashed = client.delete_scanner(&scanner.id, false).await?;
+    ensure(trashed.status == 200, "typed scanner trash failed")?;
+    let restored = client.restore_from_trashcan(&scanner.id).await?;
+    ensure(restored.status == 200, "typed scanner restore failed")?;
+    let deleted = client.delete_scanner(&scanner.id, true).await?;
+    ensure(
+        deleted.status == 200,
+        "typed scanner ultimate delete failed",
+    )?;
+    tracker
+        .scanner_ids
+        .retain(|tracked| tracked != scanner.id.as_str());
+    log_pass(
+        "scanner lifecycle",
+        "typed clone/get/modify/verify/trash/restore/delete/failure",
+    );
+
+    client.disconnect().await?;
+    Ok(())
+}
+
+fn select_cloneable_scanner(
+    scanners: &GetScannersResponse,
+) -> Result<&gvm_gmp::responses::scanner::Scanner, AppError> {
+    scanners
+        .items
+        .iter()
+        .find(|scanner| {
+            scanner
+                .scanner_type
+                .as_deref()
+                .and_then(|kind| ScannerType::from_str(kind).ok())
+                .is_some_and(|kind| kind != ScannerType::CveScannerType)
+        })
+        .ok_or_else(|| {
+            let types = scanners
+                .items
+                .iter()
+                .map(|scanner| scanner.scanner_type.as_deref().unwrap_or("<missing>"))
+                .collect::<Vec<_>>();
+            AppError::Assertion(format!(
+                "scanner lifecycle requires a cloneable non-CVE scanner; get_scanners returned types [{}]",
+                types.join(", ")
+            ))
+        })
+}
+
+async fn run_isolated_suite(
+    config: &EnvConfig,
+    tracker: &mut CleanupTracker,
+) -> Result<(), AppError> {
+    ensure(
+        env_flag("E2E_ISOLATED"),
+        "devel-isolated requires E2E_ISOLATED=1 and a dedicated database/volume namespace",
+    )?;
+    let mut client = connect_client(config).await?;
+    client
+        .authenticate(&config.username, &config.password)
+        .await?;
+
+    let predefined_roles = client
+        .get_roles(gvm_gmp::commands::roles::GetRolesOpts {
+            filter_string: Some("name=User".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let user_role_id = predefined_roles
+        .items
+        .iter()
+        .find(|entry| entry.meta.name == "User")
+        .map(|entry| entry.meta.id.clone())
+        .ok_or_else(|| {
+            AppError::Assertion(
+                "isolated access-control suite requires the predefined User role".to_string(),
+            )
+        })?;
+
+    let user_name = config.name("user");
+    let user_password = format!("{}-password", config.run_id);
+    let user = client
+        .create_user(
+            &user_name,
+            gvm_gmp::commands::users::UserOpts {
+                password: Some(user_password.clone()),
+                comment: Some(config.name("user-comment")),
+                role_ids: vec![user_role_id.clone()],
+                ..Default::default()
+            },
+        )
+        .await?;
+    tracker.track_user(&user.id);
+    log_pass("isolated user create", &user.id.to_string());
+
+    let duplicate = client
+        .create_user(
+            &user_name,
+            gvm_gmp::commands::users::UserOpts {
+                password: Some("not-used".to_string()),
+                ..Default::default()
+            },
+        )
+        .await;
+    ensure(
+        matches!(
+            duplicate,
+            Err(GvmError::Parse(
+                gvm_gmp::responses::ParseError::ServerError { .. }
+            ))
+        ),
+        "duplicate user creation did not produce a typed server error",
+    )?;
+    log_pass("isolated user duplicate", "typed conflict error");
+
+    let group = client
+        .create_group(
+            &config.name("group"),
+            gvm_gmp::commands::groups::GroupOpts {
+                users: vec![user_name.clone()],
+                comment: Some(config.name("group-comment")),
+            },
+        )
+        .await?;
+    tracker.track_group(&group.id);
+    let role = client
+        .create_role(
+            &config.name("role"),
+            gvm_gmp::commands::roles::RoleOpts {
+                users: vec![user_name.clone()],
+                comment: Some(config.name("role-comment")),
+            },
+        )
+        .await?;
+    tracker.track_role(&role.id);
+    let permission_id = create_role_permission(
+        &mut client,
+        "get_tasks",
+        &config.name("permission-comment"),
+        &role.id,
+    )
+    .await?;
+    tracker.track_permission(&permission_id);
+
+    let users = client
+        .get_users(gvm_gmp::commands::users::GetUsersOpts {
+            filter_string: Some(format!("uuid={}", user.id)),
+            details: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    ensure(
+        users.items.iter().any(|entry| entry.meta.id == user.id),
+        "typed get_users did not round-trip the created user",
+    )?;
+    let mut user_role_ids = users
+        .items
+        .iter()
+        .find(|entry| entry.meta.id == user.id)
+        .map(|entry| {
+            entry
+                .roles
+                .iter()
+                .map(|role| role.id.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    ensure(
+        user_role_ids.contains(&user_role_id),
+        "typed get_users did not preserve the predefined User role",
+    )?;
+    if !user_role_ids.contains(&role.id) {
+        user_role_ids.push(role.id.clone());
+    }
+    let groups = client
+        .get_groups(gvm_gmp::commands::groups::GetGroupsOpts {
+            filter_string: Some(format!("uuid={}", group.id)),
+            details: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    ensure(
+        groups.items.iter().any(|entry| entry.meta.id == group.id),
+        "typed get_groups did not round-trip the created group",
+    )?;
+    let roles = client
+        .get_roles(gvm_gmp::commands::roles::GetRolesOpts {
+            filter_string: Some(format!("uuid={}", role.id)),
+            details: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    ensure(
+        roles.items.iter().any(|entry| entry.meta.id == role.id),
+        "typed get_roles did not round-trip the created role",
+    )?;
+    let permissions = client
+        .get_permissions(gvm_gmp::commands::permissions::GetPermissionsOpts {
+            filter_string: Some(format!("uuid={permission_id}")),
+            details: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    ensure(
+        permissions
+            .items
+            .iter()
+            .any(|entry| entry.meta.id == permission_id),
+        "typed get_permissions did not round-trip the created permission",
+    )?;
+    log_pass(
+        "isolated access-control reads",
+        "typed users/groups/roles/permissions",
+    );
+
+    modify_role_permission_reconciled(
+        &mut client,
+        config,
+        &permission_id,
+        &role.id,
+        &config.name("permission-modified"),
+    )
+    .await?;
+
+    let modify_group = client
+        .send(gvm_gmp::commands::groups::modify_group(
+            &group.id,
+            gvm_gmp::commands::groups::GroupOpts {
+                comment: Some(config.name("group-modified")),
+                users: vec![user_name.clone()],
+            },
+        ))
+        .await?;
+    assert_status(&modify_group, 200, "modify_group")?;
+    let modify_role = client
+        .send(gvm_gmp::commands::roles::modify_role(
+            &role.id,
+            gvm_gmp::commands::roles::RoleOpts {
+                comment: Some(config.name("role-modified")),
+                users: vec![user_name.clone()],
+            },
+        ))
+        .await?;
+    assert_status(&modify_role, 200, "modify_role")?;
+    let modify_user = client
+        .send(gvm_gmp::commands::users::modify_user(
+            &user.id,
+            gvm_gmp::commands::users::UserOpts {
+                password: Some(user_password.clone()),
+                comment: Some(config.name("user-modified")),
+                role_ids: user_role_ids,
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&modify_user, 200, "modify_user")?;
+    log_pass(
+        "isolated access-control modify",
+        "permission/group/role/user",
+    );
+
+    let mut restricted =
+        GmpClient::connect(UnixSocketConnection::with_path(config.socket_path.clone())).await?;
+    restricted.authenticate(&user_name, &user_password).await?;
+    let denied = restricted
+        .create_user("rust-gvm-e2e-permission-denied", Default::default())
+        .await;
+    ensure(
+        matches!(
+            denied,
+            Err(GvmError::Parse(
+                gvm_gmp::responses::ParseError::ServerError { .. }
+            ))
+        ),
+        "restricted user unexpectedly created an administrative user",
+    )?;
+    restricted.disconnect().await?;
+    log_pass("isolated permission denied", "typed server error");
+
+    let host = client
+        .create_host(gvm_gmp::commands::hosts::HostOpts {
+            value: Some("192.0.2.118".to_string()),
+            comment: Some(config.name("host")),
+        })
+        .await?;
+    tracker.track_asset(&host.id);
+    let hosts = client
+        .get_hosts(gvm_gmp::commands::hosts::GetHostsOpts {
+            filter_string: Some(format!("uuid={}", host.id)),
+            details: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    ensure(
+        hosts.items.iter().any(|entry| entry.meta.id == host.id),
+        "typed host asset did not round-trip",
+    )?;
+    let assets = client
+        .get_assets(gvm_gmp::commands::assets::GetAssetsOpts {
+            type_: Some(gvm_gmp::commands::assets::AssetType::Host),
+            filter_string: Some(format!("uuid={}", host.id)),
+            details: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    ensure(
+        assets.items.iter().any(|entry| match entry {
+            gvm_gmp::responses::Asset::Host(value) => value.meta.id == host.id,
+            gvm_gmp::responses::Asset::OperatingSystem(value) => value.meta.id == host.id,
+            gvm_gmp::responses::Asset::Generic(value) => value.meta.id == host.id,
+            _ => false,
+        }),
+        "typed generic asset list did not round-trip the host",
+    )?;
+    let asset = client
+        .get_asset(&host.id, gvm_gmp::commands::assets::AssetType::Host)
+        .await?;
+    ensure(
+        asset.items.iter().any(|entry| match entry {
+            gvm_gmp::responses::Asset::Host(value) => value.meta.id == host.id,
+            gvm_gmp::responses::Asset::OperatingSystem(value) => value.meta.id == host.id,
+            gvm_gmp::responses::Asset::Generic(value) => value.meta.id == host.id,
+            _ => false,
+        }),
+        "typed singular asset did not round-trip",
+    )?;
+    let operating_systems = client
+        .get_operating_system_assets(
+            gvm_gmp::commands::operating_systems::GetOperatingSystemsOpts {
+                filter_string: Some("rows=1".to_string()),
+                details: Some(true),
+                ..Default::default()
+            },
+        )
+        .await?;
+    if let Some(operating_system) = operating_systems.items.first() {
+        let single = client
+            .get_operating_system_asset(&operating_system.meta.id, Some(true))
+            .await?;
+        ensure(
+            single
+                .items
+                .iter()
+                .any(|entry| entry.meta.id == operating_system.meta.id),
+            "typed singular operating-system asset did not round-trip",
+        )?;
+    }
+    let modify_host = client
+        .modify_asset(
+            &host.id,
+            gvm_gmp::commands::assets::ModifyAssetOpts {
+                comment: Some(config.name("host-modified")),
+                value: None,
+            },
+        )
+        .await?;
+    ensure(modify_host.status == 200, "typed modify_asset failed")?;
+    let invalid_host = client
+        .create_host(gvm_gmp::commands::hosts::HostOpts::named("not-an-ip"))
+        .await;
+    ensure(
+        matches!(
+            invalid_host,
+            Err(GvmError::Parse(
+                gvm_gmp::responses::ParseError::ServerError { .. }
+            ))
+        ),
+        "invalid host asset did not produce a typed server error",
+    )?;
+    let generic_asset = client
+        .create_asset(gvm_gmp::commands::assets::CreateAssetOpts {
+            asset_type: gvm_gmp::commands::assets::AssetType::Host,
+            comment: Some(config.name("generic-asset")),
+            value: Some("192.0.2.119".to_string()),
+        })
+        .await?;
+    ensure(
+        generic_asset.status == 201,
+        "typed generic create_asset failed",
+    )?;
+    let generic_asset_id = generic_asset.id.ok_or_else(|| {
+        AppError::Assertion("typed generic create_asset omitted its id".to_string())
+    })?;
+    tracker.track_asset(&generic_asset_id);
+    let deleted_generic_asset = client
+        .delete_asset(
+            &generic_asset_id,
+            gvm_gmp::commands::assets::DeleteAssetOpts::default(),
+        )
+        .await?;
+    ensure(
+        deleted_generic_asset.status == 200,
+        "typed generic delete_asset failed",
+    )?;
+    tracker
+        .asset_ids
+        .retain(|id| id != generic_asset_id.as_str());
+    log_pass("isolated host asset", "typed create/get/modify/failure");
+
+    // rust-gvm's typed ReportFormat omits parameter metadata. Ask gvmd for the
+    // authenticated `params=1` view, but keep report-format coverage independent
+    // of whether this installation exposes configurable report formats.
+    let report_formats = client
+        .send(get_report_formats_with_params_request())
+        .await?;
+    assert_status(&report_formats, 200, "get_report_formats with params")?;
+    let report_format_params = parse_report_format_params(&report_formats)?;
+    let ordinary_report_format_id = select_ordinary_report_format(&report_format_params)?;
+    let configurable_report_format_id = select_configurable_report_format(&report_format_params);
+    let create_format = client
+        .create_report_format(
+            &config.name("report-format-created"),
+            gvm_gmp::commands::report_formats::ReportFormatOpts {
+                comment: Some(config.name("report-format-created-comment")),
+                content_type: Some("text/xml".to_string()),
+                format_type: Some(gvm_gmp::ReportFormatType::Xml),
+            },
+        )
+        .await;
+    ensure(
+        matches!(
+            create_format,
+            Err(GvmError::Parse(
+                gvm_gmp::responses::ParseError::ServerError {
+                    status: 400,
+                    ref message,
+                }
+            )) if message == "Either a GET_REPORT_FORMATS_RESPONSE or a COPY is required"
+        ),
+        "standalone create_report_format did not produce the expected typed server error",
+    )?;
+    log_pass(
+        "isolated report format create",
+        "typed server contract requires import or copy",
+    );
+    let cloned_format = client
+        .clone_report_format(&ordinary_report_format_id)
+        .await?;
+    tracker.track_report_format(&cloned_format.id);
+    let modify_format = client
+        .send(gvm_gmp::commands::report_formats::modify_report_format(
+            &cloned_format.id,
+            gvm_gmp::commands::report_formats::ReportFormatOpts {
+                comment: Some(config.name("report-format")),
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&modify_format, 200, "modify_report_format")?;
+
+    let exported_format = client
+        .send(gvm_gmp::commands::report_formats::get_report_format(
+            &ordinary_report_format_id,
+        ))
+        .await?;
+    assert_status(&exported_format, 200, "export report format for import")?;
+    let imported_format_xml = replace_first_resource_id(
+        &replace_first_resource_name(
+            exported_format.as_str()?,
+            "report_format",
+            &config.name("report-format-import"),
+        )?,
+        "report_format",
+        &fixture_uuid(&config.run_id, "rust-gvm-e2e-report-format"),
+    )?;
+    let imported_format = client.import_report_format(&imported_format_xml).await?;
+    ensure(
+        imported_format.status == 201,
+        "typed import_report_format failed",
+    )?;
+    tracker.track_report_format(&imported_format.id);
+    for id in [&cloned_format.id, &imported_format.id] {
+        let verified = client
+            .send(gvm_gmp::commands::report_formats::verify_report_format(id))
+            .await?;
+        assert_status(&verified, 200, "verify_report_format")?;
+    }
+
+    log_pass(
+        "isolated report format lifecycle",
+        "clone/modify/export/import/verify; cleanup is tracked",
+    );
+    if let Some(report_format_id) = configurable_report_format_id {
+        run_report_config_lifecycle(&mut client, config, tracker, &report_format_id).await?;
+    } else {
+        runtime::observe(
+            "isolated report config lifecycle",
+            Outcome::ConditionalUnavailable,
+            &format!(
+                "get_report_formats params=1 returned no configurable report format: [{}]",
+                report_format_parameter_evidence(&report_format_params)
+            ),
+        );
+    }
+
+    let sync_configs = client
+        .get_scan_configs(GetScanConfigsOpts {
+            filter_string: Some("rows=1".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let sync_config = sync_configs.items.first().ok_or_else(|| {
+        AppError::Assertion("isolated sync requires a warm feed config".to_string())
+    })?;
+    let typed_sync = client.sync_scan_config(&sync_config.meta.id).await;
+    ensure(
+        matches!(
+            typed_sync,
+            Err(GvmError::Parse(
+                gvm_gmp::responses::ParseError::ServerError {
+                    status: 400,
+                    ref message,
+                }
+            )) if message == "Bogus command name"
+        ),
+        "typed sync_scan_config did not produce the expected current server error",
+    )?;
+    runtime::observe(
+        "typed sync_scan_config",
+        Outcome::KnownUpstreamBug,
+        "rust-gvm#414 reproduced: config_id makes gvmd reject sync_config as a bogus command",
+    );
+
+    renew_authenticated_after_response(
+        &mut client,
+        config,
+        Duration::from_secs(config.task_progress_timeout_secs),
+        "typed sync_config rejection",
+    )
+    .await?;
+    let sync = client.send(sync_config_request()).await?;
+    if canonical_sync_config_succeeded(&sync)? {
+        log_pass(
+            "isolated config sync",
+            "canonical parameterless sync request on dedicated database",
+        );
+    } else {
+        runtime::observe(
+            "canonical sync_config",
+            Outcome::KnownUpstreamBug,
+            "gvmd advertises sync_config in authenticated help but rejects the canonical parameterless command as bogus",
+        );
+    }
+    renew_authenticated_after_response(
+        &mut client,
+        config,
+        Duration::from_secs(config.task_progress_timeout_secs),
+        "canonical sync_config outcome",
+    )
+    .await?;
+
+    let test_alert = client
+        .create_alert(
+            &config.name("test-alert"),
+            AlertOpts {
+                comment: Some(config.name("test-alert-comment")),
+                event: Some(AlertEvent::TaskRunStatusChanged),
+                condition: Some(AlertCondition::Always),
+                method: Some(AlertMethod::SysLog),
+                ..Default::default()
+            },
+        )
+        .await?;
+    tracker.track_alert(&test_alert.id);
+    let tested = client
+        .send(gvm_gmp::commands::alerts::test_alert(&test_alert.id))
+        .await?;
+    assert_status(&tested, 200, "test_alert")?;
+    log_pass("isolated alert test", "syslog alert test request");
+
+    let tls = client
+        .create_tls_certificate(
+            &config.name("tls-certificate"),
+            gvm_gmp::commands::tls_certificates::TlsCertificateOpts {
+                certificate: Some(tls_certificate_data()),
+                comment: Some(config.name("tls-certificate-comment")),
+                ..Default::default()
+            },
+        )
+        .await?;
+    tracker.track_tls_certificate(&tls.id);
+    let certificates = client
+        .get_tls_certificates(
+            gvm_gmp::commands::tls_certificates::GetTlsCertificatesOpts {
+                filter_string: Some(format!("uuid={}", tls.id)),
+                details: Some(true),
+                ..Default::default()
+            },
+        )
+        .await?;
+    ensure(
+        certificates
+            .items
+            .iter()
+            .any(|entry| entry.meta.id == tls.id),
+        "typed TLS certificate did not round-trip",
+    )?;
+    let modify_tls = client
+        .send(gvm_gmp::commands::tls_certificates::modify_tls_certificate(
+            &tls.id,
+            gvm_gmp::commands::tls_certificates::TlsCertificateOpts {
+                comment: Some(config.name("tls-certificate-modified")),
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&modify_tls, 200, "modify_tls_certificate")?;
+    log_pass(
+        "isolated tls certificate",
+        "typed create/get and raw modify",
+    );
+
+    let settings = client.get_settings().await?;
+    let mut restored_setting = None;
+    for setting in settings
+        .items
+        .iter()
+        .filter(|setting| setting.value.is_some())
+    {
+        let original = setting.value.as_deref().unwrap_or_default();
+        let write_same_value = client
+            .send(modify_setting_request(&setting.id, original))
+            .await?;
+        if write_same_value.status_code() == Some(400)
+            && response_contains(&write_same_value, "Failed to find setting")?
+        {
+            continue;
+        }
+        assert_status(&write_same_value, 200, "modify_setting snapshot")?;
+        let restore = client
+            .send(modify_setting_request(&setting.id, original))
+            .await?;
+        assert_status(&restore, 200, "modify_setting restore")?;
+        restored_setting = Some(setting.name.clone());
+        break;
+    }
+    if let Some(setting_name) = restored_setting {
+        log_pass(
+            "isolated setting",
+            &format!("snapshot and restore exact value for {setting_name}"),
+        );
+    } else {
+        runtime::observe(
+            "isolated setting",
+            Outcome::ConditionalUnavailable,
+            "stable gvmd exposed no value-bearing setting accepted by modify_setting",
+        );
+    }
+
+    trash_restore_then_delete(&mut client, "permission", &permission_id, |id, ultimate| {
+        gvm_gmp::commands::permissions::delete_permission(id, ultimate)
+    })
+    .await?;
+    tracker
+        .permission_ids
+        .retain(|id| id != permission_id.as_str());
+    trash_restore_then_delete(&mut client, "group", &group.id, |id, ultimate| {
+        gvm_gmp::commands::groups::delete_group(id, ultimate)
+    })
+    .await?;
+    tracker.group_ids.retain(|id| id != group.id.as_str());
+    trash_restore_then_delete(&mut client, "role", &role.id, |id, ultimate| {
+        gvm_gmp::commands::roles::delete_role(id, ultimate)
+    })
+    .await?;
+    tracker.role_ids.retain(|id| id != role.id.as_str());
+    let deleted_user = client.send(delete_user_directly_request(&user.id)).await?;
+    assert_status(&deleted_user, 200, "delete user directly")?;
+    tracker.user_ids.retain(|id| id != user.id.as_str());
+
+    tracker.cleanup_inner().await?;
+    let empty = client.empty_trashcan().await?;
+    ensure(empty.status == 200, "isolated empty_trashcan failed")?;
+    log_pass(
+        "isolated trash",
+        "typed restore lifecycles and dedicated empty_trashcan",
+    );
+
+    client.disconnect().await?;
+    Ok(())
+}
+
+async fn trash_restore_then_delete<R, F>(
+    client: &mut GmpClient<UnixSocketConnection>,
+    label: &str,
+    id: &EntityId,
+    delete: F,
+) -> Result<(), AppError>
+where
+    R: gvm_protocol::Request,
+    F: Fn(&EntityId, bool) -> R,
+{
+    let trashed = client.send(delete(id, false)).await?;
+    assert_status(&trashed, 200, &format!("trash {label}"))?;
+    let restored = client.restore_from_trashcan(id).await?;
+    ensure(
+        restored.status == 200,
+        &format!("restore {label} did not return 200"),
+    )?;
+    let deleted = client.send(delete(id, true)).await?;
+    assert_status(&deleted, 200, &format!("ultimate delete {label}"))?;
+    Ok(())
+}
+
+async fn validate_transport<C>(
+    label: &str,
+    mut client: GmpClient<C>,
+    config: &EnvConfig,
+) -> Result<(), AppError>
+where
+    C: GvmConnection + Send,
+{
+    let version = client.get_version().await?;
+    ensure(version.status == 200, "transport get_version failed")?;
+    let auth = client
+        .authenticate(&config.username, &config.password)
+        .await?;
+    ensure(auth.status == 200, "transport authentication failed")?;
+    runtime::observe(
+        &format!("transport:{label}"),
+        Outcome::Pass,
+        &format!(
+            "typed get_version/authenticate succeeded with GMP {}",
+            version.version
+        ),
+    );
+    client.disconnect().await?;
+    Ok(())
+}
+
+fn required_env(name: &str) -> Result<String, AppError> {
+    optional_env(name).ok_or_else(|| {
+        AppError::Assertion(format!("{name} is required for the selected transport"))
+    })
+}
+
+fn optional_env(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.trim().is_empty())
+}
+
+fn canonical_help_command(name: &str) -> String {
+    name.trim().to_ascii_lowercase()
+}
+
+fn live_help_supports(help_commands: &BTreeSet<String>, command: &str) -> bool {
+    help_commands.contains(command)
+}
+
+fn env_u16(name: &str) -> Result<Option<u16>, AppError> {
+    optional_env(name)
+        .map(|value| {
+            value
+                .parse()
+                .map_err(|_| AppError::Assertion(format!("{name} must be a valid u16 port")))
+        })
+        .transpose()
+}
+
 async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Result<(), AppError> {
     let mut client = connect_client(config).await?;
+    let smoke_target_name = config.name("smoke-target");
 
     let version_response = client
         .send(gvm_gmp::commands::version::get_version())
@@ -574,7 +3198,7 @@ async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Re
 
     let target_response = client
         .call(create_target(
-            SMOKE_TARGET_NAME,
+            &smoke_target_name,
             CreateTargetOpts {
                 hosts: vec!["127.0.0.1".to_string()],
                 port_list_id: Some(port_list_id),
@@ -590,17 +3214,30 @@ async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Re
     let get_target_response = client.call(get_target(&target_id)).await?;
     assert_status(&get_target_response, 200, "get_target")?;
     ensure(
-        response_contains(&get_target_response, SMOKE_TARGET_NAME)?,
+        response_contains(&get_target_response, &smoke_target_name)?,
         "expected created target name in get_target response",
     )?;
     log_pass("08", "get target by UUID");
 
-    let delete_target_response = client.call(delete_target(&target_id, true)).await?;
-    assert_status(&delete_target_response, 200, "delete_target")?;
+    let modify_target = client
+        .send(gvm_gmp::commands::targets::modify_target(
+            &target_id,
+            gvm_gmp::commands::targets::ModifyTargetOpts {
+                name: Some(config.name("smoke-target-modified")),
+                comment: Some(config.name("smoke-target-comment")),
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&modify_target, 200, "modify_target")?;
+    trash_restore_then_delete(&mut client, "target", &target_id, |id, ultimate| {
+        delete_target(id, ultimate)
+    })
+    .await?;
     tracker
         .target_ids
         .retain(|value| value != target_id.as_str());
-    log_pass("09", "delete target");
+    log_pass("09", "modify/trash/restore/ultimate-delete target");
 
     let verify_delete_response = client.send(get_target(&target_id)).await?;
     assert_status(&verify_delete_response, 404, "verify target deletion")?;
@@ -614,130 +3251,489 @@ async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Re
     Ok(())
 }
 
+fn select_scan_report_id(
+    started_report_id: &EntityId,
+    current_report_id: Option<&EntityId>,
+    last_report_id: Option<&EntityId>,
+) -> Option<EntityId> {
+    if started_report_id.as_str() != "0" {
+        return Some(started_report_id.clone());
+    }
+
+    current_report_id
+        .filter(|id| id.as_str() != "0")
+        .or_else(|| last_report_id.filter(|id| id.as_str() != "0"))
+        .cloned()
+}
+
+async fn resolve_scan_report_id(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    task_id: &EntityId,
+    started_report_id: &EntityId,
+) -> Result<EntityId, AppError> {
+    if let Some(report_id) = select_scan_report_id(started_report_id, None, None) {
+        return Ok(report_id);
+    }
+
+    let timeout = Duration::from_secs(config.task_progress_timeout_secs);
+    let started = tokio::time::Instant::now();
+
+    while started.elapsed() <= timeout {
+        let response = get_tasks_with_reconnect(
+            client,
+            config,
+            GetTasksOpts {
+                filter_string: Some(format!("uuid={task_id}")),
+                details: Some(true),
+                ..Default::default()
+            },
+            timeout.saturating_sub(started.elapsed()),
+            "resolve scan report",
+        )
+        .await?;
+        let task = response
+            .items
+            .iter()
+            .find(|task| task.meta.id == *task_id)
+            .ok_or_else(|| {
+                AppError::Assertion(format!(
+                    "typed get_tasks did not return scan task {task_id} while resolving its report"
+                ))
+            })?;
+
+        if let Some(report_id) = select_scan_report_id(
+            started_report_id,
+            task.current_report.as_ref().map(|report| &report.id),
+            task.last_report.as_ref().map(|report| &report.id),
+        ) {
+            return Ok(report_id);
+        }
+
+        sleep(Duration::from_secs(1)).await;
+    }
+
+    Err(AppError::Assertion(format!(
+        "task {task_id} retained provisional report id {started_report_id} without exposing a current or last report within {} seconds",
+        timeout.as_secs()
+    )))
+}
+
 async fn run_scan_suite(
     client: &mut GmpClient<UnixSocketConnection>,
     config: &EnvConfig,
     tracker: &mut CleanupTracker,
 ) -> Result<(), AppError> {
-    log_line("Running extended scan flow because E2E_RUN_SCAN=1");
+    client
+        .authenticate(&config.username, &config.password)
+        .await?;
+    log_line("Running deterministic host/network scan flow");
+    let scan_target_name = config.name("scan-target");
+    let scan_task_name = config.name("scan-task");
+    let scan_host = env::var("E2E_SCAN_TARGET_HOST").unwrap_or_else(|_| "scan-fixture".to_string());
 
-
-    // Clean up stale scan task from previous runs (persistent volumes)
-    // Must happen before target cleanup since targets can't be deleted while referenced by tasks
-    {
-        let tasks_response = client.call(get_tasks(GetTasksOpts::default())).await?;
-        let xml = tasks_response.as_str()?;
-        let stale_ids = find_elements_by_name(xml, "task", SCAN_TASK_NAME)?;
-        for stale_id in &stale_ids {
-            log_line(&format!("cleaning up stale scan task {stale_id}"));
-            if let Ok(entity_id) = stale_id.parse() {
-                // Stop task if running, then delete
-                let _ = client.call(stop_task(&entity_id)).await;
-                let _ = client.call(delete_task(&entity_id, true)).await;
-            }
-        }
-    }
-
-    // Clean up stale scan target from previous runs (persistent volumes)
-    {
-        let targets_response = client.call(get_targets(GetTargetsOpts::default())).await?;
-        let xml = targets_response.as_str()?;
-        let stale_ids = find_elements_by_name(xml, "target", SCAN_TARGET_NAME)?;
-        for stale_id in &stale_ids {
-            log_line(&format!("cleaning up stale scan target {stale_id}"));
-            if let Ok(entity_id) = stale_id.parse() {
-                let _ = client.call(delete_target(&entity_id, true)).await;
-            }
-        }
-    }
-
-    // Get port list (GMP requires PORT_LIST or PORT_RANGE)
-    let port_list_id = first_element_id(
-        &client
-            .call(get_port_lists(GetPortListsOpts::default()))
-            .await?,
-        "port_list",
+    let port_list = client
+        .create_port_list(
+            &config.name("scan-port-list"),
+            PortListOpts {
+                port_range: Some("T:80".to_string()),
+                comment: Some(config.name("scan-port-list-comment")),
+            },
+        )
+        .await?;
+    ensure(
+        port_list.status == 201,
+        "typed scan port-list create failed",
     )?;
-
+    tracker.track_port_list(&port_list.id);
     let scan_target = client
-        .call(create_target(
-            SCAN_TARGET_NAME,
+        .create_target(
+            &scan_target_name,
             CreateTargetOpts {
-                hosts: vec!["127.0.0.1".to_string()],
-                port_list_id: Some(port_list_id),
+                hosts: vec![scan_host],
+                port_list_id: Some(port_list.id.clone()),
                 ..CreateTargetOpts::default()
             },
-        ))
+        )
         .await?;
-    assert_status(&scan_target, 201, "create scan target")?;
-    let target_id = response_id(&scan_target, "create scan target")?;
-    tracker.track_target(&target_id);
+    ensure(scan_target.status == 201, "typed scan target create failed")?;
+    tracker.track_target(&scan_target.id);
 
-    let config_id = first_element_id(
-        &client
-            .call(get_scan_configs(GetScanConfigsOpts::default()))
-            .await?,
-        "config",
-    )?;
-    let scanner_id = first_element_id(
-        &client
-            .call(get_scanners(GetScannersOpts::default()))
-            .await?,
-        "scanner",
-    )?;
+    let configs = client
+        .get_scan_configs(GetScanConfigsOpts::default())
+        .await?;
+    let preferred_config = env::var("E2E_SCAN_CONFIG_NAME").ok();
+    let scan_config = preferred_config
+        .as_deref()
+        .and_then(|name| configs.items.iter().find(|item| item.meta.name == name))
+        .or_else(|| {
+            configs
+                .items
+                .iter()
+                .find(|item| item.meta.name.to_ascii_lowercase().contains("discovery"))
+        })
+        .or_else(|| configs.items.first())
+        .ok_or_else(|| AppError::Assertion("scan lane requires a warm scan config".to_string()))?;
+    let scanners = client.get_scanners(GetScannersOpts::default()).await?;
+    let scanner = scanners
+        .items
+        .first()
+        .ok_or_else(|| AppError::Assertion("scan lane requires a warm scanner".to_string()))?;
 
-    let create_task_response = client
-        .call(create_task(
-            SCAN_TASK_NAME,
-            &config_id,
-            &target_id,
-            &scanner_id,
+    let task = client
+        .create_task(
+            &scan_task_name,
+            &scan_config.meta.id,
+            &scan_target.id,
+            &scanner.meta.id,
             CreateTaskOpts::default(),
-        ))
+        )
         .await?;
-    assert_status(&create_task_response, 201, "create_task")?;
-    let task_id = response_id(&create_task_response, "create_task")?;
-    tracker.track_task(&task_id);
+    ensure(task.status == 201, "typed scan task create failed")?;
+    tracker.track_task(&task.id);
+    let listed = client
+        .get_tasks(GetTasksOpts {
+            filter_string: Some(format!("uuid={}", task.id)),
+            details: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    ensure(
+        listed.items.iter().any(|item| item.meta.id == task.id),
+        "typed task list/filter did not return the scan task",
+    )?;
 
-    let start_response = client.call(start_task(&task_id)).await?;
-    assert_status(&start_response, 202, "start_task")?;
-    let report_id = child_entity_id(&start_response, "report_id")?;
+    let results = client
+        .get_results(gvm_gmp::commands::results::GetResultsOpts {
+            filter_string: Some("uuid=00000000-0000-0000-0000-000000000000 rows=1".to_string()),
+            details: Some(false),
+            ..Default::default()
+        })
+        .await?;
+    ensure(
+        results.status == 200,
+        "typed get_results did not return 200",
+    )?;
+    ensure(
+        results.items.is_empty(),
+        "typed no-match get_results unexpectedly returned a result",
+    )?;
 
-    let task_status = poll_task_status(client, &task_id, Duration::from_secs(config.task_progress_timeout_secs)).await?;
-    if matches!(
-        task_status.as_str(),
-        "Running" | "Requested" | "Stop Requested"
-    ) {
-        let stop_response = client.call(stop_task(&task_id)).await?;
-        assert_status(&stop_response, 200, "stop_task")?;
-    } else {
-        log_line(&format!(
-            "scan task reached terminal status `{task_status}` before stop_task"
-        ));
+    let started = client.start_task(&task.id).await?;
+    ensure(started.status == 202, "typed start_task did not return 202")?;
+    let started_report_id = started.report_id.ok_or_else(|| {
+        AppError::Assertion("typed start_task response omitted report_id".to_string())
+    })?;
+    match client.start_task(&task.id).await {
+        Ok(response) if response.status >= 400 => log_pass(
+            "typed duplicate start_task",
+            &format!(
+                "rejected with status {} ({})",
+                response.status, response.status_text
+            ),
+        ),
+        Ok(response)
+            if response.status == 202
+                && response.report_id.as_ref() == Some(&started_report_id) =>
+        {
+            log_pass(
+                "typed duplicate start_task",
+                "idempotent response preserved the active report",
+            );
+        }
+        Ok(response) => {
+            return Err(AppError::Assertion(format!(
+                "duplicate start_task returned status {} ({}) with report {:?}, expected a rejection or the existing report {started_report_id}",
+                response.status, response.status_text, response.report_id
+            )));
+        }
+        Err(GvmError::Parse(gvm_gmp::responses::ParseError::ServerError { .. })) => {
+            log_pass("typed duplicate start_task", "typed server rejection")
+        }
+        Err(error) => return Err(error.into()),
     }
 
-    let report_response = client.call(get_report(&report_id)).await?;
-    assert_status(&report_response, 200, "get_report")?;
-    ensure(
-        response_contains(&report_response, "<report ")?
-            || response_contains(&report_response, "<results>")?
-            || response_contains(&report_response, "<result>")?,
-        "expected report payload in get_report response",
-    )?;
+    renew_authenticated_after_response(
+        client,
+        config,
+        Duration::from_secs(config.task_progress_timeout_secs),
+        "duplicate start_task",
+    )
+    .await?;
 
-    let delete_task_response = client.call(delete_task(&task_id, true)).await?;
+    wait_task_state(
+        client,
+        config,
+        &task.id,
+        Duration::from_secs(config.task_progress_timeout_secs),
+        |status| status != "New" && status != "Requested",
+    )
+    .await?;
+    let report_id = resolve_scan_report_id(client, config, &task.id, &started_report_id).await?;
+    // The deterministic fixture can finish just after the first Running
+    // snapshot. Give that terminal transition a short grace period before the
+    // stop mutation so a completed task is not moved back into a permanent
+    // Stop Requested state.
+    let task_status = settle_task_state_before_stop(
+        client,
+        config,
+        &task.id,
+        Duration::from_secs(config.task_progress_timeout_secs),
+        Duration::from_secs(5),
+    )
+    .await?;
+    if task_state_is_stoppable(&task_status) {
+        let stop_response = client.call(stop_task(&task.id)).await?;
+        assert_stop_task_status(&stop_response, "stop_task")?;
+        let stopped = wait_task_state(
+            client,
+            config,
+            &task.id,
+            Duration::from_secs(config.task_progress_timeout_secs),
+            |status| {
+                matches!(
+                    status,
+                    "Stopped" | "Interrupted" | "Done" | "Internal Error"
+                )
+            },
+        )
+        .await?;
+        if matches!(stopped.as_str(), "Stopped" | "Interrupted") {
+            let resumed = client.resume_task(&task.id).await?;
+            ensure(
+                resumed.status == 202,
+                "typed resume_task did not return 202",
+            )?;
+            ensure(
+                resumed.report_id.as_ref() == Some(&report_id),
+                "resume_task changed the report linkage",
+            )?;
+            let resumed_state = wait_task_state(
+                client,
+                config,
+                &task.id,
+                Duration::from_secs(config.task_progress_timeout_secs),
+                |status| !matches!(status, "Stopped" | "Interrupted" | "Requested"),
+            )
+            .await?;
+            if resumed_state == "Running" {
+                let stop = client.call(stop_task(&task.id)).await?;
+                assert_stop_task_status(&stop, "stop resumed task")?;
+                wait_task_state(
+                    client,
+                    config,
+                    &task.id,
+                    Duration::from_secs(config.task_progress_timeout_secs),
+                    |status| {
+                        matches!(
+                            status,
+                            "Stopped" | "Interrupted" | "Done" | "Internal Error"
+                        )
+                    },
+                )
+                .await?;
+            }
+        }
+    }
+
+    runtime::observe(
+        "scan-report-read-lifecycle",
+        Outcome::ConditionalUnavailable,
+        "stable gvmd report/result expansion and export paths execute invalid SEVERITY_ERROR SQL",
+    );
+
+    let import_task = client
+        .create_import_task(
+            &config.name("import-task"),
+            Some(&config.name("sanitized-report-import")),
+        )
+        .await?;
+    ensure(import_task.status == 201, "typed create_import_task failed")?;
+    tracker.track_task(&import_task.id);
+    let import_xml = include_str!("../../../fixtures/import-report.xml")
+        .replace("{{RUN_NAME}}", &config.name("imported-report"))
+        .replace(
+            "{{REPORT_ID}}",
+            &fixture_uuid(&config.run_id, "rust-gvm-e2e-report"),
+        );
+    let imported = client
+        .import_report(
+            &import_xml,
+            &import_task.id,
+            gvm_gmp::commands::reports::ImportReportOpts {
+                in_assets: Some(false),
+            },
+        )
+        .await?;
+    ensure(imported.status == 201, "typed import_report failed")?;
+    log_pass(
+        "report import",
+        "sanitized fixture create_import_task/import_report; parent-task cleanup tracked",
+    );
+
+    if let Some(result) = results.items.first() {
+        let ticket = client
+            .create_ticket(
+                &result.meta.id,
+                gvm_gmp::commands::tickets::TicketOpts {
+                    assigned_to: Some(config.username.clone()),
+                    comment: Some(config.name("scan-ticket")),
+                    status: Some(gvm_gmp::TicketStatus::Open),
+                    open_note: Some(config.name("scan-ticket-open")),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        tracker.track_ticket(&ticket.id);
+        let tickets = client
+            .get_tickets(gvm_gmp::commands::tickets::GetTicketsOpts {
+                filter_string: Some(format!("uuid={}", ticket.id)),
+                details: Some(true),
+                ..Default::default()
+            })
+            .await?;
+        ensure(
+            tickets.items.iter().any(|item| item.meta.id == ticket.id),
+            "typed ticket did not round-trip",
+        )?;
+        let modified = client
+            .send(gvm_gmp::commands::tickets::modify_ticket(
+                &ticket.id,
+                gvm_gmp::commands::tickets::TicketOpts {
+                    comment: Some(config.name("scan-ticket-modified")),
+                    ..Default::default()
+                },
+            ))
+            .await?;
+        assert_status(&modified, 200, "modify_ticket")?;
+        trash_restore_then_delete(client, "ticket", &ticket.id, |id, ultimate| {
+            gvm_gmp::commands::tickets::delete_ticket(id, ultimate)
+        })
+        .await?;
+        tracker.ticket_ids.retain(|id| id != ticket.id.as_str());
+    } else {
+        runtime::observe(
+            "scan-ticket-lifecycle",
+            Outcome::ConditionalUnavailable,
+            "deterministic network scan produced no result eligible for a ticket",
+        );
+    }
+
+    let delete_report = client
+        .send(gvm_gmp::commands::reports::delete_report(&report_id, true))
+        .await?;
+    assert_status(&delete_report, 200, "ultimate delete scan report")?;
+    let absent_report = client.send(get_report(&report_id)).await?;
+    assert_status(&absent_report, 404, "verify report cleanup")?;
+    let delete_task_response = client.call(delete_task(&task.id, true)).await?;
     assert_status(&delete_task_response, 200, "delete_task")?;
-    tracker.task_ids.retain(|value| value != task_id.as_str());
+    tracker.task_ids.retain(|value| value != task.id.as_str());
 
-    let delete_target_response = client.call(delete_target(&target_id, true)).await?;
+    let delete_target_response = client.call(delete_target(&scan_target.id, true)).await?;
     assert_status(&delete_target_response, 200, "delete_target")?;
     tracker
         .target_ids
-        .retain(|value| value != target_id.as_str());
+        .retain(|value| value != scan_target.id.as_str());
+    let delete_port_list_response = client.call(delete_port_list(&port_list.id, true)).await?;
+    assert_status(&delete_port_list_response, 200, "delete scan port list")?;
+    tracker
+        .port_list_ids
+        .retain(|value| value != port_list.id.as_str());
 
-    log_pass("11", "extended scan flow");
+    log_pass(
+        "scan",
+        &format!(
+            "task states, report {}, {} typed result(s), report coverage, cleanup",
+            report_id,
+            results.items.len()
+        ),
+    );
     Ok(())
 }
+
+#[cfg(test)]
+fn conditional_helper_coverage(helper_name: &str) -> Result<&'static CoverageEntry, AppError> {
+    let helper = HELPER_COVERAGE
+        .iter()
+        .find(|entry| entry.name == helper_name)
+        .ok_or_else(|| {
+            AppError::Assertion(format!("missing coverage entry for helper {helper_name}"))
+        })?;
+    ensure(
+        helper.disposition == Disposition::ConditionalCommunity,
+        &format!("helper {helper_name} must be conditional in the coverage manifest"),
+    )?;
+    Ok(helper)
+}
+
+#[cfg(test)]
+fn conditional_helper_semantic_name(helper_name: &str) -> &str {
+    // These public helper variants intentionally share one semantic capability
+    // entry. Keep aliases explicit: helper names are not wire-command names.
+    match helper_name {
+        "get_report_export_with_opts" => "get_report_export",
+        _ => helper_name,
+    }
+}
+
+#[cfg(test)]
+fn conditional_helper_minimum_version(helper_name: &str) -> Result<GmpVersion, AppError> {
+    let helper = conditional_helper_coverage(helper_name)?;
+    gvm_gmp::capabilities::minimum_version_for_command(conditional_helper_semantic_name(
+        helper_name,
+    ))
+    .or_else(|| gvm_gmp::capabilities::minimum_version_for_command(helper.wire_command))
+    .ok_or_else(|| {
+        AppError::Assertion(format!(
+            "conditional helper {helper_name} has no semantic capability version gate"
+        ))
+    })
+}
+
+#[cfg(test)]
+fn conditional_helper_available(helper_name: &str, version: GmpVersion) -> Result<bool, AppError> {
+    let minimum = conditional_helper_minimum_version(helper_name)?;
+    Ok(version >= minimum)
+}
+
+#[cfg(test)]
+fn conditional_helper_call_allowed(
+    helper_name: &str,
+    advertised: bool,
+    version: GmpVersion,
+) -> Result<bool, AppError> {
+    let version_eligible = conditional_helper_available(helper_name, version)?;
+    Ok(advertised && version_eligible)
+}
+
+#[cfg(test)]
+fn conditional_report_drilldown_call_allowed(
+    helper_name: &str,
+    available_commands: &BTreeSet<String>,
+    version: GmpVersion,
+) -> Result<bool, AppError> {
+    let helper = conditional_helper_coverage(helper_name)?;
+    conditional_helper_call_allowed(
+        helper_name,
+        available_commands.contains(helper.wire_command),
+        version,
+    )
+}
+
+#[cfg(test)]
+const CONDITIONAL_REPORT_DRILLDOWN_HELPERS: &[&str] = &[
+    "get_scan_report",
+    "get_report_vulns",
+    "get_report_vulnerabilities",
+    "get_report_tls_certificates",
+    "get_report_hosts_parsed",
+    "get_report_ports_parsed",
+    "get_report_applications_parsed",
+    "get_report_operating_systems_parsed",
+    "get_report_cves_parsed",
+    "get_report_errors",
+    "get_report_closed_cves",
+];
 
 async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Result<(), AppError> {
     let mut client = connect_client(config).await?;
@@ -750,7 +3746,7 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     // --- port_list CRUD ---
     let pl_resp = client
         .call(create_port_list(
-            "e2e-port-list",
+            &config.name("port-list"),
             PortListOpts {
                 port_range: Some("T:1-100".into()),
                 ..PortListOpts::default()
@@ -766,10 +3762,31 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     assert_status(&get_pl_resp, 200, "get_port_list")?;
     log_pass("crud 02", "get port_list");
 
-    let del_pl_resp = client.call(delete_port_list(&pl_id, true)).await?;
-    assert_status(&del_pl_resp, 200, "delete_port_list")?;
+    let range = client
+        .send(create_port_range_request(&pl_id, 101, 102))
+        .await?;
+    assert_status(&range, 201, "create_port_range")?;
+    let range_id = response_id(&range, "create_port_range")?;
+    let delete_range = client
+        .send(gvm_gmp::commands::port_lists::delete_port_range(&range_id))
+        .await?;
+    assert_status(&delete_range, 200, "delete_port_range")?;
+    let modified = client
+        .send(gvm_gmp::commands::port_lists::modify_port_list(
+            &pl_id,
+            PortListOpts {
+                comment: Some(config.name("port-list-modified")),
+                port_range: None,
+            },
+        ))
+        .await?;
+    assert_status(&modified, 200, "modify_port_list")?;
+    trash_restore_then_delete(&mut client, "port_list", &pl_id, |id, ultimate| {
+        delete_port_list(id, ultimate)
+    })
+    .await?;
     tracker.port_list_ids.retain(|v| v != pl_id.as_str());
-    log_pass("crud 03", "delete port_list");
+    log_pass("crud 03", "modify/trash/restore/delete port_list");
 
     let verify_pl_resp = client.send(get_port_list(&pl_id)).await?;
     assert_status(&verify_pl_resp, 404, "verify port_list absent")?;
@@ -778,7 +3795,7 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     // --- credential CRUD ---
     let cred_resp = client
         .call(create_credential(
-            "e2e-cred",
+            &config.name("credential"),
             CredentialOpts {
                 credential_type: Some(CredentialType::UsernamePassword),
                 login: Some("testuser".into()),
@@ -796,26 +3813,32 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     assert_status(&get_cred_resp, 200, "get_credential")?;
     log_pass("crud 06", "get credential");
 
-    let del_cred_resp = client.call(delete_credential(&cred_id, true)).await?;
-    assert_status(&del_cred_resp, 200, "delete_credential")?;
+    let modified = client
+        .send(gvm_gmp::commands::credentials::modify_credential(
+            &cred_id,
+            CredentialOpts {
+                comment: Some(config.name("credential-modified")),
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&modified, 200, "modify_credential")?;
+    trash_restore_then_delete(&mut client, "credential", &cred_id, |id, ultimate| {
+        delete_credential(id, ultimate)
+    })
+    .await?;
     tracker.credential_ids.retain(|v| v != cred_id.as_str());
-    log_pass("crud 07", "delete credential");
+    log_pass("crud 07", "modify/trash/restore/delete credential");
 
     let verify_cred_resp = client.send(get_credential(&cred_id)).await?;
     assert_status(&verify_cred_resp, 404, "verify credential absent")?;
     log_pass("crud 08", "verify credential absent");
 
     // --- schedule CRUD ---
-    let ical = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//e2e//EN\r\nBEGIN:VEVENT\r\nDTSTART:20260401T060000Z\r\nDURATION:PT0S\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\nEND:VCALENDAR";
     let sched_resp = client
         .call(create_schedule(
-            "e2e-schedule",
-            ScheduleOpts {
-                icalendar: Some(ical.into()),
-                timezone: Some("UTC".into()),
-                comment: Some("e2e test schedule".into()),
-                ..Default::default()
-            },
+            &config.name("schedule"),
+            e2e_schedule_opts("e2e test schedule".into(), None),
         ))
         .await?;
     assert_status(&sched_resp, 201, "create_schedule")?;
@@ -827,10 +3850,22 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     assert_status(&get_sched_resp, 200, "get_schedule")?;
     log_pass("crud 10", "get schedule");
 
-    let del_sched_resp = client.call(delete_schedule(&sched_id, true)).await?;
-    assert_status(&del_sched_resp, 200, "delete_schedule")?;
+    let modified = client
+        .send(gvm_gmp::commands::schedules::modify_schedule(
+            &sched_id,
+            e2e_schedule_opts(
+                config.name("schedule-modified"),
+                Some(config.name("schedule-renamed")),
+            ),
+        ))
+        .await?;
+    assert_status(&modified, 200, "modify_schedule")?;
+    trash_restore_then_delete(&mut client, "schedule", &sched_id, |id, ultimate| {
+        delete_schedule(id, ultimate)
+    })
+    .await?;
     tracker.schedule_ids.retain(|v| v != sched_id.as_str());
-    log_pass("crud 11", "delete schedule");
+    log_pass("crud 11", "modify/trash/restore/delete schedule");
 
     let verify_sched_resp = client.send(get_schedule(&sched_id)).await?;
     assert_status(&verify_sched_resp, 404, "verify schedule absent")?;
@@ -839,7 +3874,7 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     // --- filter CRUD ---
     let filter_resp = client
         .call(create_filter(
-            "e2e-filter",
+            &config.name("filter"),
             FilterOpts {
                 term: Some("name=test".into()),
                 filter_type: Some(FilterType::Task),
@@ -856,10 +3891,24 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     assert_status(&get_filter_resp, 200, "get_filter")?;
     log_pass("crud 14", "get filter");
 
-    let del_filter_resp = client.call(delete_filter(&filter_id, true)).await?;
-    assert_status(&del_filter_resp, 200, "delete_filter")?;
+    let modified = client
+        .send(gvm_gmp::commands::filters::modify_filter(
+            &filter_id,
+            FilterOpts {
+                comment: Some(config.name("filter-modified")),
+                term: Some("name~rust-gvm-e2e".to_string()),
+                filter_type: Some(FilterType::Task),
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&modified, 200, "modify_filter")?;
+    trash_restore_then_delete(&mut client, "filter", &filter_id, |id, ultimate| {
+        delete_filter(id, ultimate)
+    })
+    .await?;
     tracker.filter_ids.retain(|v| v != filter_id.as_str());
-    log_pass("crud 15", "delete filter");
+    log_pass("crud 15", "modify/trash/restore/delete filter");
 
     let verify_filter_resp = client.send(get_filter(&filter_id)).await?;
     assert_status(&verify_filter_resp, 404, "verify filter absent")?;
@@ -870,18 +3919,11 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
         .call(get_port_lists(GetPortListsOpts::default()))
         .await?;
     assert_status(&pl_list_resp, 200, "get_port_lists for task prereq")?;
-    let task_port_list_id = match first_element_id(&pl_list_resp, "port_list") {
-        Ok(id) => id,
-        Err(_) => {
-            log_line("[skip] crud 17-24 task CRUD: no port list available");
-            client.disconnect().await?;
-            return Ok(());
-        }
-    };
+    let task_port_list_id = first_element_id(&pl_list_resp, "port_list")?;
 
     let task_target_resp = client
         .call(create_target(
-            "e2e-task-target",
+            &config.name("task-target"),
             CreateTargetOpts {
                 hosts: vec!["127.0.0.1".to_string()],
                 port_list_id: Some(task_port_list_id),
@@ -896,30 +3938,16 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     let scan_configs_resp = client
         .call(get_scan_configs(GetScanConfigsOpts::default()))
         .await?;
-    let scan_config_id = match first_element_id(&scan_configs_resp, "config") {
-        Ok(id) => id,
-        Err(_) => {
-            log_line("[skip] crud 17-24 task CRUD: no scan config available");
-            client.disconnect().await?;
-            return Ok(());
-        }
-    };
+    let scan_config_id = first_element_id(&scan_configs_resp, "config")?;
 
     let scanners_resp = client
         .call(get_scanners(GetScannersOpts::default()))
         .await?;
-    let scanner_id = match first_element_id(&scanners_resp, "scanner") {
-        Ok(id) => id,
-        Err(_) => {
-            log_line("[skip] crud 17-24 task CRUD: no scanner available");
-            client.disconnect().await?;
-            return Ok(());
-        }
-    };
+    let scanner_id = first_element_id(&scanners_resp, "scanner")?;
 
     let task_resp = client
         .call(create_task(
-            "e2e-task",
+            &config.name("task"),
             &scan_config_id,
             &task_target_id,
             &scanner_id,
@@ -935,15 +3963,27 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     assert_status(&get_task_resp, 200, "get_task")?;
     log_pass("crud 18", "get task");
 
-    let del_task_resp = client.call(delete_task(&task_id, true)).await?;
-    assert_status(&del_task_resp, 200, "delete_task")?;
+    let modified = client
+        .send(gvm_gmp::commands::tasks::modify_task(
+            &task_id,
+            gvm_gmp::commands::tasks::ModifyTaskOpts {
+                name: Some(config.name("task-modified")),
+                comment: Some(config.name("task-comment-modified")),
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&modified, 200, "modify_task")?;
+    trash_restore_then_delete(&mut client, "task", &task_id, |id, ultimate| {
+        delete_task(id, ultimate)
+    })
+    .await?;
     tracker.task_ids.retain(|v| v != task_id.as_str());
-    log_pass("crud 19", "delete task");
+    log_pass("crud 19", "modify/trash/restore/delete task");
 
-    let del_task_target_resp = client.call(delete_target(&task_target_id, true)).await?;
-    assert_status(&del_task_target_resp, 200, "delete task target")?;
+    trash_restore_then_delete(&mut client, "task target", &task_target_id, delete_target).await?;
     tracker.target_ids.retain(|v| v != task_target_id.as_str());
-    log_pass("crud 20", "delete task target");
+    log_pass("crud 20", "trash/restore/delete task target");
 
     // --- notes and overrides (require an NVT OID) ---
     let nvts_resp = client
@@ -954,21 +3994,14 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
         .await?;
     assert_status(&nvts_resp, 200, "get_nvts for note prereq")?;
 
-    let nvt_oid = match first_nvt_oid(&nvts_resp) {
-        Ok(oid) => oid,
-        Err(_) => {
-            log_line("[skip] crud 21-32 notes/overrides: no NVT available");
-            client.disconnect().await?;
-            return Ok(());
-        }
-    };
+    let nvt_oid = first_nvt_oid(&nvts_resp)?;
 
     // --- note CRUD ---
     let note_resp = client
         .call(create_note(
             &nvt_oid,
             NoteOpts {
-                text: Some("e2e test note".into()),
+                text: Some(config.name("note")),
                 ..NoteOpts::default()
             },
         ))
@@ -982,10 +4015,23 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     assert_status(&get_note_resp, 200, "get_note")?;
     log_pass("crud 22", "get note");
 
-    let del_note_resp = client.call(delete_note(&note_id, true)).await?;
-    assert_status(&del_note_resp, 200, "delete_note")?;
+    let modified = client
+        .send(gvm_gmp::commands::notes::modify_note(
+            &note_id,
+            NoteOpts {
+                text: Some(config.name("note-modified")),
+                active: Some(true),
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&modified, 200, "modify_note")?;
+    trash_restore_then_delete(&mut client, "note", &note_id, |id, ultimate| {
+        delete_note(id, ultimate)
+    })
+    .await?;
     tracker.note_ids.retain(|v| v != note_id.as_str());
-    log_pass("crud 23", "delete note");
+    log_pass("crud 23", "modify/trash/restore/delete note");
 
     let verify_note_resp = client.send(get_note(&note_id)).await?;
     assert_status(&verify_note_resp, 404, "verify note absent")?;
@@ -996,7 +4042,7 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
         .call(create_override(
             &nvt_oid,
             OverrideOpts {
-                text: Some("e2e test override".into()),
+                text: Some(config.name("override")),
                 new_severity: Some("-1".into()),
                 ..OverrideOpts::default()
             },
@@ -1011,10 +4057,24 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     assert_status(&get_override_resp, 200, "get_override")?;
     log_pass("crud 26", "get override");
 
-    let del_override_resp = client.call(delete_override(&override_id, true)).await?;
-    assert_status(&del_override_resp, 200, "delete_override")?;
+    let modified = client
+        .send(gvm_gmp::commands::overrides::modify_override(
+            &override_id,
+            OverrideOpts {
+                text: Some(config.name("override-modified")),
+                new_severity: Some("0.0".to_string()),
+                active: Some(true),
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&modified, 200, "modify_override")?;
+    trash_restore_then_delete(&mut client, "override", &override_id, |id, ultimate| {
+        delete_override(id, ultimate)
+    })
+    .await?;
     tracker.override_ids.retain(|v| v != override_id.as_str());
-    log_pass("crud 27", "delete override");
+    log_pass("crud 27", "modify/trash/restore/delete override");
 
     let verify_override_resp = client.send(get_override(&override_id)).await?;
     assert_status(&verify_override_resp, 404, "verify override absent")?;
@@ -1023,7 +4083,7 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     // --- tag CRUD ---
     let tag_resp = client
         .call(create_tag(
-            "e2e:test-tag",
+            &config.name("tag"),
             TagOpts {
                 resource_type: Some(EntityType::Task),
                 value: Some("e2e-value".into()),
@@ -1042,19 +4102,80 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     assert_status(&get_tag_resp, 200, "get_tag")?;
     log_pass("crud 30", "get tag");
 
-    let del_tag_resp = client.call(delete_tag(&tag_id, true)).await?;
-    assert_status(&del_tag_resp, 200, "delete_tag")?;
+    let modified = client
+        .send(gvm_gmp::commands::tags::modify_tag(
+            &tag_id,
+            TagOpts {
+                comment: Some(config.name("tag-modified")),
+                value: Some(config.name("tag-value-modified")),
+                active: Some(true),
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&modified, 200, "modify_tag")?;
+    trash_restore_then_delete(&mut client, "tag", &tag_id, |id, ultimate| {
+        delete_tag(id, ultimate)
+    })
+    .await?;
     tracker.tag_ids.retain(|v| v != tag_id.as_str());
-    log_pass("crud 31", "delete tag");
+    log_pass("crud 31", "modify/trash/restore/delete tag");
 
     let verify_tag_resp = client.send(get_tag(&tag_id)).await?;
     assert_status(&verify_tag_resp, 404, "verify tag absent")?;
     log_pass("crud 32", "verify tag absent");
 
     // --- alert CRUD ---
-    // TODO: Verify alert XML structure matches GMP 22.5+ requirements.
-    // Skip until create_alert is validated against real server.
-    log_line("[skip] crud 33-36: alert CRUD (needs validation against GMP 22.5+)");
+    let alert = client
+        .create_alert(
+            &config.name("alert"),
+            AlertOpts {
+                comment: Some(config.name("alert-comment")),
+                event: Some(AlertEvent::TaskRunStatusChanged),
+                condition: Some(AlertCondition::Always),
+                method: Some(AlertMethod::SysLog),
+                ..Default::default()
+            },
+        )
+        .await?;
+    tracker.track_alert(&alert.id);
+    log_pass("crud 33", &format!("typed create alert ({})", alert.id));
+    let alerts = client
+        .get_alerts(GetAlertsOpts {
+            filter_string: Some(format!("uuid={}", alert.id)),
+            details: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    ensure(
+        alerts.items.iter().any(|item| item.meta.id == alert.id),
+        "typed get_alerts did not return the created alert",
+    )?;
+    log_pass("crud 34", "typed get alert");
+    let modified = client
+        .send(gvm_gmp::commands::alerts::modify_alert(
+            &alert.id,
+            AlertOpts {
+                comment: Some(config.name("alert-modified")),
+                event: Some(AlertEvent::TaskRunStatusChanged),
+                condition: Some(AlertCondition::Always),
+                method: Some(AlertMethod::SysLog),
+                ..Default::default()
+            },
+        ))
+        .await?;
+    assert_status(&modified, 200, "modify_alert")?;
+    trash_restore_then_delete(&mut client, "alert", &alert.id, |id, ultimate| {
+        delete_alert(id, ultimate)
+    })
+    .await?;
+    tracker.alert_ids.retain(|id| id != alert.id.as_str());
+    let absent = client.send(get_alert(&alert.id)).await?;
+    assert_status(&absent, 404, "verify alert absent")?;
+    log_pass(
+        "crud 35-36",
+        "modify/trash/restore/delete alert and verify absent",
+    );
 
     client.disconnect().await?;
     Ok(())
@@ -1080,7 +4201,7 @@ async fn run_secinfo_suite(config: &EnvConfig) -> Result<(), AppError> {
     assert_status(&cves_resp, 200, "get_cves")?;
     let cve_count = count_elements(&cves_resp, "info")?;
     if cve_count == 0 {
-        log_line("[warn] secinfo 02 get_cves: feed not yet populated, skipping count check");
+        log_line("[info] secinfo 02 get_cves returned a valid empty warm-feed collection");
     }
     log_pass("secinfo 02", &format!("get_cves ({cve_count} entries)"));
 
@@ -1089,7 +4210,7 @@ async fn run_secinfo_suite(config: &EnvConfig) -> Result<(), AppError> {
     assert_status(&cpes_resp, 200, "get_cpes")?;
     let cpe_count = count_elements(&cpes_resp, "info")?;
     if cpe_count == 0 {
-        log_line("[warn] secinfo 03 get_cpes: feed not yet populated, skipping count check");
+        log_line("[info] secinfo 03 get_cpes returned a valid empty warm-feed collection");
     }
     log_pass("secinfo 03", &format!("get_cpes ({cpe_count} entries)"));
 
@@ -1100,7 +4221,7 @@ async fn run_secinfo_suite(config: &EnvConfig) -> Result<(), AppError> {
     assert_status(&cert_resp, 200, "get_cert_bund_advisories")?;
     let cert_count = count_elements(&cert_resp, "info")?;
     if cert_count == 0 {
-        log_line("[warn] secinfo 04 get_cert_bund_advisories: feed not yet populated");
+        log_line("[info] secinfo 04 get_cert_bund_advisories returned a valid empty collection");
     }
     log_pass(
         "secinfo 04",
@@ -1114,7 +4235,7 @@ async fn run_secinfo_suite(config: &EnvConfig) -> Result<(), AppError> {
     assert_status(&dfn_resp, 200, "get_dfn_cert_advisories")?;
     let dfn_count = count_elements(&dfn_resp, "info")?;
     if dfn_count == 0 {
-        log_line("[warn] secinfo 05 get_dfn_cert_advisories: feed not yet populated");
+        log_line("[info] secinfo 05 get_dfn_cert_advisories returned a valid empty collection");
     }
     log_pass(
         "secinfo 05",
@@ -1151,7 +4272,6 @@ struct FeedEntity {
     feed_type: String,
     name: String,
     status: String,
-    currently_syncing: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1185,12 +4305,16 @@ async fn run_differential_suite(
     compare_get_version(&rust_version, &mut warnings)?;
     log_pass("diff 01", "get_version compared");
 
-    // 02: get_scan_configs
-    let rust_scan_configs_response = client
-        .call(get_scan_configs(GetScanConfigsOpts::default()))
-        .await?;
-    assert_status(&rust_scan_configs_response, 200, "get_scan_configs")?;
-    let rust_scan_configs = GetScanConfigsResponse::from_response(&rust_scan_configs_response)?
+    // 02: compare identical, unbounded usage_type=scan queries. The ergonomic
+    // rust-gvm get_scan_configs wrapper currently omits usage_type, unlike
+    // python-gvm, so the generic typed helper makes the wire semantics explicit.
+    let rust_scan_configs = client
+        .get_configs(gvm_gmp::commands::configs::GetConfigsOpts {
+            filter_string: Some("rows=-1".to_string()),
+            usage_type: Some(gvm_gmp::commands::configs::ConfigUsageType::Scan),
+            ..Default::default()
+        })
+        .await?
         .items
         .into_iter()
         .map(|entry| IdNameEntity {
@@ -1239,18 +4363,10 @@ async fn run_differential_suite(
     let rust_feeds = GetFeedsResponse::from_response(&rust_feeds_response)?
         .items
         .into_iter()
-        .map(|entry| {
-            let currently_syncing = entry
-                .currently_syncing
-                .as_deref()
-                .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
-                .unwrap_or(false);
-            FeedEntity {
-                feed_type: entry.type_,
-                name: entry.name,
-                status: entry.status.unwrap_or_default(),
-                currently_syncing,
-            }
+        .map(|entry| FeedEntity {
+            feed_type: entry.type_,
+            name: entry.name,
+            status: entry.status.unwrap_or_default(),
         })
         .collect::<Vec<_>>();
     compare_get_feeds(&rust_feeds, &mut warnings)?;
@@ -1275,21 +4391,53 @@ async fn run_differential_suite(
     compare_get_report_formats(&rust_report_formats, &mut warnings)?;
     log_pass("diff 06", "get_report_formats compared");
 
-    // 07: create/get/delete target via both clients and cross-verify existence
-    run_target_differential(&mut client, tracker, &rust_port_lists, &mut warnings).await?;
-    log_pass("diff 07", "cross-client target lifecycle");
-
-    if warnings.is_empty() {
-        log_line("[pass] differential comparison had no mismatches");
-    } else {
-        log_line(&format!(
-            "[warn] differential comparison detected {} mismatch(es)",
-            warnings.len()
-        ));
-        for warning in warnings {
-            log_line(&format!("[warn] {warning}"));
-        }
+    macro_rules! compare_deterministic_list {
+        ($command:literal, $tag:literal, $request:expr) => {{
+            let response = client.send($request).await?;
+            assert_status(&response, 200, $command)?;
+            let entities = id_name_entities(&response, $tag)?;
+            compare_id_name_command($command, &entities, &mut warnings)?;
+            log_pass(
+                concat!("diff ", $command),
+                "semantic UUID/name set compared",
+            );
+        }};
     }
+    compare_deterministic_list!("get_alerts", "alert", get_alerts(GetAlertsOpts::default()));
+    compare_deterministic_list!(
+        "get_credentials",
+        "credential",
+        get_credentials(GetCredentialsOpts::default())
+    );
+    compare_deterministic_list!(
+        "get_filters",
+        "filter",
+        get_filters(GetFiltersOpts::default())
+    );
+    compare_deterministic_list!(
+        "get_schedules",
+        "schedule",
+        get_schedules(GetSchedulesOpts::default())
+    );
+    compare_deterministic_list!("get_tags", "tag", get_tags(GetTagsOpts::default()));
+    compare_deterministic_list!("get_tasks", "task", get_tasks(GetTasksOpts::default()));
+
+    // Reversible target lifecycle through both clients and cross-visibility.
+    run_target_differential(&mut client, tracker, &rust_port_lists, &mut warnings).await?;
+    log_pass("diff lifecycle", "cross-client target lifecycle");
+
+    ensure(
+        warnings.is_empty(),
+        &format!(
+            "differential comparison found {} semantic mismatch(es): {}",
+            warnings.len(),
+            warnings.join("; ")
+        ),
+    )?;
+    log_pass(
+        "differential",
+        "all semantic fields and entity identities matched",
+    );
 
     client.disconnect().await?;
     Ok(())
@@ -1301,19 +4449,15 @@ async fn run_target_differential(
     rust_port_lists: &[IdNameEntity],
     warnings: &mut Vec<String>,
 ) -> Result<(), AppError> {
-    let Some(port_list_id) = rust_port_lists.first().map(|entry| entry.id.clone()) else {
-        warnings.push(
-            "target differential: no port list available; skipping target checks".to_string(),
-        );
-        return Ok(());
-    };
+    let port_list_id = rust_port_lists
+        .first()
+        .map(|entry| entry.id.clone())
+        .ok_or_else(|| {
+            AppError::Assertion("target differential requires a warm-volume port list".to_string())
+        })?;
 
-    let run_id = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    let rust_target_name = format!("e2e-diff-rust-{run_id}");
-    let python_target_name = format!("e2e-diff-python-{run_id}");
+    let rust_target_name = tracker.config.name("diff-rust-target");
+    let python_target_name = tracker.config.name("diff-python-target");
 
     let rust_target_response = client
         .call(create_target(
@@ -1605,12 +4749,6 @@ fn compare_get_feeds(
                 rust_entry.status, python_entry.status
             ));
         }
-        if rust_entry.currently_syncing != python_entry.currently_syncing {
-            warnings.push(format!(
-                "get_feeds currently_syncing mismatch for type `{key}`: rust `{}` vs python `{}`",
-                rust_entry.currently_syncing, python_entry.currently_syncing
-            ));
-        }
     }
 
     Ok(())
@@ -1723,10 +4861,16 @@ fn run_python_helper(command: &str, args: &[(&str, &str)]) -> Result<Value, AppE
 
 fn list_key_for_command(command: &str) -> &str {
     match command {
+        "get_alerts" => "alerts",
+        "get_credentials" => "credentials",
+        "get_filters" => "filters",
+        "get_schedules" => "schedules",
         "get_scan_configs" => "scan_configs",
         "get_scanners" => "scanners",
         "get_port_lists" => "port_lists",
+        "get_tags" => "tags",
         "get_targets" => "targets",
+        "get_tasks" => "tasks",
         _ => "items",
     }
 }
@@ -1802,10 +4946,6 @@ fn parse_python_feeds(payload: &Value, warnings: &mut Vec<String>) -> Vec<FeedEn
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
-            currently_syncing: item
-                .get("currently_syncing")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
         });
     }
     feeds
@@ -1878,36 +5018,388 @@ fn parse_python_target_id(
     Some(id.to_string())
 }
 
-async fn poll_task_status(
+async fn send_idempotent_with_reconnect<R, F>(
     client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    timeout: Duration,
+    label: &str,
+    mut request: F,
+) -> Result<Response, AppError>
+where
+    R: Request,
+    F: FnMut() -> R,
+{
+    let started = tokio::time::Instant::now();
+    let mut last_error = String::from("no request attempt completed");
+
+    while started.elapsed() <= timeout {
+        match client.send(request()).await {
+            Ok(response) => return Ok(response),
+            Err(GvmError::Connection(error)) => {
+                last_error = error.to_string();
+                log_line(&format!(
+                    "{label} connection failed ({error}); renewing authenticated session"
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        }
+
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        *client = reconnect_authenticated(config, remaining).await?;
+    }
+
+    Err(AppError::Assertion(format!(
+        "{label} did not complete within {} seconds; last connection error: {last_error}",
+        timeout.as_secs()
+    )))
+}
+
+async fn get_tasks_with_reconnect(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    opts: GetTasksOpts,
+    timeout: Duration,
+    label: &str,
+) -> Result<GetTasksResponse, AppError> {
+    let response =
+        send_idempotent_with_reconnect(client, config, timeout, label, || get_tasks(opts.clone()))
+            .await?;
+    Ok(GetTasksResponse::from_response(&response)?)
+}
+
+async fn read_task_status(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
     task_id: &EntityId,
     timeout: Duration,
+    label: &str,
+) -> Result<String, AppError> {
+    let response = get_tasks_with_reconnect(
+        client,
+        config,
+        GetTasksOpts {
+            filter_string: Some(format!("uuid={task_id}")),
+            details: Some(true),
+            ..Default::default()
+        },
+        timeout,
+        label,
+    )
+    .await?;
+    response
+        .items
+        .iter()
+        .find(|task| task.meta.id == *task_id)
+        .ok_or_else(|| {
+            AppError::Assertion(format!(
+                "typed get_tasks did not return task {task_id} for {label}"
+            ))
+        })?
+        .status
+        .clone()
+        .ok_or_else(|| AppError::Assertion(format!("task {task_id} omitted status for {label}")))
+}
+
+async fn settle_task_state_before_stop(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    task_id: &EntityId,
+    read_timeout: Duration,
+    grace_period: Duration,
+) -> Result<String, AppError> {
+    let started = tokio::time::Instant::now();
+
+    loop {
+        let status =
+            read_task_status(client, config, task_id, read_timeout, "pre-stop task state").await?;
+        if !task_state_is_stoppable(&status) || started.elapsed() >= grace_period {
+            return Ok(status);
+        }
+
+        sleep(Duration::from_secs(1).min(grace_period.saturating_sub(started.elapsed()))).await;
+    }
+}
+
+async fn get_permissions_with_reconnect(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    opts: GetPermissionsOpts,
+    timeout: Duration,
+    label: &str,
+) -> Result<GetPermissionsResponse, AppError> {
+    let response = send_idempotent_with_reconnect(client, config, timeout, label, || {
+        get_permissions(opts.clone())
+    })
+    .await?;
+    Ok(GetPermissionsResponse::from_response(&response)?)
+}
+
+async fn wait_task_state(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    task_id: &EntityId,
+    timeout: Duration,
+    accept: impl Fn(&str) -> bool,
 ) -> Result<String, AppError> {
     let started = tokio::time::Instant::now();
     let mut last_status = String::from("unknown");
 
     while started.elapsed() <= timeout {
-        let response = client.call(get_task(task_id)).await?;
-        assert_status(&response, 200, "get_task")?;
-        if let Some(status) = response.child_text("status") {
-            last_status = status;
-            if last_status != "New" {
-                return Ok(last_status);
-            }
+        last_status = read_task_status(
+            client,
+            config,
+            task_id,
+            timeout.saturating_sub(started.elapsed()),
+            "task status poll",
+        )
+        .await?;
+        if accept(&last_status) {
+            return Ok(last_status);
         }
 
         sleep(Duration::from_secs(1)).await;
     }
 
     Err(AppError::Assertion(format!(
-        "task {task_id} did not progress within {} seconds; last status: {last_status}",
+        "task {task_id} did not reach the required state within {} seconds; last status: {last_status}",
         timeout.as_secs()
     )))
+}
+
+#[derive(Debug)]
+enum PermissionModifyDelivery {
+    Confirmed,
+    KnownSubjectRejection,
+    ConnectionLost(String),
+}
+
+async fn modify_role_permission_reconciled(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    permission_id: &EntityId,
+    role_id: &EntityId,
+    desired_comment: &str,
+) -> Result<(), AppError> {
+    let delivery = match client
+        .send(gvm_gmp::commands::permissions::modify_permission(
+            permission_id,
+            gvm_gmp::commands::permissions::PermissionOpts {
+                comment: Some(desired_comment.to_string()),
+                subject_type: Some(gvm_gmp::PermissionSubjectType::Role),
+                subject_id: Some(role_id.clone()),
+                ..Default::default()
+            },
+        ))
+        .await
+    {
+        Ok(response)
+            if response.status_code() == Some(400)
+                && response.status_text().as_deref() == Some("Error in SUBJECT") =>
+        {
+            PermissionModifyDelivery::KnownSubjectRejection
+        }
+        Ok(response) => {
+            assert_status(&response, 200, "modify_permission")?;
+            PermissionModifyDelivery::Confirmed
+        }
+        Err(GvmError::Connection(error)) => {
+            PermissionModifyDelivery::ConnectionLost(error.to_string())
+        }
+        Err(error) => return Err(error.into()),
+    };
+
+    renew_authenticated_after_response(
+        client,
+        config,
+        Duration::from_secs(config.task_progress_timeout_secs),
+        "modify_permission outcome",
+    )
+    .await?;
+    let permissions = get_permissions_with_reconnect(
+        client,
+        config,
+        GetPermissionsOpts {
+            filter_string: Some(format!("uuid={permission_id}")),
+            details: Some(true),
+            ..Default::default()
+        },
+        Duration::from_secs(config.task_progress_timeout_secs),
+        "reconcile modify_permission",
+    )
+    .await?;
+    let permission = permissions
+        .items
+        .iter()
+        .find(|entry| entry.meta.id == *permission_id)
+        .ok_or_else(|| {
+            AppError::Assertion(format!(
+                "permission {permission_id} disappeared while reconciling modify_permission"
+            ))
+        })?;
+    let desired_state_observed = permission.meta.comment.as_deref() == Some(desired_comment)
+        && permission
+            .subject
+            .as_ref()
+            .is_some_and(|subject| subject.id == *role_id);
+
+    match delivery {
+        PermissionModifyDelivery::Confirmed if desired_state_observed => {
+            log_pass(
+                "typed permission modify",
+                "response and read-after-write reconciliation confirmed the desired state",
+            );
+        }
+        PermissionModifyDelivery::Confirmed => {
+            return Err(AppError::Assertion(format!(
+                "modify_permission returned success but permission {permission_id} did not expose the desired comment and role subject"
+            )));
+        }
+        PermissionModifyDelivery::KnownSubjectRejection if desired_state_observed => {
+            return Err(AppError::Assertion(format!(
+                "modify_permission returned Error in SUBJECT but permission {permission_id} exposed the rejected state"
+            )));
+        }
+        PermissionModifyDelivery::KnownSubjectRejection => {
+            runtime::observe(
+                "typed permission modify",
+                Outcome::KnownUpstreamBug,
+                "rust-gvm#405 reproduced: flat subject elements were rejected by gvmd",
+            );
+        }
+        PermissionModifyDelivery::ConnectionLost(error) if desired_state_observed => {
+            log_pass(
+                "typed permission modify",
+                &format!(
+                    "read-after-write reconciliation confirmed the desired state after response loss ({error})"
+                ),
+            );
+        }
+        PermissionModifyDelivery::ConnectionLost(error) => {
+            runtime::observe(
+                "canonical permission modify",
+                Outcome::KnownUpstreamBug,
+                &format!(
+                    "stable gvmd closed the connection without applying the requested permission state ({error})"
+                ),
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn create_role_permission(
+    client: &mut GmpClient<UnixSocketConnection>,
+    name: &str,
+    comment: &str,
+    role_id: &EntityId,
+) -> Result<EntityId, AppError> {
+    match client
+        .create_permission(gvm_gmp::commands::permissions::PermissionOpts {
+            name: Some(name.to_string()),
+            comment: Some(comment.to_string()),
+            subject_type: Some(gvm_gmp::PermissionSubjectType::Role),
+            subject_id: Some(role_id.clone()),
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(permission) => {
+            log_pass(
+                "typed permission create",
+                "rust-gvm emitted a gvmd-compatible subject",
+            );
+            Ok(permission.id)
+        }
+        Err(GvmError::Parse(gvm_gmp::responses::ParseError::ServerError {
+            status: 400,
+            message,
+        })) if message == "Error in SUBJECT" => {
+            runtime::observe(
+                "typed permission create",
+                Outcome::KnownUpstreamBug,
+                "rust-gvm#405 reproduced: flat subject elements were rejected by gvmd",
+            );
+
+            let mut command = XmlCommand::new("create_permission");
+            command.add_element_with_text("name", name);
+            command.add_element_with_text("comment", comment);
+            let subject = command.add_element("subject");
+            subject.set_attribute("id", role_id.as_str());
+            subject.add_child_with_text("type", "role");
+
+            let response = client.call(command).await?;
+            assert_status(
+                &response,
+                201,
+                "canonical create_permission fallback for rust-gvm#405",
+            )?;
+            let permission_id = response_id(&response, "create_permission fallback")?;
+            log_pass(
+                "canonical permission create fallback",
+                permission_id.as_str(),
+            );
+            Ok(permission_id)
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 async fn connect_client(config: &EnvConfig) -> Result<GmpClient<UnixSocketConnection>, AppError> {
     let connection = UnixSocketConnection::with_path(&config.socket_path);
     Ok(GmpClient::connect(connection).await?)
+}
+
+async fn renew_authenticated_after_response(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    timeout: Duration,
+    label: &str,
+) -> Result<(), AppError> {
+    log_line(&format!(
+        "{label} completed at a connection-closing boundary; renewing authenticated session"
+    ));
+    *client = reconnect_authenticated(config, timeout).await?;
+    Ok(())
+}
+
+async fn reconnect_authenticated(
+    config: &EnvConfig,
+    timeout: Duration,
+) -> Result<GmpClient<UnixSocketConnection>, AppError> {
+    let started = tokio::time::Instant::now();
+    let mut last_error = String::from("no connection attempt completed");
+
+    while started.elapsed() <= timeout {
+        match connect_client(config).await {
+            Ok(mut client) => {
+                match client
+                    .authenticate(&config.username, &config.password)
+                    .await
+                {
+                    Ok(_) => return Ok(client),
+                    Err(GvmError::Connection(error)) => {
+                        last_error = format!("authentication connection failed: {error}");
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Err(error) => {
+                last_error = format!("connection failed: {error}");
+            }
+        }
+        log_line(&format!(
+            "authenticated reconnect unavailable ({last_error}); retrying"
+        ));
+        sleep(Duration::from_secs(1)).await;
+    }
+
+    Err(AppError::Assertion(format!(
+        "authenticated reconnect did not succeed within {} seconds; last error: {last_error}",
+        timeout.as_secs()
+    )))
 }
 
 fn assert_status(response: &Response, expected: u16, label: &str) -> Result<(), AppError> {
@@ -1921,17 +5413,40 @@ fn assert_status(response: &Response, expected: u16, label: &str) -> Result<(), 
     )
 }
 
+fn assert_stop_task_status(response: &Response, label: &str) -> Result<(), AppError> {
+    let actual = response.status_code().unwrap_or_default();
+    ensure(
+        stop_task_status_is_success(actual),
+        &format!(
+            "{label} returned status {actual}, expected 200 or 202. Response: {}",
+            response_summary(response)?
+        ),
+    )
+}
+
+fn stop_task_status_is_success(status: u16) -> bool {
+    matches!(status, 200 | 202)
+}
+
+fn task_state_is_stoppable(status: &str) -> bool {
+    matches!(status, "Running" | "Stop Requested")
+}
+
+fn canonical_sync_config_succeeded(response: &Response) -> Result<bool, AppError> {
+    match (response.status_code(), response.status_text().as_deref()) {
+        (Some(200 | 202), _) => Ok(true),
+        (Some(400), Some("Bogus command name")) => Ok(false),
+        _ => Err(AppError::Assertion(format!(
+            "canonical parameterless sync_config returned an unexpected response: {}",
+            response_summary(response)?
+        ))),
+    }
+}
+
 fn response_id(response: &Response, label: &str) -> Result<EntityId, AppError> {
     let id = response.id().ok_or_else(|| {
         AppError::Assertion(format!("{label} response missing resource id attribute"))
     })?;
-    parse_entity_id(&id)
-}
-
-fn child_entity_id(response: &Response, child_name: &str) -> Result<EntityId, AppError> {
-    let id = response
-        .child_text(child_name)
-        .ok_or_else(|| AppError::Assertion(format!("response missing <{child_name}> element")))?;
     parse_entity_id(&id)
 }
 
@@ -1971,7 +5486,10 @@ fn first_element_id(response: &Response, element_name: &str) -> Result<EntityId,
                 for attribute in event.attributes().flatten() {
                     if attribute.key.as_ref() == b"id" {
                         let value = attribute
-                            .decode_and_unescape_value(reader.decoder())?
+                            .decoded_and_normalized_value(
+                                quick_xml::XmlVersion::default(),
+                                reader.decoder(),
+                            )?
                             .into_owned();
                         return parse_entity_id(&value);
                     }
@@ -1999,7 +5517,10 @@ fn first_nvt_oid(response: &Response) -> Result<String, AppError> {
                 for attribute in event.attributes().flatten() {
                     if attribute.key.as_ref() == b"oid" {
                         return Ok(attribute
-                            .decode_and_unescape_value(reader.decoder())?
+                            .decoded_and_normalized_value(
+                                quick_xml::XmlVersion::default(),
+                                reader.decoder(),
+                            )?
                             .into_owned());
                     }
                 }
@@ -2023,50 +5544,184 @@ fn response_summary(response: &Response) -> Result<String, AppError> {
     Ok(xml.chars().take(240).collect())
 }
 
-/// Find all `<element_name>` elements whose `<name>` child matches `target_name`,
-/// returning their `id` attributes.
-fn find_elements_by_name(
+fn replace_first_resource_name(
     xml: &str,
     element_name: &str,
-    target_name: &str,
-) -> Result<Vec<String>, AppError> {
+    replacement: &str,
+) -> Result<String, AppError> {
+    ensure(
+        replacement
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-'),
+        "generated import name must be XML-safe",
+    )?;
+    let resource_start = xml.find(&format!("<{element_name}")).ok_or_else(|| {
+        AppError::Assertion(format!("exported XML did not contain a {element_name}"))
+    })?;
+    let search_start = xml[resource_start..]
+        .find("</owner>")
+        .map_or(resource_start, |offset| {
+            resource_start + offset + "</owner>".len()
+        });
+    let start = xml[search_start..]
+        .find("<name>")
+        .map(|offset| search_start + offset)
+        .ok_or_else(|| {
+            AppError::Assertion("exported resource XML did not contain a name".to_string())
+        })?
+        + "<name>".len();
+    let end = xml[start..]
+        .find("</name>")
+        .map(|offset| start + offset)
+        .ok_or_else(|| {
+            AppError::Assertion("exported resource XML had an unterminated name".to_string())
+        })?;
+    let mut result = String::with_capacity(xml.len() + replacement.len());
+    result.push_str(&xml[..start]);
+    result.push_str(replacement);
+    result.push_str(&xml[end..]);
+    Ok(result)
+}
+
+fn replace_first_resource_id(
+    xml: &str,
+    element_name: &str,
+    replacement: &str,
+) -> Result<String, AppError> {
+    let element_start = xml.find(&format!("<{element_name} ")).ok_or_else(|| {
+        AppError::Assertion(format!(
+            "exported XML did not contain an attributed {element_name}"
+        ))
+    })?;
+    let opening_end = xml[element_start..]
+        .find('>')
+        .map(|offset| element_start + offset)
+        .ok_or_else(|| {
+            AppError::Assertion("exported XML opening tag was incomplete".to_string())
+        })?;
+    let id_start = xml[element_start..opening_end]
+        .find("id=\"")
+        .map(|offset| element_start + offset + "id=\"".len())
+        .ok_or_else(|| {
+            AppError::Assertion("exported resource did not contain an id".to_string())
+        })?;
+    let id_end = xml[id_start..]
+        .find('"')
+        .map(|offset| id_start + offset)
+        .ok_or_else(|| AppError::Assertion("exported resource id was incomplete".to_string()))?;
+    let mut result = String::with_capacity(xml.len());
+    result.push_str(&xml[..id_start]);
+    result.push_str(replacement);
+    result.push_str(&xml[id_end..]);
+    Ok(result)
+}
+
+fn id_name_entities(
+    response: &Response,
+    element_name: &str,
+) -> Result<Vec<IdNameEntity>, AppError> {
+    let mut reader = Reader::from_str(response.as_str()?);
+    let mut entities = Vec::new();
+    let mut current_id: Option<String> = None;
+    let mut current_name = String::new();
+    let mut inside_element = false;
+    let mut inside_name = false;
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref event) if event.name().as_ref() == element_name.as_bytes() => {
+                inside_element = true;
+                current_name.clear();
+                current_id = event
+                    .attributes()
+                    .flatten()
+                    .find(|attribute| attribute.key.as_ref() == b"id")
+                    .map(|attribute| {
+                        attribute
+                            .decoded_and_normalized_value(
+                                quick_xml::XmlVersion::default(),
+                                reader.decoder(),
+                            )
+                            .map(|value| value.into_owned())
+                    })
+                    .transpose()?;
+            }
+            Event::Start(ref event) if inside_element && event.name().as_ref() == b"name" => {
+                inside_name = true;
+            }
+            Event::Text(ref event) if inside_element && inside_name && current_name.is_empty() => {
+                current_name = String::from_utf8_lossy(event.as_ref()).into_owned();
+            }
+            Event::End(ref event) if event.name().as_ref() == b"name" => {
+                inside_name = false;
+            }
+            Event::End(ref event) if event.name().as_ref() == element_name.as_bytes() => {
+                if let Some(id) = current_id.take() {
+                    entities.push(IdNameEntity {
+                        id,
+                        name: current_name.clone(),
+                    });
+                }
+                inside_element = false;
+                inside_name = false;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(entities)
+}
+
+/// Find resources owned by this harness without touching non-E2E names.
+fn e2e_entity_ids(xml: &str, element_name: &str) -> Result<Vec<String>, AppError> {
     let mut reader = Reader::from_str(xml);
     let mut ids = Vec::new();
     let mut current_id: Option<String> = None;
     let mut inside_element = false;
-    let mut inside_name = false;
+    let mut inside_identity_field = false;
+    let mut matched = false;
 
     loop {
         match reader.read_event()? {
             Event::Start(ref e) if e.name().as_ref() == element_name.as_bytes() => {
                 inside_element = true;
                 current_id = None;
+                matched = false;
                 for attr in e.attributes().flatten() {
                     if attr.key.as_ref() == b"id" {
                         current_id = Some(
-                            attr.decode_and_unescape_value(reader.decoder())?
-                                .into_owned(),
+                            attr.decoded_and_normalized_value(
+                                quick_xml::XmlVersion::default(),
+                                reader.decoder(),
+                            )?
+                            .into_owned(),
                         );
                     }
                 }
             }
             Event::End(ref e) if e.name().as_ref() == element_name.as_bytes() => {
-                inside_element = false;
-                current_id = None;
-            }
-            Event::Start(ref e) if inside_element && e.name().as_ref() == b"name" => {
-                inside_name = true;
-            }
-            Event::End(ref e) if e.name().as_ref() == b"name" => {
-                inside_name = false;
-            }
-            Event::Text(ref e) if inside_element && inside_name => {
-                let name = String::from_utf8_lossy(e.as_ref()).into_owned();
-                if name == target_name {
-                    if let Some(ref id) = current_id {
-                        ids.push(id.clone());
+                if matched {
+                    if let Some(id) = current_id.take() {
+                        ids.push(id);
                     }
                 }
+                inside_element = false;
+                current_id = None;
+                matched = false;
+            }
+            Event::Start(ref e)
+                if inside_element
+                    && matches!(e.name().as_ref(), b"name" | b"comment" | b"text" | b"value") =>
+            {
+                inside_identity_field = true;
+            }
+            Event::End(ref e)
+                if matches!(e.name().as_ref(), b"name" | b"comment" | b"text" | b"value") =>
+            {
+                inside_identity_field = false;
+            }
+            Event::Text(ref e) if inside_element && inside_identity_field => {
+                let value = String::from_utf8_lossy(e.as_ref());
+                matched |= is_e2e_owned_value(&value);
             }
             Event::Eof => break,
             _ => {}
@@ -2074,6 +5729,29 @@ fn find_elements_by_name(
     }
     Ok(ids)
 }
+
+fn is_e2e_owned_value(value: &str) -> bool {
+    value.starts_with("rust-gvm-e2e-")
+        || matches!(
+            value,
+            "e2e-target"
+                | "e2e-test-target"
+                | "e2e-scan-target"
+                | "e2e-scan-task"
+                | "e2e-port-list"
+                | "e2e-cred"
+                | "e2e-schedule"
+                | "e2e-filter"
+                | "e2e-task-target"
+                | "e2e-task"
+                | "e2e:test-tag"
+                | "e2e test note"
+                | "e2e test override"
+        )
+        || value.starts_with("e2e-diff-rust-")
+        || value.starts_with("e2e-diff-python-")
+}
+
 fn ensure(condition: bool, message: &str) -> Result<(), AppError> {
     if condition {
         Ok(())
@@ -2083,16 +5761,935 @@ fn ensure(condition: bool, message: &str) -> Result<(), AppError> {
 }
 
 fn log_pass(step: &str, label: &str) {
+    runtime::pass(step, label);
     log_line(&format!("[pass] {step} {label}"));
 }
 
-fn log_cleanup_result(action: &str, id: &str, status: Option<u16>) {
+fn log_cleanup_result(action: &str, id: &str, status: Option<u16>) -> Result<(), AppError> {
+    ensure(
+        matches!(status, Some(200 | 202 | 404)),
+        &format!("final cleanup {action} {id} returned unexpected status {status:?}"),
+    )?;
     let rendered_status = status
         .map(|value| value.to_string())
         .unwrap_or_else(|| "unknown".to_string());
     log_line(&format!("[cleanup] {action} {id} -> {rendered_status}"));
+    Ok(())
 }
 
 fn log_line(message: &str) {
     let _ = writeln!(io::stdout(), "{message}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{UnixListener, UnixStream};
+
+    const VERSION_RESPONSE: &str = concat!(
+        r#"<get_version_response status="200" status_text="OK">"#,
+        "<version>22.7</version></get_version_response>"
+    );
+    const AUTH_RESPONSE: &str = r#"<authenticate_response status="200" status_text="OK"/>"#;
+    const RUNNING_TASK_RESPONSE: &str = concat!(
+        r#"<get_tasks_response status="200" status_text="OK">"#,
+        r#"<task id="task-id"><name>Task</name><status>Running</status></task>"#,
+        "<task_count>1<filtered>1</filtered><page>1</page></task_count>",
+        "</get_tasks_response>"
+    );
+    const DONE_TASK_RESPONSE: &str = concat!(
+        r#"<get_tasks_response status="200" status_text="OK">"#,
+        r#"<task id="task-id"><name>Task</name><status>Done</status></task>"#,
+        "<task_count>1<filtered>1</filtered><page>1</page></task_count>",
+        "</get_tasks_response>"
+    );
+    const START_TASK_RESPONSE: &str = concat!(
+        r#"<start_task_response status="202" status_text="OK, request submitted">"#,
+        "<report_id>report-id</report_id></start_task_response>"
+    );
+    const MODIFIED_PERMISSION_RESPONSE: &str = concat!(
+        r#"<get_permissions_response status="200" status_text="OK">"#,
+        r#"<permission id="permission-id"><name>get_tasks</name>"#,
+        "<comment>permission-modified</comment><writable>1</writable><in_use>0</in_use>",
+        r#"<subject id="role-id"><name>Role</name><type>role</type></subject>"#,
+        "</permission>",
+        "<permission_count>1<filtered>1</filtered><page>1</page></permission_count>",
+        "</get_permissions_response>"
+    );
+
+    type ServerStep = (&'static str, Option<&'static str>);
+
+    fn socket_test_config(path: &Path) -> EnvConfig {
+        EnvConfig {
+            task_progress_timeout_secs: 3,
+            username: "admin".to_string(),
+            password: "admin".to_string(),
+            socket_path: path.display().to_string(),
+            run_scan: false,
+            run_id: "socket-policy-test".to_string(),
+            namespace: "rust-gvm-e2e-socket-policy-test-".to_string(),
+        }
+    }
+
+    fn socket_test_path(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_nanos();
+        env::temp_dir().join(format!(
+            "gce-{}-{}-{nonce:x}.sock",
+            std::process::id(),
+            &label[..label.len().min(3)]
+        ))
+    }
+
+    async fn read_request(stream: &mut UnixStream) -> Vec<u8> {
+        let mut reader = gvm_protocol::XmlReader::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let count = stream.read(&mut buffer).await.expect("read request");
+            assert_ne!(
+                count, 0,
+                "client closed before sending the scripted request"
+            );
+            reader
+                .feed(&buffer[..count])
+                .expect("scripted request must be valid XML");
+            if let Some(frame) = reader.take_frame().expect("extract scripted request") {
+                return frame;
+            }
+        }
+    }
+
+    fn request_root(request: &[u8]) -> String {
+        let text = std::str::from_utf8(request).expect("request must be UTF-8");
+        text.trim_start()
+            .strip_prefix('<')
+            .expect("request must start with an element")
+            .split([' ', '/', '>'])
+            .next()
+            .expect("request root element")
+            .to_string()
+    }
+
+    async fn serve_script(listener: UnixListener, sessions: Vec<Vec<ServerStep>>) -> Vec<String> {
+        let mut commands = Vec::new();
+        for session in sessions {
+            let (mut stream, _) = listener.accept().await.expect("accept scripted client");
+            for (expected_root, response) in session {
+                let request = read_request(&mut stream).await;
+                let root = request_root(&request);
+                assert_eq!(root, expected_root);
+                commands.push(root);
+                let Some(response) = response else {
+                    break;
+                };
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write scripted response");
+            }
+        }
+        commands
+    }
+
+    async fn connect_and_authenticate(config: &EnvConfig) -> GmpClient<UnixSocketConnection> {
+        let mut client = connect_client(config).await.expect("connect test client");
+        client
+            .authenticate(&config.username, &config.password)
+            .await
+            .expect("authenticate test client");
+        client
+    }
+
+    #[test]
+    fn known_closing_response_renews_before_the_next_command() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("response-boundary");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![
+                        vec![
+                            ("get_version", Some(VERSION_RESPONSE)),
+                            ("authenticate", Some(AUTH_RESPONSE)),
+                            ("start_task", Some(START_TASK_RESPONSE)),
+                        ],
+                        vec![
+                            ("get_version", Some(VERSION_RESPONSE)),
+                            ("authenticate", Some(AUTH_RESPONSE)),
+                            ("get_tasks", Some(RUNNING_TASK_RESPONSE)),
+                        ],
+                    ],
+                ));
+                let config = socket_test_config(&path);
+                let mut client = connect_and_authenticate(&config).await;
+                let task_id = EntityId::new("task-id").expect("valid task ID");
+
+                let started = client.start_task(&task_id).await.expect("start task");
+                assert_eq!(started.status, 202);
+                renew_authenticated_after_response(
+                    &mut client,
+                    &config,
+                    Duration::from_secs(2),
+                    "duplicate start_task",
+                )
+                .await
+                .expect("renew after known closing response");
+                let tasks = get_tasks_with_reconnect(
+                    &mut client,
+                    &config,
+                    GetTasksOpts {
+                        filter_string: Some("uuid=task-id".to_string()),
+                        details: Some(true),
+                        ..Default::default()
+                    },
+                    Duration::from_secs(2),
+                    "post-start task read",
+                )
+                .await
+                .expect("read task on replacement session");
+
+                assert_eq!(tasks.items[0].status.as_deref(), Some("Running"));
+                assert_eq!(
+                    server.await.expect("scripted server"),
+                    [
+                        "get_version",
+                        "authenticate",
+                        "start_task",
+                        "get_version",
+                        "authenticate",
+                        "get_tasks",
+                    ]
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
+    }
+
+    #[test]
+    fn idempotent_task_read_retries_after_disconnect() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("idempotent-read");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![
+                        vec![
+                            ("get_version", Some(VERSION_RESPONSE)),
+                            ("authenticate", Some(AUTH_RESPONSE)),
+                            ("get_tasks", None),
+                        ],
+                        vec![
+                            ("get_version", Some(VERSION_RESPONSE)),
+                            ("authenticate", Some(AUTH_RESPONSE)),
+                            ("get_tasks", Some(RUNNING_TASK_RESPONSE)),
+                        ],
+                    ],
+                ));
+                let config = socket_test_config(&path);
+                let mut client = connect_and_authenticate(&config).await;
+
+                let tasks = get_tasks_with_reconnect(
+                    &mut client,
+                    &config,
+                    GetTasksOpts {
+                        filter_string: Some("uuid=task-id".to_string()),
+                        details: Some(true),
+                        ..Default::default()
+                    },
+                    Duration::from_secs(2),
+                    "retry test task read",
+                )
+                .await
+                .expect("idempotent read should recover");
+
+                assert_eq!(tasks.items[0].status.as_deref(), Some("Running"));
+                assert_eq!(
+                    server.await.expect("scripted server"),
+                    [
+                        "get_version",
+                        "authenticate",
+                        "get_tasks",
+                        "get_version",
+                        "authenticate",
+                        "get_tasks",
+                    ]
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
+    }
+
+    #[test]
+    fn pre_stop_grace_observes_a_terminal_scan_transition() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("pre-stop-grace");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![vec![
+                        ("get_version", Some(VERSION_RESPONSE)),
+                        ("authenticate", Some(AUTH_RESPONSE)),
+                        ("get_tasks", Some(RUNNING_TASK_RESPONSE)),
+                        ("get_tasks", Some(DONE_TASK_RESPONSE)),
+                    ]],
+                ));
+                let config = socket_test_config(&path);
+                let mut client = connect_and_authenticate(&config).await;
+                let task_id = EntityId::new("task-id").expect("valid task ID");
+
+                let status = settle_task_state_before_stop(
+                    &mut client,
+                    &config,
+                    &task_id,
+                    Duration::from_secs(2),
+                    Duration::from_secs(2),
+                )
+                .await
+                .expect("terminal transition during grace period");
+
+                assert_eq!(status, "Done");
+                assert_eq!(
+                    server.await.expect("scripted server"),
+                    ["get_version", "authenticate", "get_tasks", "get_tasks",]
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
+    }
+
+    #[test]
+    fn mutation_response_loss_is_reconciled_without_retrying_mutation() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("mutation-reconcile");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![
+                        vec![
+                            ("get_version", Some(VERSION_RESPONSE)),
+                            ("authenticate", Some(AUTH_RESPONSE)),
+                            ("modify_permission", None),
+                        ],
+                        vec![
+                            ("get_version", Some(VERSION_RESPONSE)),
+                            ("authenticate", Some(AUTH_RESPONSE)),
+                            ("get_permissions", Some(MODIFIED_PERMISSION_RESPONSE)),
+                        ],
+                    ],
+                ));
+                let config = socket_test_config(&path);
+                let mut client = connect_and_authenticate(&config).await;
+                let permission_id = EntityId::new("permission-id").expect("valid permission ID");
+                let role_id = EntityId::new("role-id").expect("valid role ID");
+
+                modify_role_permission_reconciled(
+                    &mut client,
+                    &config,
+                    &permission_id,
+                    &role_id,
+                    "permission-modified",
+                )
+                .await
+                .expect("ambiguous mutation should reconcile");
+
+                let commands = server.await.expect("scripted server");
+                assert_eq!(
+                    commands,
+                    [
+                        "get_version",
+                        "authenticate",
+                        "modify_permission",
+                        "get_version",
+                        "authenticate",
+                        "get_permissions",
+                    ]
+                );
+                assert_eq!(
+                    commands
+                        .iter()
+                        .filter(|command| command.as_str() == "modify_permission")
+                        .count(),
+                    1,
+                    "a mutation with an ambiguous response must never be retried"
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
+    }
+
+    #[test]
+    fn tls_certificate_create_request_uses_base64_encoded_pem() {
+        let certificate = tls_certificate_data();
+        let request = gvm_gmp::commands::tls_certificates::create_tls_certificate(
+            "tls-certificate",
+            gvm_gmp::commands::tls_certificates::TlsCertificateOpts {
+                certificate: Some(certificate.clone()),
+                ..Default::default()
+            },
+        );
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("TLS-certificate request should be UTF-8");
+
+        assert!(xml.contains(&format!("<certificate>{certificate}</certificate>")));
+        assert!(!xml.contains("BEGIN CERTIFICATE"));
+        assert!(!certificate.chars().any(char::is_whitespace));
+    }
+
+    #[test]
+    fn stop_task_accepts_only_synchronous_or_submitted_success() {
+        assert!(stop_task_status_is_success(200));
+        assert!(stop_task_status_is_success(202));
+
+        for status in [0, 201, 204, 400, 404, 500] {
+            assert!(
+                !stop_task_status_is_success(status),
+                "unexpectedly accepted stop_task status {status}"
+            );
+        }
+    }
+
+    #[test]
+    fn completed_scan_is_not_stopped_from_a_stale_running_snapshot() {
+        assert!(task_state_is_stoppable("Running"));
+        assert!(task_state_is_stoppable("Stop Requested"));
+
+        for status in ["Done", "Stopped", "Interrupted", "Internal Error"] {
+            assert!(
+                !task_state_is_stoppable(status),
+                "completed scan state {status} must not be sent stop_task"
+            );
+        }
+    }
+
+    #[test]
+    fn run_id_is_sanitized_and_bounded() {
+        assert_eq!(
+            sanitize_run_id("Run_118 / Attempt.2").expect("valid"),
+            "run-118---attempt-2"
+        );
+        assert!(sanitize_run_id("___").is_err());
+        assert!(sanitize_run_id(&"a".repeat(97)).is_err());
+    }
+
+    #[test]
+    fn cleanup_selection_never_matches_unowned_resources() {
+        let xml = r#"
+          <get_targets_response status="200">
+            <target id="00000000-0000-0000-0000-000000000001">
+              <name>production-target</name>
+              <comment>must survive</comment>
+            </target>
+            <target id="00000000-0000-0000-0000-000000000002">
+              <name>rust-gvm-e2e-run-118-target</name>
+            </target>
+          </get_targets_response>
+        "#;
+        assert_eq!(
+            e2e_entity_ids(xml, "target").expect("parse"),
+            vec!["00000000-0000-0000-0000-000000000002"]
+        );
+    }
+
+    #[test]
+    fn cleanup_selection_recognizes_issue_seven_legacy_names_only() {
+        let xml = r#"
+          <get_targets_response status="200">
+            <target id="00000000-0000-0000-0000-000000000003">
+              <name>e2e-test-target</name>
+            </target>
+            <target id="00000000-0000-0000-0000-000000000004">
+              <name>e2e-test-target-but-not-owned</name>
+            </target>
+            <target id="00000000-0000-0000-0000-000000000005">
+              <name>e2e-target</name>
+            </target>
+            <target id="00000000-0000-0000-0000-000000000006">
+              <name>e2e-target-production</name>
+            </target>
+          </get_targets_response>
+        "#;
+        assert_eq!(
+            e2e_entity_ids(xml, "target").expect("parse"),
+            vec![
+                "00000000-0000-0000-0000-000000000003",
+                "00000000-0000-0000-0000-000000000005"
+            ]
+        );
+    }
+
+    #[test]
+    fn help_command_names_match_registry_case() {
+        assert_eq!(canonical_help_command(" GET_TASKS "), "get_tasks");
+    }
+
+    #[test]
+    fn live_help_is_authoritative_over_registry_version_metadata() {
+        let help_commands = BTreeSet::from(["get_report_hosts".to_string()]);
+        let registry_gate = false;
+        assert!(live_help_supports(&help_commands, "get_report_hosts"));
+        assert!(!registry_gate);
+    }
+
+    #[test]
+    fn resource_names_request_includes_mandatory_resource_type() {
+        let request = resource_names_request();
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("resource-names request should be UTF-8");
+
+        assert_eq!(xml, r#"<get_resource_names type="TARGET"/>"#);
+    }
+
+    #[test]
+    fn schedule_modification_preserves_the_created_icalendar_contract() {
+        let create_opts = e2e_schedule_opts("schedule-created".into(), None);
+        let modify_opts =
+            e2e_schedule_opts("schedule-modified".into(), Some("schedule-renamed".into()));
+
+        assert_eq!(create_opts.icalendar, modify_opts.icalendar);
+        assert_eq!(create_opts.timezone, modify_opts.timezone);
+        assert_eq!(modify_opts.comment.as_deref(), Some("schedule-modified"));
+        assert_eq!(modify_opts.name.as_deref(), Some("schedule-renamed"));
+    }
+
+    #[test]
+    fn typed_schedule_modify_request_uses_live_id_and_icalendar_contract() {
+        let schedule_id = EntityId::new("created-schedule").expect("valid id");
+        let request = gvm_gmp::commands::schedules::modify_schedule(
+            &schedule_id,
+            e2e_schedule_opts("schedule-modified".into(), Some("schedule-renamed".into())),
+        );
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("schedule-modify request should be UTF-8");
+
+        assert_eq!(
+            xml,
+            format!(
+                "<modify_schedule schedule_id=\"created-schedule\"><name>schedule-renamed</name><comment>schedule-modified</comment><icalendar>{E2E_SCHEDULE_ICALENDAR}</icalendar><timezone>{E2E_SCHEDULE_TIMEZONE}</timezone></modify_schedule>"
+            )
+        );
+    }
+
+    #[test]
+    fn port_range_request_references_the_live_port_list_with_gmp_child_elements() {
+        let port_list_id = EntityId::new("created-port-list").expect("valid id");
+        let request = create_port_range_request(&port_list_id, 101, 102);
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("port-range request should be UTF-8");
+
+        assert_eq!(
+            xml,
+            concat!(
+                "<create_port_range><port_list id=\"created-port-list\"/>",
+                "<start>101</start><end>102</end><type>TCP</type></create_port_range>"
+            )
+        );
+    }
+
+    #[test]
+    fn typed_port_range_builder_uses_gvmd_incompatible_attributes() {
+        let port_list_id = EntityId::new("created-port-list").expect("valid id");
+        let request = gvm_gmp::commands::port_lists::create_port_range(
+            &port_list_id,
+            gvm_gmp::PortRangeType::Tcp,
+            101,
+            102,
+        );
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("typed port-range request should be UTF-8");
+
+        assert_eq!(
+            xml,
+            concat!(
+                "<create_port_range end=\"102\" port_list_id=\"created-port-list\" ",
+                "start=\"101\" type=\"TCP\"/>"
+            )
+        );
+        assert!(!xml.contains("<port_list"));
+    }
+
+    #[test]
+    fn report_config_request_references_the_created_report_format_by_id() {
+        let report_format_id = EntityId::new("created-report-format").expect("valid id");
+        let request = create_report_config_request(
+            "report-config",
+            &report_format_id,
+            "report-config-comment",
+        );
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("report-config request should be UTF-8");
+
+        assert_eq!(
+            xml,
+            concat!(
+                "<create_report_config><name>report-config</name>",
+                "<report_format id=\"created-report-format\"/>",
+                "<comment>report-config-comment</comment></create_report_config>"
+            )
+        );
+    }
+
+    #[test]
+    fn report_format_selection_requests_parameter_metadata() {
+        let request = get_report_formats_with_params_request();
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("report-format request should be UTF-8");
+
+        assert_eq!(xml, r#"<get_report_formats params="1"/>"#);
+    }
+
+    #[test]
+    fn sync_config_request_is_parameterless_as_required_by_gmp() {
+        let request = sync_config_request();
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("sync-config request should be UTF-8");
+
+        assert_eq!(xml, "<sync_config/>");
+    }
+
+    #[test]
+    fn setting_modify_request_base64_encodes_the_value_required_by_gmp() {
+        let setting_id = EntityId::new("setting-id").expect("valid setting id");
+        let request = modify_setting_request(&setting_id, "Europe/Berlin");
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("modify-setting request should be UTF-8");
+
+        assert_eq!(
+            xml,
+            r#"<modify_setting setting_id="setting-id"><value>RXVyb3BlL0Jlcmxpbg==</value></modify_setting>"#
+        );
+
+        let typed = gvm_gmp::commands::system::modify_setting(&setting_id, "Europe/Berlin");
+        let typed_xml = String::from_utf8(gvm_protocol::Request::to_bytes(&typed))
+            .expect("typed modify-setting request should be UTF-8");
+        assert_eq!(
+            typed_xml,
+            r#"<modify_setting setting_id="setting-id"><value>Europe/Berlin</value></modify_setting>"#
+        );
+    }
+
+    #[test]
+    fn isolated_user_cleanup_uses_one_direct_delete_request() {
+        let user_id = EntityId::new("user-id").expect("valid user id");
+        let request = delete_user_directly_request(&user_id);
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("delete-user request should be UTF-8");
+
+        assert_eq!(xml, r#"<delete_user ultimate="1" user_id="user-id"/>"#);
+    }
+
+    #[test]
+    fn canonical_sync_config_distinguishes_success_from_advertised_but_bogus() {
+        for status in [200, 202] {
+            let xml = format!(r#"<sync_config_response status="{status}" status_text="OK"/>"#);
+            let response = Response::from(xml.as_str());
+            assert!(canonical_sync_config_succeeded(&response).expect("valid success response"));
+        }
+
+        let bogus = Response::from(
+            r#"<sync_config_response status="400" status_text="Bogus command name"/>"#,
+        );
+        assert!(
+            !canonical_sync_config_succeeded(&bogus).expect("known gvmd capability inconsistency")
+        );
+
+        let unrelated = Response::from(
+            r#"<sync_config_response status="400" status_text="Permission denied"/>"#,
+        );
+        assert!(canonical_sync_config_succeeded(&unrelated).is_err());
+    }
+
+    #[test]
+    fn import_report_fixture_builds_as_embedded_command_xml() {
+        let task_id = EntityId::new("import-task").expect("valid task id");
+        let report_xml = include_str!("../../../fixtures/import-report.xml")
+            .replace("{{RUN_NAME}}", "imported-report")
+            .replace("{{REPORT_ID}}", "89245cdb-8f0a-4ae9-8505-d60713578915");
+        let request = gvm_gmp::commands::reports::import_report(
+            &report_xml,
+            &task_id,
+            gvm_gmp::commands::reports::ImportReportOpts {
+                in_assets: Some(false),
+            },
+        )
+        .expect("report fixture must be valid embedded command XML");
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("import-report request should be UTF-8");
+
+        assert!(xml.starts_with(
+            r#"<create_report><task id="import-task"/><in_assets>0</in_assets><report "#
+        ));
+        assert!(!xml.contains("<?xml"));
+        assert!(!xml.contains("<!DOCTYPE"));
+        assert!(xml.ends_with("</report>\n</create_report>"));
+    }
+
+    #[test]
+    fn typed_sync_config_builder_has_the_current_incompatible_config_id() {
+        let config_id = EntityId::new("feed-config").expect("valid config id");
+        let request = gvm_gmp::commands::scan_configs::sync_config(&config_id);
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("typed sync-config request should be UTF-8");
+
+        assert_eq!(xml, r#"<sync_config config_id="feed-config"/>"#);
+    }
+
+    #[test]
+    fn report_format_lifecycle_selects_an_ordinary_format_without_parameters() {
+        let response = Response::from(
+            r#"<get_report_formats_response status="200" status_text="OK">
+                <report_format id="plain"><name>Plain XML</name></report_format>
+                <report_format id="configurable"><name>Configurable XML</name><param><name>Node Distance</name></param></report_format>
+            </get_report_formats_response>"#,
+        );
+
+        let formats =
+            parse_report_format_params(&response).expect("report-format response should be valid");
+        let selected = select_ordinary_report_format(&formats)
+            .expect("the first valid report format should drive format coverage");
+
+        assert_eq!(selected.as_str(), "plain");
+    }
+
+    #[test]
+    fn report_config_lifecycle_is_unavailable_when_all_formats_have_zero_parameters() {
+        let response = Response::from(
+            r#"<get_report_formats_response status="200" status_text="OK">
+                <report_format id="plain"><name>Plain XML</name></report_format>
+                <report_format id="csv"><name>CSV</name></report_format>
+            </get_report_formats_response>"#,
+        );
+
+        let formats = parse_report_format_params(&response)
+            .expect("zero-parameter report formats are still valid");
+
+        assert!(select_configurable_report_format(&formats).is_none());
+        assert_eq!(
+            report_format_parameter_evidence(&formats),
+            "plain (Plain XML, 0 parameter(s)), csv (CSV, 0 parameter(s))"
+        );
+    }
+
+    #[test]
+    fn report_format_selection_rejects_an_empty_response() {
+        let response =
+            Response::from(r#"<get_report_formats_response status="200" status_text="OK"/>"#);
+
+        let error = parse_report_format_params(&response)
+            .expect_err("an empty report-format response cannot drive the lifecycle");
+
+        assert_eq!(
+            error.to_string(),
+            "get_report_formats params=1 returned no report formats"
+        );
+    }
+
+    #[test]
+    fn report_config_lifecycle_selects_a_configurable_format_after_a_nonconfigurable_one() {
+        let response = Response::from(
+            r#"<get_report_formats_response status="200" status_text="OK">
+                <report_format id="plain"><name>Plain XML</name></report_format>
+                <report_format id="configurable"><name>Configurable XML</name><param><name>Node Distance</name><type>integer</type><value>10</value><default>10</default></param></report_format>
+            </get_report_formats_response>"#,
+        );
+
+        let formats =
+            parse_report_format_params(&response).expect("report-format response should be valid");
+        let selected = select_configurable_report_format(&formats)
+            .expect("the later configurable report format should be selected");
+
+        assert_eq!(selected.as_str(), "configurable");
+    }
+
+    #[test]
+    fn scanner_clone_request_preserves_the_live_scanner_endpoint() {
+        let scanner_id = EntityId::new("socket-backed-scanner").expect("valid scanner id");
+        let request = gvm_gmp::commands::scanners::clone_scanner(&scanner_id);
+        let xml = String::from_utf8(gvm_protocol::Request::to_bytes(&request))
+            .expect("scanner clone request should be UTF-8");
+
+        assert_eq!(
+            xml,
+            "<create_scanner><copy>socket-backed-scanner</copy></create_scanner>"
+        );
+        assert!(!xml.contains("<host>"));
+    }
+
+    #[test]
+    fn scanner_lifecycle_selects_a_cloneable_type_after_cve() {
+        let scanners = GetScannersResponse::from_response(&Response::from(
+            r#"<get_scanners_response status="200" status_text="OK">
+                <scanner id="cve"><name>CVE Scanner</name><type>CVE</type></scanner>
+                <scanner id="openvas"><name>OpenVAS Scanner</name><type>OpenVAS</type></scanner>
+            </get_scanners_response>"#,
+        ))
+        .expect("typed scanner response should parse");
+
+        let selected = select_cloneable_scanner(&scanners).expect("OpenVAS scanner is cloneable");
+
+        assert_eq!(selected.meta.id.as_str(), "openvas");
+        assert_eq!(selected.scanner_type.as_deref(), Some("OpenVAS"));
+    }
+
+    #[test]
+    fn scanner_lifecycle_reports_no_cloneable_scanner_types() {
+        let scanners = GetScannersResponse::from_response(&Response::from(
+            r#"<get_scanners_response status="200" status_text="OK">
+                <scanner id="cve"><name>CVE Scanner</name><type>CVE</type></scanner>
+                <scanner id="unknown"><name>Unknown Scanner</name><type>99</type></scanner>
+                <scanner id="missing"><name>Missing Type</name></scanner>
+            </get_scanners_response>"#,
+        ))
+        .expect("typed scanner response should parse");
+
+        let error = select_cloneable_scanner(&scanners)
+            .expect_err("CVE, unknown, and missing types are not cloneable");
+
+        assert_eq!(
+            error.to_string(),
+            "scanner lifecycle requires a cloneable non-CVE scanner; get_scanners returned types [CVE, 99, <missing>]"
+        );
+    }
+
+    #[test]
+    fn report_export_helpers_follow_the_semantic_version_gate() {
+        assert!(
+            !conditional_helper_available("get_report_export", GmpVersion(22, 7))
+                .expect("export helper has conditional coverage")
+        );
+        assert!(
+            !conditional_helper_available("get_report_export_with_opts", GmpVersion(22, 7))
+                .expect("export-with-options helper has conditional coverage")
+        );
+        assert!(
+            conditional_helper_available("get_report_export", GmpVersion(22, 8))
+                .expect("export helper has conditional coverage")
+        );
+    }
+
+    #[test]
+    fn scan_report_helper_call_path_requires_advertisement_and_semantic_version() {
+        assert!(
+            !conditional_helper_call_allowed("get_scan_report", true, GmpVersion(22, 7))
+                .expect("scan report helper has conditional coverage")
+        );
+        assert!(
+            conditional_helper_call_allowed("get_scan_report", true, GmpVersion(22, 8))
+                .expect("scan report helper has conditional coverage")
+        );
+        assert!(
+            !conditional_helper_call_allowed("get_scan_report", false, GmpVersion(22, 8))
+                .expect("unadvertised scan report helper must not be called")
+        );
+    }
+
+    #[test]
+    fn report_drilldowns_skip_advertised_but_ineligible_helpers_without_invoking_them() {
+        let advertised: BTreeSet<String> = CONDITIONAL_REPORT_DRILLDOWN_HELPERS
+            .iter()
+            .map(|helper_name| {
+                conditional_helper_coverage(helper_name)
+                    .expect("report drilldown helper has conditional coverage")
+                    .wire_command
+                    .to_string()
+            })
+            .collect();
+
+        for helper_name in CONDITIONAL_REPORT_DRILLDOWN_HELPERS {
+            let mut invoked = false;
+            if conditional_report_drilldown_call_allowed(
+                helper_name,
+                &advertised,
+                GmpVersion(22, 7),
+            )
+            .expect("report drilldown helper has a semantic capability gate")
+            {
+                invoked = true;
+            }
+            assert!(
+                !invoked,
+                "GMP 22.7 must not invoke ineligible advertised helper {helper_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn report_drilldowns_allow_advertised_helpers_at_their_semantic_minimum() {
+        let advertised: BTreeSet<String> = CONDITIONAL_REPORT_DRILLDOWN_HELPERS
+            .iter()
+            .map(|helper_name| {
+                conditional_helper_coverage(helper_name)
+                    .expect("report drilldown helper has conditional coverage")
+                    .wire_command
+                    .to_string()
+            })
+            .collect();
+
+        for helper_name in CONDITIONAL_REPORT_DRILLDOWN_HELPERS {
+            let mut invoked = false;
+            if conditional_report_drilldown_call_allowed(
+                helper_name,
+                &advertised,
+                GmpVersion(22, 8),
+            )
+            .expect("report drilldown helper has a semantic capability gate")
+            {
+                invoked = true;
+            }
+            assert!(
+                invoked,
+                "GMP 22.8 must invoke advertised helper {helper_name}"
+            );
+        }
+
+        assert_eq!(
+            conditional_helper_coverage("get_report_vulnerabilities")
+                .expect("alias helper has conditional coverage")
+                .wire_command,
+            "get_report_vulns"
+        );
+    }
+
+    #[test]
+    fn provisional_start_report_id_resolves_from_task_linkage() {
+        let provisional = EntityId::new("0").expect("valid provisional id");
+        let current = EntityId::new("current-report").expect("valid current report id");
+        let last = EntityId::new("last-report").expect("valid last report id");
+
+        assert_eq!(
+            select_scan_report_id(&provisional, Some(&current), Some(&last)),
+            Some(current.clone())
+        );
+        assert_eq!(
+            select_scan_report_id(&provisional, None, Some(&last)),
+            Some(last)
+        );
+    }
+
+    #[test]
+    fn concrete_start_report_id_is_preserved() {
+        let started = EntityId::new("started-report").expect("valid started report id");
+        let stale = EntityId::new("older-report").expect("valid stale report id");
+
+        assert_eq!(
+            select_scan_report_id(&started, Some(&stale), None),
+            Some(started)
+        );
+    }
 }

@@ -206,6 +206,17 @@ services:
       gvmd:
         condition: service_started
 
+  # Deterministic host/network target for the nightly scan lane. This is
+  # deliberately an ordinary TCP service, never an OCI image scan target.
+  scan-fixture:
+    image: nginx:1.27.5-alpine
+    restart: on-failure
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
   rust-gvm-e2e:
     image: ${RUNNER_IMAGE:-rust-gvm-e2e-runner:ci}
     profiles:
@@ -215,6 +226,31 @@ services:
       GVM_ADMIN_PASS: ${GVM_ADMIN_PASS:-admin}
       GVM_SOCKET_PATH: ${GVM_SOCKET_PATH:-/run/gvmd/gvmd.sock}
       E2E_RUN_SCAN: ${E2E_RUN_SCAN:-0}
+      E2E_RUN_ID: ${E2E_RUN_ID:-}
+      E2E_RESULTS_PATH: ${E2E_RESULTS_PATH:-}
+      E2E_RUNTIME_IMAGES_PATH: ${E2E_RUNTIME_IMAGES_PATH:-}
+      E2E_RUST_GVM_SHA: ${E2E_RUST_GVM_SHA:-}
+      E2E_RECORD_BASELINE: ${E2E_RECORD_BASELINE:-0}
+      E2E_ISOLATED: ${E2E_ISOLATED:-0}
+      E2E_SCAN_TARGET_HOST: ${E2E_SCAN_TARGET_HOST:-scan-fixture}
+      E2E_TASK_PROGRESS_TIMEOUT_SECS: ${E2E_TASK_PROGRESS_TIMEOUT_SECS:-900}
+      E2E_TLS_HOST: ${E2E_TLS_HOST:-}
+      E2E_TLS_PORT: ${E2E_TLS_PORT:-}
+      E2E_TLS_SERVER_NAME: ${E2E_TLS_SERVER_NAME:-}
+      E2E_TLS_CA_PATH: ${E2E_TLS_CA_PATH:-}
+      E2E_MTLS_HOST: ${E2E_MTLS_HOST:-}
+      E2E_MTLS_PORT: ${E2E_MTLS_PORT:-}
+      E2E_MTLS_SERVER_NAME: ${E2E_MTLS_SERVER_NAME:-}
+      E2E_MTLS_CA_PATH: ${E2E_MTLS_CA_PATH:-}
+      E2E_MTLS_CERT_PATH: ${E2E_MTLS_CERT_PATH:-}
+      E2E_MTLS_KEY_PATH: ${E2E_MTLS_KEY_PATH:-}
+      E2E_SSH_HOST: ${E2E_SSH_HOST:-}
+      E2E_SSH_PORT: ${E2E_SSH_PORT:-}
+      E2E_SSH_USER: ${E2E_SSH_USER:-}
+      E2E_SSH_PASSWORD: ${E2E_SSH_PASSWORD:-}
+      E2E_SSH_KEY_PATH: ${E2E_SSH_KEY_PATH:-}
+      E2E_SSH_KEY_PASSPHRASE: ${E2E_SSH_KEY_PASSPHRASE:-}
+      E2E_SSH_SOCKET_PATH: ${E2E_SSH_SOCKET_PATH:-}
       CARGO_TERM_COLOR: always
     working_dir: /workspace
     volumes:
@@ -226,6 +262,8 @@ services:
     depends_on:
       gvmd:
         condition: service_started
+      scan-fixture:
+        condition: service_healthy
     entrypoint:
       - /bin/bash
       - -lc

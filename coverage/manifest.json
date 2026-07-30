@@ -1,0 +1,2125 @@
+{
+  "schema_version": 1,
+  "rust_gvm_sha": "e47dd8cabb199503517d8854358811601c923fe6",
+  "registry_count": 155,
+  "typed_helper_count": 143,
+  "helper_variant_count": 4,
+  "commands": [
+    {
+      "name": "authenticate",
+      "wire_command": "authenticate",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_agent_group",
+      "wire_command": "create_agent_group",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "create_alert",
+      "wire_command": "create_alert",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_asset",
+      "wire_command": "create_asset",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_config",
+      "wire_command": "create_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_credential",
+      "wire_command": "create_credential",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_filter",
+      "wire_command": "create_filter",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_group",
+      "wire_command": "create_group",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_note",
+      "wire_command": "create_note",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_oci_image_target",
+      "wire_command": "create_oci_image_target",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "create_override",
+      "wire_command": "create_override",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_permission",
+      "wire_command": "create_permission",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_port_list",
+      "wire_command": "create_port_list",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_port_range",
+      "wire_command": "create_port_range",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_report",
+      "wire_command": "create_report",
+      "disposition": "nightly-live",
+      "lane": "devel-scan",
+      "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane."
+    },
+    {
+      "name": "create_report_config",
+      "wire_command": "create_report_config",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_report_format",
+      "wire_command": "create_report_format",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_role",
+      "wire_command": "create_role",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_scanner",
+      "wire_command": "create_scanner",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_schedule",
+      "wire_command": "create_schedule",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_tag",
+      "wire_command": "create_tag",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_target",
+      "wire_command": "create_target",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_task",
+      "wire_command": "create_task",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_ticket",
+      "wire_command": "create_ticket",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_tls_certificate",
+      "wire_command": "create_tls_certificate",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_user",
+      "wire_command": "create_user",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_web_application_target",
+      "wire_command": "create_web_application_target",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "delete_agent",
+      "wire_command": "delete_agent",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "delete_agent_group",
+      "wire_command": "delete_agent_group",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "delete_alert",
+      "wire_command": "delete_alert",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "delete_asset",
+      "wire_command": "delete_asset",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "delete_config",
+      "wire_command": "delete_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "delete_credential",
+      "wire_command": "delete_credential",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "delete_filter",
+      "wire_command": "delete_filter",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "delete_group",
+      "wire_command": "delete_group",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "delete_note",
+      "wire_command": "delete_note",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "delete_oci_image_target",
+      "wire_command": "delete_oci_image_target",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "delete_override",
+      "wire_command": "delete_override",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "delete_permission",
+      "wire_command": "delete_permission",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "delete_port_list",
+      "wire_command": "delete_port_list",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "delete_port_range",
+      "wire_command": "delete_port_range",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "delete_report",
+      "wire_command": "delete_report",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "delete_report_config",
+      "wire_command": "delete_report_config",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "delete_report_format",
+      "wire_command": "delete_report_format",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "delete_role",
+      "wire_command": "delete_role",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "delete_scanner",
+      "wire_command": "delete_scanner",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "delete_schedule",
+      "wire_command": "delete_schedule",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "delete_tag",
+      "wire_command": "delete_tag",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "delete_target",
+      "wire_command": "delete_target",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "delete_task",
+      "wire_command": "delete_task",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "delete_ticket",
+      "wire_command": "delete_ticket",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "delete_tls_certificate",
+      "wire_command": "delete_tls_certificate",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "delete_user",
+      "wire_command": "delete_user",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "delete_web_application_target",
+      "wire_command": "delete_web_application_target",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "describe_auth",
+      "wire_command": "describe_auth",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "empty_trashcan",
+      "wire_command": "empty_trashcan",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_agent_groups",
+      "wire_command": "get_agent_groups",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "get_agent_installer_instruction",
+      "wire_command": "get_agent_installer_instruction",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "get_agent_support_bundle",
+      "wire_command": "get_agent_support_bundle",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "get_agents",
+      "wire_command": "get_agents",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "get_aggregates",
+      "wire_command": "get_aggregates",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_alerts",
+      "wire_command": "get_alerts",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_assets",
+      "wire_command": "get_assets",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_configs",
+      "wire_command": "get_configs",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_credential_stores",
+      "wire_command": "get_credential_stores",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_credentials",
+      "wire_command": "get_credentials",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_features",
+      "wire_command": "get_features",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_feeds",
+      "wire_command": "get_feeds",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_filters",
+      "wire_command": "get_filters",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_groups",
+      "wire_command": "get_groups",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_info",
+      "wire_command": "get_info",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_integration_configs",
+      "wire_command": "get_integration_configs",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_license",
+      "wire_command": "get_license",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_notes",
+      "wire_command": "get_notes",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_nvt_families",
+      "wire_command": "get_nvt_families",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_nvts",
+      "wire_command": "get_nvts",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_oci_image_targets",
+      "wire_command": "get_oci_image_targets",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "get_overrides",
+      "wire_command": "get_overrides",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_permissions",
+      "wire_command": "get_permissions",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_port_lists",
+      "wire_command": "get_port_lists",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_preferences",
+      "wire_command": "get_preferences",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_report_applications",
+      "wire_command": "get_report_applications",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_closed_cves",
+      "wire_command": "get_report_closed_cves",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_configs",
+      "wire_command": "get_report_configs",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_report_cves",
+      "wire_command": "get_report_cves",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_errors",
+      "wire_command": "get_report_errors",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_formats",
+      "wire_command": "get_report_formats",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_report_hosts",
+      "wire_command": "get_report_hosts",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_operating_systems",
+      "wire_command": "get_report_operating_systems",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_ports",
+      "wire_command": "get_report_ports",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_tls_certificates",
+      "wire_command": "get_report_tls_certificates",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_vulns",
+      "wire_command": "get_report_vulns",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_reports",
+      "wire_command": "get_reports",
+      "disposition": "nightly-live",
+      "lane": "devel-scan",
+      "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane."
+    },
+    {
+      "name": "get_resource_names",
+      "wire_command": "get_resource_names",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_results",
+      "wire_command": "get_results",
+      "disposition": "nightly-live",
+      "lane": "devel-scan",
+      "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane."
+    },
+    {
+      "name": "get_roles",
+      "wire_command": "get_roles",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_scan_report",
+      "wire_command": "get_scan_report",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_scanners",
+      "wire_command": "get_scanners",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_schedules",
+      "wire_command": "get_schedules",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_settings",
+      "wire_command": "get_settings",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_system_reports",
+      "wire_command": "get_system_reports",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_tags",
+      "wire_command": "get_tags",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_targets",
+      "wire_command": "get_targets",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_tasks",
+      "wire_command": "get_tasks",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_tickets",
+      "wire_command": "get_tickets",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_timezones",
+      "wire_command": "get_timezones",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_tls_certificates",
+      "wire_command": "get_tls_certificates",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_users",
+      "wire_command": "get_users",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_version",
+      "wire_command": "get_version",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_vulns",
+      "wire_command": "get_vulns",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_web_application_targets",
+      "wire_command": "get_web_application_targets",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "help",
+      "wire_command": "help",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_agent",
+      "wire_command": "modify_agent",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "modify_agent_control_scan_config",
+      "wire_command": "modify_agent_control_scan_config",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "modify_agent_group",
+      "wire_command": "modify_agent_group",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "modify_alert",
+      "wire_command": "modify_alert",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_asset",
+      "wire_command": "modify_asset",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "modify_auth",
+      "wire_command": "modify_auth",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "modify_config",
+      "wire_command": "modify_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_credential",
+      "wire_command": "modify_credential",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_credential_store",
+      "wire_command": "modify_credential_store",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "modify_filter",
+      "wire_command": "modify_filter",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_group",
+      "wire_command": "modify_group",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "modify_integration_config",
+      "wire_command": "modify_integration_config",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "modify_license",
+      "wire_command": "modify_license",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "modify_note",
+      "wire_command": "modify_note",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_oci_image_target",
+      "wire_command": "modify_oci_image_target",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "modify_override",
+      "wire_command": "modify_override",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_permission",
+      "wire_command": "modify_permission",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "modify_port_list",
+      "wire_command": "modify_port_list",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_report_config",
+      "wire_command": "modify_report_config",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "modify_report_format",
+      "wire_command": "modify_report_format",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "modify_role",
+      "wire_command": "modify_role",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "modify_scanner",
+      "wire_command": "modify_scanner",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_schedule",
+      "wire_command": "modify_schedule",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_setting",
+      "wire_command": "modify_setting",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "modify_tag",
+      "wire_command": "modify_tag",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_target",
+      "wire_command": "modify_target",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_task",
+      "wire_command": "modify_task",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_ticket",
+      "wire_command": "modify_ticket",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "modify_tls_certificate",
+      "wire_command": "modify_tls_certificate",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "modify_user",
+      "wire_command": "modify_user",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "modify_web_application_target",
+      "wire_command": "modify_web_application_target",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "move_task",
+      "wire_command": "move_task",
+      "disposition": "nightly-live",
+      "lane": "devel-scan",
+      "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane."
+    },
+    {
+      "name": "restore",
+      "wire_command": "restore",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "resume_task",
+      "wire_command": "resume_task",
+      "disposition": "nightly-live",
+      "lane": "devel-scan",
+      "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane."
+    },
+    {
+      "name": "run_wizard",
+      "wire_command": "run_wizard",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "start_task",
+      "wire_command": "start_task",
+      "disposition": "nightly-live",
+      "lane": "devel-scan",
+      "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane."
+    },
+    {
+      "name": "stop_task",
+      "wire_command": "stop_task",
+      "disposition": "nightly-live",
+      "lane": "devel-scan",
+      "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane."
+    },
+    {
+      "name": "sync_agents",
+      "wire_command": "sync_agents",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "sync_config",
+      "wire_command": "sync_config",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "test_alert",
+      "wire_command": "test_alert",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "verify_credential_store",
+      "wire_command": "verify_credential_store",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "verify_report_format",
+      "wire_command": "verify_report_format",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "verify_scanner",
+      "wire_command": "verify_scanner",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    }
+  ],
+  "helpers": [
+    {
+      "name": "authenticate",
+      "wire_command": "authenticate",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "clone_config",
+      "wire_command": "create_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "clone_oci_image_target_parsed",
+      "wire_command": "create_oci_image_target",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "clone_report_config",
+      "wire_command": "create_report_config",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "clone_report_format",
+      "wire_command": "create_report_format",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "clone_scan_config",
+      "wire_command": "create_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "clone_scanner",
+      "wire_command": "create_scanner",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "clone_web_application_target_parsed",
+      "wire_command": "create_web_application_target",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "create_agent_group_task",
+      "wire_command": "create_task",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "create_alert",
+      "wire_command": "create_alert",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_asset",
+      "wire_command": "create_asset",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_config",
+      "wire_command": "create_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_container_image_task",
+      "wire_command": "create_task",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "create_container_task",
+      "wire_command": "create_task",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "create_credential",
+      "wire_command": "create_credential",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_credential_store_credential",
+      "wire_command": "create_credential",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "create_filter",
+      "wire_command": "create_filter",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_group",
+      "wire_command": "create_group",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_host",
+      "wire_command": "create_asset",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_import_task",
+      "wire_command": "create_task",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_note",
+      "wire_command": "create_note",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_oci_image_target_parsed",
+      "wire_command": "create_oci_image_target",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "create_oci_image_target_task",
+      "wire_command": "create_task",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "create_override",
+      "wire_command": "create_override",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_permission",
+      "wire_command": "create_permission",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_port_list",
+      "wire_command": "create_port_list",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_report_format",
+      "wire_command": "create_report_format",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_role",
+      "wire_command": "create_role",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_scan_config",
+      "wire_command": "create_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_scanner",
+      "wire_command": "create_scanner",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_schedule",
+      "wire_command": "create_schedule",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_tag",
+      "wire_command": "create_tag",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_target",
+      "wire_command": "create_target",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_task",
+      "wire_command": "create_task",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "create_ticket",
+      "wire_command": "create_ticket",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_tls_certificate",
+      "wire_command": "create_tls_certificate",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_user",
+      "wire_command": "create_user",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "create_web_application_target_parsed",
+      "wire_command": "create_web_application_target",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "delete_asset",
+      "wire_command": "delete_asset",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "delete_config",
+      "wire_command": "delete_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "delete_oci_image_target_parsed",
+      "wire_command": "delete_oci_image_target",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "delete_scan_config",
+      "wire_command": "delete_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "delete_scanner",
+      "wire_command": "delete_scanner",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "delete_web_application_target_parsed",
+      "wire_command": "delete_web_application_target",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "describe_auth",
+      "wire_command": "describe_auth",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "empty_trashcan",
+      "wire_command": "empty_trashcan",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_aggregates",
+      "wire_command": "get_aggregates",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_alerts",
+      "wire_command": "get_alerts",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_asset",
+      "wire_command": "get_assets",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_assets",
+      "wire_command": "get_assets",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_cert_bund_advisories",
+      "wire_command": "get_info",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_cert_bund_advisory",
+      "wire_command": "get_info",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_config",
+      "wire_command": "get_configs",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_configs",
+      "wire_command": "get_configs",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_cpe",
+      "wire_command": "get_info",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_cpes",
+      "wire_command": "get_info",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_credential_store",
+      "wire_command": "get_credential_stores",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_credential_stores",
+      "wire_command": "get_credential_stores",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_credential_stores_with_opts",
+      "wire_command": "get_credential_stores",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_credentials",
+      "wire_command": "get_credentials",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_cve",
+      "wire_command": "get_info",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_cves",
+      "wire_command": "get_info",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_dfn_cert_advisories",
+      "wire_command": "get_info",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_dfn_cert_advisory",
+      "wire_command": "get_info",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_features_parsed",
+      "wire_command": "get_features",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_feed",
+      "wire_command": "get_feeds",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_feeds",
+      "wire_command": "get_feeds",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_filters",
+      "wire_command": "get_filters",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_groups",
+      "wire_command": "get_groups",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_help",
+      "wire_command": "help",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_help_with_mode",
+      "wire_command": "help",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_hosts",
+      "wire_command": "get_assets",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_integration_config_parsed",
+      "wire_command": "get_integration_configs",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_integration_configs_parsed",
+      "wire_command": "get_integration_configs",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_notes",
+      "wire_command": "get_notes",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_nvt_families",
+      "wire_command": "get_nvt_families",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_nvts",
+      "wire_command": "get_nvts",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_oci_image_target_parsed",
+      "wire_command": "get_oci_image_targets",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "get_oci_image_targets_parsed",
+      "wire_command": "get_oci_image_targets",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "get_operating_system_asset",
+      "wire_command": "get_assets",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_operating_system_assets",
+      "wire_command": "get_assets",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_overrides",
+      "wire_command": "get_overrides",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_permissions",
+      "wire_command": "get_permissions",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_policies",
+      "wire_command": "get_configs",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_policy",
+      "wire_command": "get_configs",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_port_lists",
+      "wire_command": "get_port_lists",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_report_applications_parsed",
+      "wire_command": "get_report_applications",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_closed_cves",
+      "wire_command": "get_report_closed_cves",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_configs_parsed",
+      "wire_command": "get_report_configs",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_report_cves_parsed",
+      "wire_command": "get_report_cves",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_errors",
+      "wire_command": "get_report_errors",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_export",
+      "wire_command": "get_reports",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_export_with_opts",
+      "wire_command": "get_reports",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_formats",
+      "wire_command": "get_report_formats",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_report_hosts_parsed",
+      "wire_command": "get_report_hosts",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_operating_systems_parsed",
+      "wire_command": "get_report_operating_systems",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_ports_parsed",
+      "wire_command": "get_report_ports",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_tls_certificates",
+      "wire_command": "get_report_tls_certificates",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_vulnerabilities",
+      "wire_command": "get_report_vulns",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_report_vulns",
+      "wire_command": "get_report_vulns",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_reports",
+      "wire_command": "get_reports",
+      "disposition": "nightly-live",
+      "lane": "devel-scan",
+      "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane."
+    },
+    {
+      "name": "get_results",
+      "wire_command": "get_results",
+      "disposition": "nightly-live",
+      "lane": "devel-scan",
+      "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane."
+    },
+    {
+      "name": "get_roles",
+      "wire_command": "get_roles",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_scan_config",
+      "wire_command": "get_configs",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_scan_config_nvt",
+      "wire_command": "get_nvts",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_scan_config_nvts",
+      "wire_command": "get_nvts",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_scan_configs",
+      "wire_command": "get_configs",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_scan_report",
+      "wire_command": "get_scan_report",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_scanner",
+      "wire_command": "get_scanners",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_scanners",
+      "wire_command": "get_scanners",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_schedules",
+      "wire_command": "get_schedules",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_settings",
+      "wire_command": "get_settings",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_system_reports",
+      "wire_command": "get_system_reports",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_tags",
+      "wire_command": "get_tags",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_targets",
+      "wire_command": "get_targets",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_tasks",
+      "wire_command": "get_tasks",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_tickets",
+      "wire_command": "get_tickets",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_timezones",
+      "wire_command": "get_timezones",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_tls_certificates",
+      "wire_command": "get_tls_certificates",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_users",
+      "wire_command": "get_users",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "get_version",
+      "wire_command": "get_version",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_vulnerabilities",
+      "wire_command": "get_vulns",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_vulnerability",
+      "wire_command": "get_vulns",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "get_web_application_target_parsed",
+      "wire_command": "get_web_application_targets",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "get_web_application_targets_parsed",
+      "wire_command": "get_web_application_targets",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "import_policy",
+      "wire_command": "create_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "import_report",
+      "wire_command": "create_report",
+      "disposition": "nightly-live",
+      "lane": "devel-scan",
+      "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane."
+    },
+    {
+      "name": "import_report_format",
+      "wire_command": "create_report_format",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "import_scan_config",
+      "wire_command": "create_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_asset",
+      "wire_command": "modify_asset",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "modify_config",
+      "wire_command": "modify_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_credential_store_credential",
+      "wire_command": "modify_credential",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "modify_integration_config_parsed",
+      "wire_command": "modify_integration_config",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "modify_oci_image_target_parsed",
+      "wire_command": "modify_oci_image_target",
+      "disposition": "excluded-community",
+      "lane": "none",
+      "rationale": "Explicit issue #118 Community boundary: agent or OCI/container-image capability."
+    },
+    {
+      "name": "modify_policy_set_comment",
+      "wire_command": "modify_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_policy_set_name",
+      "wire_command": "modify_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_scan_config",
+      "wire_command": "modify_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_scan_config_set_comment",
+      "wire_command": "modify_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_scan_config_set_name",
+      "wire_command": "modify_config",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_scanner",
+      "wire_command": "modify_scanner",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "modify_web_application_target_parsed",
+      "wire_command": "modify_web_application_target",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "restore_from_trashcan",
+      "wire_command": "restore",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    },
+    {
+      "name": "resume_task",
+      "wire_command": "resume_task",
+      "disposition": "nightly-live",
+      "lane": "devel-scan",
+      "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane."
+    },
+    {
+      "name": "start_task",
+      "wire_command": "start_task",
+      "disposition": "nightly-live",
+      "lane": "devel-scan",
+      "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane."
+    },
+    {
+      "name": "sync_scan_config",
+      "wire_command": "sync_config",
+      "disposition": "isolated-live",
+      "lane": "devel-isolated",
+      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+    },
+    {
+      "name": "verify_credential_store",
+      "wire_command": "verify_credential_store",
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Availability is decided only by recorded get_version/get_features/help evidence."
+    },
+    {
+      "name": "verify_scanner",
+      "wire_command": "verify_scanner",
+      "disposition": "blocking-live",
+      "lane": "devel-fast",
+      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+    }
+  ]
+}

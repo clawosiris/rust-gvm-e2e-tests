@@ -9,7 +9,7 @@ A standalone integration test suite that validates the rust-gvm ecosystem agains
 | Phase | Layers | Components | Status |
 |-------|--------|------------|--------|
 | **1** | Library + CLI | rust-gvm, gvm-rools | 🔧 Active |
-| **2** | REST + gRPC API | rust-gvm-api | Planned (when API is implemented) |
+| **2** | REST + gRPC API | [rust-gvm-api](https://github.com/greenbone-hive/rust-gvm-api) | Planned (when API is implemented) |
 | **3** | MCP Server | openvas-mcp-server | Planned (when MCP is production-ready) |
 | **4** | Cross-client validation | python-gvm differential | Planned |
 

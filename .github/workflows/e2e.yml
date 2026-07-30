@@ -1,55 +1,67 @@
-name: E2E Tests
-
-concurrency:
-  group: e2e-tests-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
+name: Community E2E
 
 on:
-  workflow_dispatch:
-    inputs:
-      run-scan:
-        description: "Run extended scan test (slow, ~10min+)"
-        required: false
-        type: boolean
-        default: false
-      clean:
-        description: "Destroy persistent volumes before starting (clean slate)"
-        required: false
-        type: boolean
-        default: false
-      rust-gvm-ref:
-        description: "rust-gvm branch/tag/SHA to test against"
-        required: false
-        type: string
-        default: "devel"
-      gvm-rools-ref:
-        description: "gvm-rools branch/tag/SHA to test against"
-        required: false
-        type: string
-        default: "main"
-      gvm-version:
-        description: "GVM stack image tag to test (for example stable, oldstable, edge, or a release tag)"
-        required: false
-        type: string
-        default: "stable"
-      validate-gvm-tools:
-        description: "Validate results against gvm-tools (cross-check)"
-        required: false
-        type: boolean
-        default: true
-      run-differential:
-        description: "Run cross-client differential suite (rust-gvm vs python-gvm)"
-        required: false
-        type: boolean
-        default: false
+  pull_request:
+    branches: [devel]
+    paths:
+      - "baselines/**"
+      - "coverage/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "README.md"
+      - "docker/**"
+      - "docs/**"
+      - "fixtures/**"
+      - "tests/**"
+      - "tools/**"
+      - ".github/workflows/e2e.yml"
+  schedule:
+    - cron: "23 3 * * *"
   repository_dispatch:
     types: [component-updated]
-  pull_request:
-    branches: [main, devel]
-    paths:
-      - 'tests/**'
-      - 'docker/**'
-      - '.github/workflows/e2e.yml'
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Community lane to run
+        required: true
+        type: choice
+        default: devel-fast
+        options:
+          - devel-fast
+          - devel-scan
+          - devel-isolated
+          - devel-transport
+          - differential
+          - all
+      rust-gvm-ref:
+        description: Exact rust-gvm ref to resolve and test
+        required: true
+        type: string
+        default: devel
+      gvm-rools-ref:
+        description: gvm-rools ref for CLI/differential validation
+        required: true
+        type: string
+        default: main
+      gvm-version:
+        description: Community runtime image tag
+        required: true
+        type: string
+        default: stable
+      clean:
+        description: Explicitly destroy the selected lane volumes first
+        required: false
+        type: boolean
+        default: false
+      record-baseline:
+        description: Write an observed candidate baseline artifact
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: community-e2e-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -61,44 +73,71 @@ env:
   RUNNER_IMAGE_TAG: ci
 
 jobs:
-  build-runner:
-    name: Build E2E Runner Image
+  inventory:
+    name: Community coverage inventory
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    outputs:
-      rust-gvm-ref: ${{ steps.refs.outputs.rust-gvm-ref }}
-      gvm-rools-ref: ${{ steps.refs.outputs.gvm-rools-ref }}
-      gvm-version: ${{ steps.refs.outputs['gvm-version'] }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
-      - name: Resolve component refs
-        id: refs
+      - name: Fetch authoritative rust-gvm/devel
+        run: git clone --depth 1 --branch devel https://github.com/greenbone-hive/rust-gvm.git /tmp/rust-gvm
+      - name: Verify generated inventory and source tests
         run: |
-          RUST_GVM_REF="devel"
-          GVM_ROOLS_REF="main"
-          GVM_VERSION="stable"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            RUST_GVM_REF="${{ inputs.rust-gvm-ref || 'devel' }}"
-            GVM_ROOLS_REF="${{ inputs.gvm-rools-ref || 'main' }}"
-            GVM_VERSION="${{ inputs['gvm-version'] || 'stable' }}"
-          elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            COMPONENT="${{ github.event.client_payload.component }}"
-            REF="${{ github.event.client_payload.ref }}"
-            PAYLOAD_GVM_VERSION="${{ github.event.client_payload['gvm-version'] }}"
-            if [ "$COMPONENT" = "rust-gvm" ] && [ -n "$REF" ]; then
-              RUST_GVM_REF="$REF"
-            elif [ "$COMPONENT" = "gvm-rools" ] && [ -n "$REF" ]; then
-              GVM_ROOLS_REF="$REF"
+          python3 tools/coverage_manifest.py --check --rust-gvm-source /tmp/rust-gvm
+          python3 -m unittest discover -s tools -p 'test_*.py'
+          cargo fmt --all --check
+          cargo check --workspace --all-targets
+          cargo test --workspace
+          cargo clippy --workspace --all-targets -- -D warnings
+          bash -n docker/scripts/*.sh tests/cli/*.sh
+          bash docker/scripts/test-community-lane-artifacts.sh
+          docker compose -f "${COMPOSE_FILE}" config --quiet
+
+  build-runner:
+    name: Build Community runner
+    needs: inventory
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      rust-gvm-ref: ${{ steps.refs.outputs.rust-gvm-ref }}
+      rust-gvm-sha: ${{ steps.refs.outputs.rust-gvm-sha }}
+      gvm-rools-ref: ${{ steps.refs.outputs.gvm-rools-ref }}
+      gvm-version: ${{ steps.refs.outputs.gvm-version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+      - name: Resolve component refs to immutable revisions
+        id: refs
+        env:
+          DISPATCH_RUST_GVM_REF: ${{ inputs.rust-gvm-ref }}
+          DISPATCH_GVM_ROOLS_REF: ${{ inputs.gvm-rools-ref }}
+          DISPATCH_GVM_VERSION: ${{ inputs.gvm-version }}
+          PAYLOAD_COMPONENT: ${{ github.event.client_payload.component }}
+          PAYLOAD_REF: ${{ github.event.client_payload.ref }}
+          PAYLOAD_GVM_VERSION: ${{ github.event.client_payload['gvm-version'] }}
+        run: |
+          rust_ref="${DISPATCH_RUST_GVM_REF:-devel}"
+          rools_ref="${DISPATCH_GVM_ROOLS_REF:-main}"
+          gvm_version="${DISPATCH_GVM_VERSION:-stable}"
+          if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            if [[ "${PAYLOAD_COMPONENT}" == "rust-gvm" && -n "${PAYLOAD_REF}" ]]; then
+              rust_ref="${PAYLOAD_REF}"
+            elif [[ "${PAYLOAD_COMPONENT}" == "gvm-rools" && -n "${PAYLOAD_REF}" ]]; then
+              rools_ref="${PAYLOAD_REF}"
             fi
-            if [ -n "$PAYLOAD_GVM_VERSION" ]; then
-              GVM_VERSION="$PAYLOAD_GVM_VERSION"
-            fi
+            gvm_version="${PAYLOAD_GVM_VERSION:-${gvm_version}}"
           fi
-          echo "rust-gvm-ref=$RUST_GVM_REF" >> "$GITHUB_OUTPUT"
-          echo "gvm-rools-ref=$GVM_ROOLS_REF" >> "$GITHUB_OUTPUT"
-          echo "gvm-version=$GVM_VERSION" >> "$GITHUB_OUTPUT"
+          git init -q /tmp/rust-gvm
+          git -C /tmp/rust-gvm remote add origin https://github.com/greenbone-hive/rust-gvm.git
+          git -C /tmp/rust-gvm fetch --depth 1 origin "${rust_ref}"
+          rust_sha="$(git -C /tmp/rust-gvm rev-parse FETCH_HEAD)"
+          {
+            echo "rust-gvm-ref=${rust_ref}"
+            echo "rust-gvm-sha=${rust_sha}"
+            echo "gvm-rools-ref=${rools_ref}"
+            echo "gvm-version=${gvm_version}"
+          } >> "${GITHUB_OUTPUT}"
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-      - name: Build and export runner image
+      - name: Build runner at exact rust-gvm revision
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -106,87 +145,292 @@ jobs:
           tags: ${{ env.RUNNER_IMAGE_NAME }}:${{ env.RUNNER_IMAGE_TAG }}
           outputs: type=docker,dest=runner-image.tar
           build-args: |
-            RUST_GVM_REF=${{ steps.refs.outputs.rust-gvm-ref }}
+            RUST_GVM_REF=${{ steps.refs.outputs.rust-gvm-sha }}
             GVM_ROOLS_REF=${{ steps.refs.outputs.gvm-rools-ref }}
           secrets: |
             github_token=${{ secrets.RELEASE_TOKEN }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: e2e-runner-image
+          name: community-runner-${{ github.run_id }}
           path: runner-image.tar
           retention-days: 1
 
-  e2e:
-    name: GVM Community E2E
+  devel-fast:
+    name: Community E2E (devel-fast)
     needs: build-runner
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'repository_dispatch' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.lane == 'devel-fast' || inputs.lane == 'all'))
     runs-on: [self-hosted]
     timeout-minutes: 180
     env:
-      GVM_VERSION: ${{ needs.build-runner.outputs['gvm-version'] }}
+      GVM_VERSION: ${{ needs.build-runner.outputs.gvm-version }}
+      E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
+      E2E_CLEAN_VOLUMES: ${{ inputs.clean && '1' || '0' }}
+      E2E_RECORD_BASELINE: ${{ inputs['record-baseline'] && '1' || '0' }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
-      - name: Log component refs under test
-        run: |
-          echo "rust-gvm ref: ${{ needs.build-runner.outputs.rust-gvm-ref }}"
-          echo "gvm-rools ref: ${{ needs.build-runner.outputs.gvm-rools-ref }}"
-          echo "GVM stack version: ${GVM_VERSION}"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: e2e-runner-image
-      - name: Load runner image
-        run: docker load -i runner-image.tar && rm -f runner-image.tar
-      - name: Clean volumes (if requested)
-        if: ${{ inputs.clean == true }}
-        run: docker compose -f ${{ env.COMPOSE_FILE }} down -v
-      - name: Pull container images
-        run: docker compose -f ${{ env.COMPOSE_FILE }} pull
-      - name: Start GVM stack
-        run: docker compose -f ${{ env.COMPOSE_FILE }} up -d
-      - name: Wait for gvmd readiness
-        run: bash docker/scripts/wait-ready.sh
-        timeout-minutes: 150
-      - name: Run smoke tests
+          name: community-runner-${{ github.run_id }}
+          path: ${{ runner.temp }}/community-runner-${{ github.run_id }}
+      - name: Load exact Community runner image
+        id: runner-image
         run: |
-          docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run \
-            -e E2E_RUN_SCAN=${{ inputs.run-scan && '1' || '0' }} \
-            --rm rust-gvm-e2e
-      - name: Run CRUD tests
-        if: success()
+          runner_tar="${RUNNER_TEMP}/community-runner-${GITHUB_RUN_ID}/runner-image.tar"
+          docker load --input "${runner_tar}"
+          runner_image_id="$(docker image inspect --format '{{.Id}}' "${RUNNER_IMAGE_NAME}:${RUNNER_IMAGE_TAG}")"
+          printf 'image-id=%s\n' "${runner_image_id}" >> "${GITHUB_OUTPUT}"
+          rm -f -- "${runner_tar}"
+      - name: Restore artifacts directory ownership
+        env:
+          RUNNER_IMAGE_ID: ${{ steps.runner-image.outputs.image-id }}
         run: |
-          docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run --rm -T \
-            --entrypoint "" rust-gvm-e2e \
-            gvm-community-e2e --suite crud
-      - name: Run SecInfo tests
-        if: success()
+          artifacts_dir="${GITHUB_WORKSPACE}/artifacts"
+          if [[ -d "${artifacts_dir}" && ! -L "${artifacts_dir}" ]]; then
+            host_uid="$(id -u)"
+            host_gid="$(id -g)"
+            docker run --rm --user 0:0 \
+              --mount "type=bind,src=${artifacts_dir},dst=/workspace/artifacts" \
+              --entrypoint /bin/chown \
+              "${RUNNER_IMAGE_ID}" "${host_uid}:${host_gid}" /workspace/artifacts
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          clean: false
+      - run: bash docker/scripts/run-community-lane.sh devel-fast
+      - if: failure()
+        run: docker compose -f "${COMPOSE_FILE}" logs --tail=250 gvmd ospd-openvas openvasd pg-gvm
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: community-devel-fast-results-${{ github.run_id }}
+          path: |
+            artifacts/
+            coverage/manifest.json
+
+  devel-scan:
+    name: Community E2E (devel-scan)
+    needs: build-runner
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.lane == 'devel-scan' || inputs.lane == 'all'))
+    runs-on: [self-hosted]
+    timeout-minutes: 180
+    env:
+      GVM_VERSION: ${{ needs.build-runner.outputs.gvm-version }}
+      E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
+      E2E_CLEAN_VOLUMES: ${{ inputs.clean && '1' || '0' }}
+      E2E_RECORD_BASELINE: ${{ inputs['record-baseline'] && '1' || '0' }}
+      E2E_TASK_PROGRESS_TIMEOUT_SECS: 1800
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: community-runner-${{ github.run_id }}
+          path: ${{ runner.temp }}/community-runner-${{ github.run_id }}
+      - name: Load exact Community runner image
+        id: runner-image
         run: |
-          docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run --rm -T \
-            --entrypoint "" rust-gvm-e2e \
-            gvm-community-e2e --suite secinfo
-      - name: Run Differential tests
-        if: success() && inputs.run-differential == true
+          runner_tar="${RUNNER_TEMP}/community-runner-${GITHUB_RUN_ID}/runner-image.tar"
+          docker load --input "${runner_tar}"
+          runner_image_id="$(docker image inspect --format '{{.Id}}' "${RUNNER_IMAGE_NAME}:${RUNNER_IMAGE_TAG}")"
+          printf 'image-id=%s\n' "${runner_image_id}" >> "${GITHUB_OUTPUT}"
+          rm -f -- "${runner_tar}"
+      - name: Restore artifacts directory ownership
+        env:
+          RUNNER_IMAGE_ID: ${{ steps.runner-image.outputs.image-id }}
         run: |
-          docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run --rm -T \
-            --entrypoint "" rust-gvm-e2e \
-            gvm-community-e2e --suite differential
-      - name: Validate results with gvm-tools
-        if: success() && inputs.validate-gvm-tools != false
+          artifacts_dir="${GITHUB_WORKSPACE}/artifacts"
+          if [[ -d "${artifacts_dir}" && ! -L "${artifacts_dir}" ]]; then
+            host_uid="$(id -u)"
+            host_gid="$(id -g)"
+            docker run --rm --user 0:0 \
+              --mount "type=bind,src=${artifacts_dir},dst=/workspace/artifacts" \
+              --entrypoint /bin/chown \
+              "${RUNNER_IMAGE_ID}" "${host_uid}:${host_gid}" /workspace/artifacts
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          clean: false
+      - run: bash docker/scripts/run-community-lane.sh devel-scan
+      - if: failure()
+        run: docker compose -f "${COMPOSE_FILE}" logs --tail=350 gvmd ospd-openvas openvasd pg-gvm scan-fixture
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: community-devel-scan-results-${{ github.run_id }}
+          path: |
+            artifacts/
+            coverage/manifest.json
+
+  devel-isolated:
+    name: Community E2E (devel-isolated)
+    needs: [build-runner, devel-scan]
+    if: >-
+      always() && needs.build-runner.result == 'success' &&
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' &&
+        (inputs.lane == 'devel-isolated' || inputs.lane == 'all')))
+    runs-on: [self-hosted]
+    timeout-minutes: 180
+    env:
+      GVM_VERSION: ${{ needs.build-runner.outputs.gvm-version }}
+      E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
+      E2E_CLEAN_VOLUMES: ${{ inputs.clean && '1' || '0' }}
+      E2E_RECORD_BASELINE: ${{ inputs['record-baseline'] && '1' || '0' }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: community-runner-${{ github.run_id }}
+          path: ${{ runner.temp }}/community-runner-${{ github.run_id }}
+      - name: Load exact Community runner image
+        id: runner-image
         run: |
-          echo "=== Cross-validating with gvm-tools ==="
-          docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run --rm -T --entrypoint "" rust-gvm-e2e \
-            python3 /workspace/docker/scripts/validate-against-gvm-tools.py --check all
-      - name: gvm-tools cross-check on failure
-        if: failure()
+          runner_tar="${RUNNER_TEMP}/community-runner-${GITHUB_RUN_ID}/runner-image.tar"
+          docker load --input "${runner_tar}"
+          runner_image_id="$(docker image inspect --format '{{.Id}}' "${RUNNER_IMAGE_NAME}:${RUNNER_IMAGE_TAG}")"
+          printf 'image-id=%s\n' "${runner_image_id}" >> "${GITHUB_OUTPUT}"
+          rm -f -- "${runner_tar}"
+      - name: Restore artifacts directory ownership
+        env:
+          RUNNER_IMAGE_ID: ${{ steps.runner-image.outputs.image-id }}
         run: |
-          docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run --rm -T --entrypoint "" rust-gvm-e2e \
-            python3 /workspace/docker/scripts/validate-against-gvm-tools.py --check all
-      - name: Collect logs on failure
-        if: failure()
+          artifacts_dir="${GITHUB_WORKSPACE}/artifacts"
+          if [[ -d "${artifacts_dir}" && ! -L "${artifacts_dir}" ]]; then
+            host_uid="$(id -u)"
+            host_gid="$(id -g)"
+            docker run --rm --user 0:0 \
+              --mount "type=bind,src=${artifacts_dir},dst=/workspace/artifacts" \
+              --entrypoint /bin/chown \
+              "${RUNNER_IMAGE_ID}" "${host_uid}:${host_gid}" /workspace/artifacts
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          clean: false
+      - run: bash docker/scripts/run-community-lane.sh devel-isolated
+      - if: failure()
+        run: COMPOSE_PROJECT_NAME=rust-gvm-e2e-isolated docker compose -f "${COMPOSE_FILE}" logs --tail=350 gvmd pg-gvm
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: community-devel-isolated-results-${{ github.run_id }}
+          path: |
+            artifacts/
+            coverage/manifest.json
+
+  devel-transport:
+    name: Community E2E (devel-transport)
+    needs: build-runner
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.lane == 'devel-transport' || inputs.lane == 'all')
+    runs-on: [self-hosted]
+    timeout-minutes: 180
+    env:
+      GVM_VERSION: ${{ needs.build-runner.outputs.gvm-version }}
+      E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
+      E2E_TLS_HOST: ${{ secrets.E2E_TLS_HOST }}
+      E2E_TLS_PORT: ${{ secrets.E2E_TLS_PORT }}
+      E2E_TLS_SERVER_NAME: ${{ secrets.E2E_TLS_SERVER_NAME }}
+      E2E_TLS_CA_PATH: ${{ secrets.E2E_TLS_CA_PATH }}
+      E2E_MTLS_HOST: ${{ secrets.E2E_MTLS_HOST }}
+      E2E_MTLS_PORT: ${{ secrets.E2E_MTLS_PORT }}
+      E2E_MTLS_SERVER_NAME: ${{ secrets.E2E_MTLS_SERVER_NAME }}
+      E2E_MTLS_CA_PATH: ${{ secrets.E2E_MTLS_CA_PATH }}
+      E2E_MTLS_CERT_PATH: ${{ secrets.E2E_MTLS_CERT_PATH }}
+      E2E_MTLS_KEY_PATH: ${{ secrets.E2E_MTLS_KEY_PATH }}
+      E2E_SSH_HOST: ${{ secrets.E2E_SSH_HOST }}
+      E2E_SSH_PORT: ${{ secrets.E2E_SSH_PORT }}
+      E2E_SSH_USER: ${{ secrets.E2E_SSH_USER }}
+      E2E_SSH_PASSWORD: ${{ secrets.E2E_SSH_PASSWORD }}
+      E2E_SSH_KEY_PATH: ${{ secrets.E2E_SSH_KEY_PATH }}
+      E2E_SSH_KEY_PASSPHRASE: ${{ secrets.E2E_SSH_KEY_PASSPHRASE }}
+      E2E_SSH_SOCKET_PATH: ${{ secrets.E2E_SSH_SOCKET_PATH }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: community-runner-${{ github.run_id }}
+          path: ${{ runner.temp }}/community-runner-${{ github.run_id }}
+      - name: Load exact Community runner image
+        id: runner-image
         run: |
-          docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=200 gvmd
-          docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=50 ospd-openvas
-          docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=50 openvasd
-          docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=30 redis-server
-          docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=30 pg-gvm
-      - name: Stop containers (keep volumes)
-        if: always()
-        run: docker compose -f ${{ env.COMPOSE_FILE }} down
+          runner_tar="${RUNNER_TEMP}/community-runner-${GITHUB_RUN_ID}/runner-image.tar"
+          docker load --input "${runner_tar}"
+          runner_image_id="$(docker image inspect --format '{{.Id}}' "${RUNNER_IMAGE_NAME}:${RUNNER_IMAGE_TAG}")"
+          printf 'image-id=%s\n' "${runner_image_id}" >> "${GITHUB_OUTPUT}"
+          rm -f -- "${runner_tar}"
+      - name: Restore artifacts directory ownership
+        env:
+          RUNNER_IMAGE_ID: ${{ steps.runner-image.outputs.image-id }}
+        run: |
+          artifacts_dir="${GITHUB_WORKSPACE}/artifacts"
+          if [[ -d "${artifacts_dir}" && ! -L "${artifacts_dir}" ]]; then
+            host_uid="$(id -u)"
+            host_gid="$(id -g)"
+            docker run --rm --user 0:0 \
+              --mount "type=bind,src=${artifacts_dir},dst=/workspace/artifacts" \
+              --entrypoint /bin/chown \
+              "${RUNNER_IMAGE_ID}" "${host_uid}:${host_gid}" /workspace/artifacts
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          clean: false
+      - run: bash docker/scripts/run-community-lane.sh devel-transport
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: community-devel-transport-results-${{ github.run_id }}
+          path: |
+            artifacts/
+            coverage/manifest.json
+
+  differential:
+    name: Community E2E (differential)
+    needs: build-runner
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.lane == 'differential' || inputs.lane == 'all')
+    runs-on: [self-hosted]
+    timeout-minutes: 180
+    env:
+      GVM_VERSION: ${{ needs.build-runner.outputs.gvm-version }}
+      E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: community-runner-${{ github.run_id }}
+          path: ${{ runner.temp }}/community-runner-${{ github.run_id }}
+      - name: Load exact Community runner image
+        id: runner-image
+        run: |
+          runner_tar="${RUNNER_TEMP}/community-runner-${GITHUB_RUN_ID}/runner-image.tar"
+          docker load --input "${runner_tar}"
+          runner_image_id="$(docker image inspect --format '{{.Id}}' "${RUNNER_IMAGE_NAME}:${RUNNER_IMAGE_TAG}")"
+          printf 'image-id=%s\n' "${runner_image_id}" >> "${GITHUB_OUTPUT}"
+          rm -f -- "${runner_tar}"
+      - name: Restore artifacts directory ownership
+        env:
+          RUNNER_IMAGE_ID: ${{ steps.runner-image.outputs.image-id }}
+        run: |
+          artifacts_dir="${GITHUB_WORKSPACE}/artifacts"
+          if [[ -d "${artifacts_dir}" && ! -L "${artifacts_dir}" ]]; then
+            host_uid="$(id -u)"
+            host_gid="$(id -g)"
+            docker run --rm --user 0:0 \
+              --mount "type=bind,src=${artifacts_dir},dst=/workspace/artifacts" \
+              --entrypoint /bin/chown \
+              "${RUNNER_IMAGE_ID}" "${host_uid}:${host_gid}" /workspace/artifacts
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          clean: false
+      - run: bash docker/scripts/run-community-lane.sh differential
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: community-differential-results-${{ github.run_id }}
+          path: |
+            artifacts/
+            coverage/manifest.json
