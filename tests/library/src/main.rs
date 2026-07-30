@@ -83,7 +83,9 @@ use tokio::runtime::Builder;
 use tokio::time::sleep;
 
 use gvm_community_e2e::runtime::{self, FeatureState, Outcome};
-use gvm_community_e2e::{CoverageEntry, Disposition, COMMAND_COVERAGE, HELPER_COVERAGE};
+#[cfg(test)]
+use gvm_community_e2e::{CoverageEntry, HELPER_COVERAGE};
+use gvm_community_e2e::{Disposition, COMMAND_COVERAGE};
 
 fn tls_certificate_data() -> String {
     include_str!("../../../fixtures/e2e-certificate.pem.b64")
@@ -3386,6 +3388,22 @@ async fn run_scan_suite(
         "typed task list/filter did not return the scan task",
     )?;
 
+    let results = client
+        .get_results(gvm_gmp::commands::results::GetResultsOpts {
+            filter_string: Some("uuid=00000000-0000-0000-0000-000000000000 rows=1".to_string()),
+            details: Some(false),
+            ..Default::default()
+        })
+        .await?;
+    ensure(
+        results.status == 200,
+        "typed get_results did not return 200",
+    )?;
+    ensure(
+        results.items.is_empty(),
+        "typed no-match get_results unexpectedly returned a result",
+    )?;
+
     let started = client.start_task(&task.id).await?;
     ensure(started.status == 202, "typed start_task did not return 202")?;
     let started_report_id = started.report_id.ok_or_else(|| {
@@ -3503,39 +3521,11 @@ async fn run_scan_suite(
         }
     }
 
-    let results = client
-        .get_results(gvm_gmp::commands::results::GetResultsOpts {
-            filter_string: Some("uuid=00000000-0000-0000-0000-000000000000 rows=1".to_string()),
-            details: Some(false),
-            ..Default::default()
-        })
-        .await?;
-    ensure(
-        results.status == 200,
-        "typed get_results did not return 200",
-    )?;
-    ensure(
-        results.items.is_empty(),
-        "typed no-match get_results unexpectedly returned a result",
-    )?;
     runtime::observe(
-        "scan-result-linkage",
+        "scan-report-read-lifecycle",
         Outcome::ConditionalUnavailable,
-        "stable gvmd report-filtered result expansion executes invalid SEVERITY_ERROR SQL",
+        "stable gvmd report/result expansion and export paths execute invalid SEVERITY_ERROR SQL",
     );
-
-    let formats = client
-        .get_report_formats(GetReportFormatsOpts::default())
-        .await?;
-    let format = formats
-        .items
-        .iter()
-        .find(|item| item.active)
-        .or_else(|| formats.items.first())
-        .ok_or_else(|| AppError::Assertion("scan lane requires a report format".to_string()))?;
-    run_report_export_checks(client, &report_id, &format.meta.id).await?;
-
-    run_conditional_report_drilldowns(client, &report_id).await?;
 
     let import_task = client
         .create_import_task(
@@ -3561,23 +3551,9 @@ async fn run_scan_suite(
         )
         .await?;
     ensure(imported.status == 201, "typed import_report failed")?;
-    let imported_report = client
-        .get_reports(gvm_gmp::commands::reports::GetReportsOpts {
-            report_id: Some(imported.id.clone()),
-            details: Some(true),
-            ..Default::default()
-        })
-        .await?;
-    ensure(
-        imported_report
-            .items
-            .iter()
-            .any(|item| item.meta.id == imported.id),
-        "typed imported report did not round-trip",
-    )?;
     log_pass(
         "report import",
-        "sanitized fixture create_import_task/import_report/read; parent-task cleanup tracked",
+        "sanitized fixture create_import_task/import_report; parent-task cleanup tracked",
     );
 
     if let Some(result) = results.items.first() {
@@ -3660,6 +3636,7 @@ async fn run_scan_suite(
     Ok(())
 }
 
+#[cfg(test)]
 fn conditional_helper_coverage(helper_name: &str) -> Result<&'static CoverageEntry, AppError> {
     let helper = HELPER_COVERAGE
         .iter()
@@ -3674,6 +3651,7 @@ fn conditional_helper_coverage(helper_name: &str) -> Result<&'static CoverageEnt
     Ok(helper)
 }
 
+#[cfg(test)]
 fn conditional_helper_semantic_name(helper_name: &str) -> &str {
     // These public helper variants intentionally share one semantic capability
     // entry. Keep aliases explicit: helper names are not wire-command names.
@@ -3683,6 +3661,7 @@ fn conditional_helper_semantic_name(helper_name: &str) -> &str {
     }
 }
 
+#[cfg(test)]
 fn conditional_helper_minimum_version(helper_name: &str) -> Result<GmpVersion, AppError> {
     let helper = conditional_helper_coverage(helper_name)?;
     gvm_gmp::capabilities::minimum_version_for_command(conditional_helper_semantic_name(
@@ -3696,11 +3675,13 @@ fn conditional_helper_minimum_version(helper_name: &str) -> Result<GmpVersion, A
     })
 }
 
+#[cfg(test)]
 fn conditional_helper_available(helper_name: &str, version: GmpVersion) -> Result<bool, AppError> {
     let minimum = conditional_helper_minimum_version(helper_name)?;
     Ok(version >= minimum)
 }
 
+#[cfg(test)]
 fn conditional_helper_call_allowed(
     helper_name: &str,
     advertised: bool,
@@ -3710,6 +3691,7 @@ fn conditional_helper_call_allowed(
     Ok(advertised && version_eligible)
 }
 
+#[cfg(test)]
 fn conditional_report_drilldown_call_allowed(
     helper_name: &str,
     available_commands: &BTreeSet<String>,
@@ -3737,163 +3719,6 @@ const CONDITIONAL_REPORT_DRILLDOWN_HELPERS: &[&str] = &[
     "get_report_errors",
     "get_report_closed_cves",
 ];
-
-fn observe_ineligible_conditional_report_drilldown(
-    helper_name: &str,
-    available_commands: &BTreeSet<String>,
-    version: GmpVersion,
-) -> Result<(), AppError> {
-    let helper = conditional_helper_coverage(helper_name)?;
-    if available_commands.contains(helper.wire_command)
-        && !conditional_helper_available(helper_name, version)?
-    {
-        let minimum = conditional_helper_minimum_version(helper_name)?;
-        runtime::observe(
-            &format!("helper:{helper_name}"),
-            Outcome::ConditionalUnavailable,
-            &format!(
-                "GMP {version}; wire command {} advertised; typed helper semantic capability requires GMP >= {minimum}",
-                helper.wire_command
-            ),
-        );
-    }
-    Ok(())
-}
-
-async fn run_report_export_checks(
-    client: &mut GmpClient<UnixSocketConnection>,
-    report_id: &EntityId,
-    report_format_id: &EntityId,
-) -> Result<(), AppError> {
-    let version = client.version();
-    let export_available = conditional_helper_available("get_report_export", version)?;
-    let export_with_opts_available =
-        conditional_helper_available("get_report_export_with_opts", version)?;
-    ensure(
-        export_available == export_with_opts_available,
-        "report export helpers disagreed on semantic capability availability",
-    )?;
-    if !export_available {
-        let minimum = conditional_helper_minimum_version("get_report_export")?;
-        for helper in ["get_report_export", "get_report_export_with_opts"] {
-            runtime::observe(
-                &format!("helper:{helper}"),
-                Outcome::ConditionalUnavailable,
-                &format!("GMP {version}; typed semantic capability requires GMP >= {minimum}"),
-            );
-        }
-        return Ok(());
-    }
-
-    let export = client
-        .get_report_export(report_id, report_format_id)
-        .await?;
-    ensure(!export.bytes.is_empty(), "typed report export was empty")?;
-    let export_with_opts = client
-        .get_report_export_with_opts(
-            report_id,
-            gvm_gmp::commands::reports::GetReportExportOpts::new(report_format_id.clone()),
-        )
-        .await?;
-    ensure(
-        !export_with_opts.bytes.is_empty(),
-        "typed report export with options was empty",
-    )?;
-    log_pass(
-        "typed get_report_export",
-        "typed export helper responses were nonempty",
-    );
-    Ok(())
-}
-
-async fn run_conditional_report_drilldowns(
-    client: &mut GmpClient<UnixSocketConnection>,
-    report_id: &EntityId,
-) -> Result<(), AppError> {
-    let available = if let Some(report) = runtime::snapshot() {
-        report.help_commands.into_iter().collect::<BTreeSet<_>>()
-    } else {
-        BTreeSet::new()
-    };
-    let opts = || gvm_gmp::commands::reports::GetReportDetailsOpts {
-        filter_string: Some("rows=10 first=1".to_string()),
-        details: Some(true),
-        ignore_pagination: Some(true),
-        ..Default::default()
-    };
-    let version = client.version();
-    macro_rules! conditional_read {
-        ($helper:literal, $future:expr) => {
-            if conditional_report_drilldown_call_allowed($helper, &available, version)? {
-                let response = $future.await?;
-                ensure(
-                    response.status == 200,
-                    concat!("conditional typed ", $helper, " did not return 200"),
-                )?;
-                log_pass(concat!("typed ", $helper), "valid parsed response");
-            } else {
-                observe_ineligible_conditional_report_drilldown($helper, &available, version)?;
-            }
-        };
-    }
-    if conditional_report_drilldown_call_allowed("get_scan_report", &available, version)? {
-        let response = client
-            .get_scan_report(
-                report_id,
-                gvm_gmp::commands::reports::GetScanReportOpts::default(),
-            )
-            .await?;
-        assert_status(&response, 200, "typed get_scan_report")?;
-        ensure(
-            response_contains(&response, "<report ")?,
-            "typed get_scan_report omitted its report payload",
-        )?;
-        log_pass("typed get_scan_report", "valid structured report response");
-    } else {
-        observe_ineligible_conditional_report_drilldown("get_scan_report", &available, version)?;
-    }
-    conditional_read!(
-        "get_report_vulns",
-        client.get_report_vulns(report_id, opts())
-    );
-    conditional_read!(
-        "get_report_vulnerabilities",
-        client.get_report_vulnerabilities(report_id, opts())
-    );
-    conditional_read!(
-        "get_report_tls_certificates",
-        client.get_report_tls_certificates(report_id, opts())
-    );
-    conditional_read!(
-        "get_report_hosts_parsed",
-        client.get_report_hosts_parsed(report_id, opts())
-    );
-    conditional_read!(
-        "get_report_ports_parsed",
-        client.get_report_ports_parsed(report_id, opts())
-    );
-    conditional_read!(
-        "get_report_applications_parsed",
-        client.get_report_applications_parsed(report_id, opts())
-    );
-    conditional_read!(
-        "get_report_operating_systems_parsed",
-        client.get_report_operating_systems_parsed(report_id, opts())
-    );
-    conditional_read!(
-        "get_report_cves_parsed",
-        client.get_report_cves_parsed(report_id, opts())
-    );
-    conditional_read!(
-        "get_report_errors",
-        client.get_report_errors(report_id, opts())
-    );
-    conditional_read!(
-        "get_report_closed_cves",
-        client.get_report_closed_cves(report_id, opts())
-    );
-    Ok(())
-}
 
 async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Result<(), AppError> {
     let mut client = connect_client(config).await?;
