@@ -46,7 +46,7 @@ use gvm_gmp::commands::port_lists::{
     PortListOpts,
 };
 use gvm_gmp::commands::report_formats::{get_report_formats, GetReportFormatsOpts};
-use gvm_gmp::commands::reports::get_report;
+use gvm_gmp::commands::reports::{get_report, get_reports};
 use gvm_gmp::commands::scan_configs::{get_scan_configs, GetScanConfigsOpts};
 use gvm_gmp::commands::scanners::{get_scanners, GetScannersOpts};
 use gvm_gmp::commands::schedules::{
@@ -69,6 +69,7 @@ use gvm_gmp::enums::{
 use gvm_gmp::responses::feed::GetFeedsResponse;
 use gvm_gmp::responses::permission::GetPermissionsResponse;
 use gvm_gmp::responses::port_list::GetPortListsResponse;
+use gvm_gmp::responses::report::GetReportsResponse;
 use gvm_gmp::responses::report_format::GetReportFormatsResponse;
 use gvm_gmp::responses::scanner::GetScannersResponse;
 use gvm_gmp::responses::target::GetTargetsResponse;
@@ -3490,30 +3491,21 @@ async fn run_scan_suite(
         }
     }
 
+    let report_opts = gvm_gmp::commands::reports::GetReportsOpts {
+        report_id: Some(report_id.clone()),
+        details: Some(false),
+        ignore_pagination: Some(true),
+        ..Default::default()
+    };
     let report_response = send_idempotent_with_reconnect(
         client,
         config,
         Duration::from_secs(config.task_progress_timeout_secs),
-        "get_report after scan completion",
-        || get_report(&report_id),
+        "get_reports after scan completion",
+        || get_reports(report_opts.clone()),
     )
     .await?;
-    assert_status(&report_response, 200, "get_report")?;
-    ensure(
-        response_contains(&report_response, "<report ")?
-            || response_contains(&report_response, "<results>")?
-            || response_contains(&report_response, "<result>")?,
-        "expected report payload in get_report response",
-    )?;
-
-    let reports = client
-        .get_reports(gvm_gmp::commands::reports::GetReportsOpts {
-            report_id: Some(report_id.clone()),
-            details: Some(true),
-            ignore_pagination: Some(true),
-            ..Default::default()
-        })
-        .await?;
+    let reports = GetReportsResponse::from_response(&report_response)?;
     ensure(
         reports
             .items
