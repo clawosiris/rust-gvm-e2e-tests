@@ -2595,31 +2595,46 @@ async fn run_isolated_suite(
                 ..Default::default()
             },
         ))
-        .await?;
-    if modify_permission.status_code() == Some(400)
-        && modify_permission.status_text().as_deref() == Some("Error in SUBJECT")
-    {
-        runtime::observe(
-            "typed permission modify",
-            Outcome::KnownUpstreamBug,
-            "rust-gvm#405 reproduced: flat subject elements were rejected by gvmd",
-        );
+        .await;
+    match modify_permission {
+        Ok(response)
+            if response.status_code() == Some(400)
+                && response.status_text().as_deref() == Some("Error in SUBJECT") =>
+        {
+            runtime::observe(
+                "typed permission modify",
+                Outcome::KnownUpstreamBug,
+                "rust-gvm#405 reproduced: flat subject elements were rejected by gvmd",
+            );
 
-        runtime::observe(
-            "canonical permission modify",
-            Outcome::KnownUpstreamBug,
-            "gvmd stable c286d205 queries removed permissions.resource_id/subject_id columns and closes the GMP connection",
-        );
-    } else {
-        assert_status(&modify_permission, 200, "modify_permission")?;
-        log_pass(
-            "typed permission modify",
-            "rust-gvm emitted a gvmd-compatible subject",
-        );
+            runtime::observe(
+                "canonical permission modify",
+                Outcome::KnownUpstreamBug,
+                "gvmd stable c286d205 queries removed permissions.resource_id/subject_id columns and closes the GMP connection",
+            );
+        }
+        Ok(response) => {
+            assert_status(&response, 200, "modify_permission")?;
+            log_pass(
+                "typed permission modify",
+                "rust-gvm emitted a gvmd-compatible subject",
+            );
+        }
+        Err(GvmError::Connection(error)) => {
+            runtime::observe(
+                "canonical permission modify",
+                Outcome::KnownUpstreamBug,
+                "gvmd stable c286d205 queried the removed permissions.resource_id column and closed the GMP connection",
+            );
+            log_line(&format!(
+                "permission modification closed the stable gvmd connection ({error}); reconnecting"
+            ));
+        }
+        Err(error) => return Err(error.into()),
     }
-    // The stable gvmd permission-modify failure closes the GMP socket after
-    // returning its response. Continue the remaining access-control lifecycle
-    // on a fresh authenticated connection.
+    // The stable gvmd permission-modify failure can close the GMP socket either
+    // before or after returning a response. Continue the remaining lifecycle on
+    // a fresh authenticated connection.
     client = reconnect_authenticated(
         config,
         Duration::from_secs(config.task_progress_timeout_secs),
@@ -3430,6 +3445,15 @@ async fn run_scan_suite(
         }
         Err(error) => return Err(error.into()),
     }
+
+    // The stable gvmd duplicate-start response can close the GMP socket after
+    // returning the active report. Establish a fresh authenticated connection
+    // before polling so the scan lifecycle does not depend on that socket.
+    *client = reconnect_authenticated(
+        config,
+        Duration::from_secs(config.task_progress_timeout_secs),
+    )
+    .await?;
 
     let task_status = wait_task_state(
         client,
