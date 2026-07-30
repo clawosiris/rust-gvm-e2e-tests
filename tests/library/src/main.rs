@@ -40,6 +40,7 @@ use gvm_gmp::commands::nvts::{get_nvts, GetNvtsOpts};
 use gvm_gmp::commands::overrides::{
     create_override, delete_override, get_override, get_overrides, GetOverridesOpts, OverrideOpts,
 };
+use gvm_gmp::commands::permissions::{get_permissions, GetPermissionsOpts};
 use gvm_gmp::commands::port_lists::{
     create_port_list, delete_port_list, get_port_list, get_port_lists, GetPortListsOpts,
     PortListOpts,
@@ -66,12 +67,14 @@ use gvm_gmp::enums::{
     ScannerType,
 };
 use gvm_gmp::responses::feed::GetFeedsResponse;
+use gvm_gmp::responses::permission::GetPermissionsResponse;
 use gvm_gmp::responses::port_list::GetPortListsResponse;
 use gvm_gmp::responses::report_format::GetReportFormatsResponse;
 use gvm_gmp::responses::scanner::GetScannersResponse;
 use gvm_gmp::responses::target::GetTargetsResponse;
+use gvm_gmp::responses::task::GetTasksResponse;
 use gvm_gmp::types::{EntityId, GmpVersion};
-use gvm_protocol::{Response, XmlCommand};
+use gvm_protocol::{Request, Response, XmlCommand};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde_json::Value;
@@ -2585,59 +2588,12 @@ async fn run_isolated_suite(
         "typed users/groups/roles/permissions",
     );
 
-    let modify_permission = client
-        .send(gvm_gmp::commands::permissions::modify_permission(
-            &permission_id,
-            gvm_gmp::commands::permissions::PermissionOpts {
-                comment: Some(config.name("permission-modified")),
-                subject_type: Some(gvm_gmp::PermissionSubjectType::Role),
-                subject_id: Some(role.id.clone()),
-                ..Default::default()
-            },
-        ))
-        .await;
-    match modify_permission {
-        Ok(response)
-            if response.status_code() == Some(400)
-                && response.status_text().as_deref() == Some("Error in SUBJECT") =>
-        {
-            runtime::observe(
-                "typed permission modify",
-                Outcome::KnownUpstreamBug,
-                "rust-gvm#405 reproduced: flat subject elements were rejected by gvmd",
-            );
-
-            runtime::observe(
-                "canonical permission modify",
-                Outcome::KnownUpstreamBug,
-                "gvmd stable c286d205 queries removed permissions.resource_id/subject_id columns and closes the GMP connection",
-            );
-        }
-        Ok(response) => {
-            assert_status(&response, 200, "modify_permission")?;
-            log_pass(
-                "typed permission modify",
-                "rust-gvm emitted a gvmd-compatible subject",
-            );
-        }
-        Err(GvmError::Connection(error)) => {
-            runtime::observe(
-                "canonical permission modify",
-                Outcome::KnownUpstreamBug,
-                "gvmd stable c286d205 queried the removed permissions.resource_id column and closed the GMP connection",
-            );
-            log_line(&format!(
-                "permission modification closed the stable gvmd connection ({error}); reconnecting"
-            ));
-        }
-        Err(error) => return Err(error.into()),
-    }
-    // The stable gvmd permission-modify failure can close the GMP socket either
-    // before or after returning a response. Continue the remaining lifecycle on
-    // a fresh authenticated connection.
-    client = reconnect_authenticated(
+    modify_role_permission_reconciled(
+        &mut client,
         config,
-        Duration::from_secs(config.task_progress_timeout_secs),
+        &permission_id,
+        &role.id,
+        &config.name("permission-modified"),
     )
     .await?;
 
@@ -2940,12 +2896,11 @@ async fn run_isolated_suite(
         "rust-gvm#414 reproduced: config_id makes gvmd reject sync_config as a bogus command",
     );
 
-    // gvmd closes the GMP connection after rejecting the bogus typed command.
-    // Reconnect before exercising the canonical fallback so a dead socket does
-    // not mask the parameterless sync_config contract.
-    client = reconnect_authenticated(
+    renew_authenticated_after_response(
+        &mut client,
         config,
         Duration::from_secs(config.task_progress_timeout_secs),
+        "typed sync_config rejection",
     )
     .await?;
     let sync = client.send(sync_config_request()).await?;
@@ -2961,11 +2916,11 @@ async fn run_isolated_suite(
             "gvmd advertises sync_config in authenticated help but rejects the canonical parameterless command as bogus",
         );
     }
-    // Keep subsequent isolated operations independent of whether gvmd closes
-    // the sync command's GMP connection after a success or capability error.
-    client = reconnect_authenticated(
+    renew_authenticated_after_response(
+        &mut client,
         config,
         Duration::from_secs(config.task_progress_timeout_secs),
+        "canonical sync_config outcome",
     )
     .await?;
 
@@ -3296,16 +3251,22 @@ fn select_scan_report_id(
 
 async fn resolve_scan_report_id(
     client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
     task_id: &EntityId,
     started_report_id: &EntityId,
 ) -> Result<EntityId, AppError> {
-    let response = client
-        .get_tasks(GetTasksOpts {
+    let response = get_tasks_with_reconnect(
+        client,
+        config,
+        GetTasksOpts {
             filter_string: Some(format!("uuid={task_id}")),
             details: Some(true),
             ..Default::default()
-        })
-        .await?;
+        },
+        Duration::from_secs(config.task_progress_timeout_secs),
+        "resolve scan report",
+    )
+    .await?;
     let task = response
         .items
         .iter()
@@ -3446,12 +3407,11 @@ async fn run_scan_suite(
         Err(error) => return Err(error.into()),
     }
 
-    // The stable gvmd duplicate-start response can close the GMP socket after
-    // returning the active report. Establish a fresh authenticated connection
-    // before polling so the scan lifecycle does not depend on that socket.
-    *client = reconnect_authenticated(
+    renew_authenticated_after_response(
+        client,
         config,
         Duration::from_secs(config.task_progress_timeout_secs),
+        "duplicate start_task",
     )
     .await?;
 
@@ -3463,7 +3423,7 @@ async fn run_scan_suite(
         |status| status != "New" && status != "Requested",
     )
     .await?;
-    let report_id = resolve_scan_report_id(client, &task.id, &started_report_id).await?;
+    let report_id = resolve_scan_report_id(client, config, &task.id, &started_report_id).await?;
     if matches!(task_status.as_str(), "Running" | "Stop Requested") {
         let stop_response = client.call(stop_task(&task.id)).await?;
         assert_stop_task_status(&stop_response, "stop_task")?;
@@ -5217,6 +5177,72 @@ fn parse_python_target_id(
     Some(id.to_string())
 }
 
+async fn send_idempotent_with_reconnect<R, F>(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    timeout: Duration,
+    label: &str,
+    mut request: F,
+) -> Result<Response, AppError>
+where
+    R: Request,
+    F: FnMut() -> R,
+{
+    let started = tokio::time::Instant::now();
+    let mut last_error = String::from("no request attempt completed");
+
+    while started.elapsed() <= timeout {
+        match client.send(request()).await {
+            Ok(response) => return Ok(response),
+            Err(GvmError::Connection(error)) => {
+                last_error = error.to_string();
+                log_line(&format!(
+                    "{label} connection failed ({error}); renewing authenticated session"
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        }
+
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        *client = reconnect_authenticated(config, remaining).await?;
+    }
+
+    Err(AppError::Assertion(format!(
+        "{label} did not complete within {} seconds; last connection error: {last_error}",
+        timeout.as_secs()
+    )))
+}
+
+async fn get_tasks_with_reconnect(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    opts: GetTasksOpts,
+    timeout: Duration,
+    label: &str,
+) -> Result<GetTasksResponse, AppError> {
+    let response =
+        send_idempotent_with_reconnect(client, config, timeout, label, || get_tasks(opts.clone()))
+            .await?;
+    Ok(GetTasksResponse::from_response(&response)?)
+}
+
+async fn get_permissions_with_reconnect(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    opts: GetPermissionsOpts,
+    timeout: Duration,
+    label: &str,
+) -> Result<GetPermissionsResponse, AppError> {
+    let response = send_idempotent_with_reconnect(client, config, timeout, label, || {
+        get_permissions(opts.clone())
+    })
+    .await?;
+    Ok(GetPermissionsResponse::from_response(&response)?)
+}
+
 async fn wait_task_state(
     client: &mut GmpClient<UnixSocketConnection>,
     config: &EnvConfig,
@@ -5228,49 +5254,18 @@ async fn wait_task_state(
     let mut last_status = String::from("unknown");
 
     while started.elapsed() <= timeout {
-        let response = match client
-            .get_tasks(GetTasksOpts {
+        let response = get_tasks_with_reconnect(
+            client,
+            config,
+            GetTasksOpts {
                 filter_string: Some(format!("uuid={task_id}")),
                 details: Some(true),
                 ..Default::default()
-            })
-            .await
-        {
-            Ok(response) => response,
-            Err(GvmError::Connection(error)) => {
-                log_line(&format!(
-                    "task status poll connection failed ({error}); reconnecting"
-                ));
-                let mut replacement = match connect_client(config).await {
-                    Ok(replacement) => replacement,
-                    Err(reconnect_error) => {
-                        log_line(&format!(
-                            "task status poll reconnect failed ({reconnect_error}); retrying"
-                        ));
-                        sleep(Duration::from_secs(1)).await;
-                        continue;
-                    }
-                };
-                match replacement
-                    .authenticate(&config.username, &config.password)
-                    .await
-                {
-                    Ok(_) => *client = replacement,
-                    Err(GvmError::Connection(authentication_error)) => {
-                        log_line(&format!(
-                            "task status poll authentication connection failed \
-                             ({authentication_error}); retrying"
-                        ));
-                        sleep(Duration::from_secs(1)).await;
-                        continue;
-                    }
-                    Err(error) => return Err(error.into()),
-                }
-                sleep(Duration::from_secs(1)).await;
-                continue;
-            }
-            Err(error) => return Err(error.into()),
-        };
+            },
+            timeout.saturating_sub(started.elapsed()),
+            "task status poll",
+        )
+        .await?;
         let task = response
             .items
             .iter()
@@ -5294,6 +5289,127 @@ async fn wait_task_state(
         "task {task_id} did not reach the required state within {} seconds; last status: {last_status}",
         timeout.as_secs()
     )))
+}
+
+#[derive(Debug)]
+enum PermissionModifyDelivery {
+    Confirmed,
+    KnownSubjectRejection,
+    ConnectionLost(String),
+}
+
+async fn modify_role_permission_reconciled(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    permission_id: &EntityId,
+    role_id: &EntityId,
+    desired_comment: &str,
+) -> Result<(), AppError> {
+    let delivery = match client
+        .send(gvm_gmp::commands::permissions::modify_permission(
+            permission_id,
+            gvm_gmp::commands::permissions::PermissionOpts {
+                comment: Some(desired_comment.to_string()),
+                subject_type: Some(gvm_gmp::PermissionSubjectType::Role),
+                subject_id: Some(role_id.clone()),
+                ..Default::default()
+            },
+        ))
+        .await
+    {
+        Ok(response)
+            if response.status_code() == Some(400)
+                && response.status_text().as_deref() == Some("Error in SUBJECT") =>
+        {
+            PermissionModifyDelivery::KnownSubjectRejection
+        }
+        Ok(response) => {
+            assert_status(&response, 200, "modify_permission")?;
+            PermissionModifyDelivery::Confirmed
+        }
+        Err(GvmError::Connection(error)) => {
+            PermissionModifyDelivery::ConnectionLost(error.to_string())
+        }
+        Err(error) => return Err(error.into()),
+    };
+
+    renew_authenticated_after_response(
+        client,
+        config,
+        Duration::from_secs(config.task_progress_timeout_secs),
+        "modify_permission outcome",
+    )
+    .await?;
+    let permissions = get_permissions_with_reconnect(
+        client,
+        config,
+        GetPermissionsOpts {
+            filter_string: Some(format!("uuid={permission_id}")),
+            details: Some(true),
+            ..Default::default()
+        },
+        Duration::from_secs(config.task_progress_timeout_secs),
+        "reconcile modify_permission",
+    )
+    .await?;
+    let permission = permissions
+        .items
+        .iter()
+        .find(|entry| entry.meta.id == *permission_id)
+        .ok_or_else(|| {
+            AppError::Assertion(format!(
+                "permission {permission_id} disappeared while reconciling modify_permission"
+            ))
+        })?;
+    let desired_state_observed = permission.meta.comment.as_deref() == Some(desired_comment)
+        && permission
+            .subject
+            .as_ref()
+            .is_some_and(|subject| subject.id == *role_id);
+
+    match delivery {
+        PermissionModifyDelivery::Confirmed if desired_state_observed => {
+            log_pass(
+                "typed permission modify",
+                "response and read-after-write reconciliation confirmed the desired state",
+            );
+        }
+        PermissionModifyDelivery::Confirmed => {
+            return Err(AppError::Assertion(format!(
+                "modify_permission returned success but permission {permission_id} did not expose the desired comment and role subject"
+            )));
+        }
+        PermissionModifyDelivery::KnownSubjectRejection if desired_state_observed => {
+            return Err(AppError::Assertion(format!(
+                "modify_permission returned Error in SUBJECT but permission {permission_id} exposed the rejected state"
+            )));
+        }
+        PermissionModifyDelivery::KnownSubjectRejection => {
+            runtime::observe(
+                "typed permission modify",
+                Outcome::KnownUpstreamBug,
+                "rust-gvm#405 reproduced: flat subject elements were rejected by gvmd",
+            );
+        }
+        PermissionModifyDelivery::ConnectionLost(error) if desired_state_observed => {
+            log_pass(
+                "typed permission modify",
+                &format!(
+                    "read-after-write reconciliation confirmed the desired state after response loss ({error})"
+                ),
+            );
+        }
+        PermissionModifyDelivery::ConnectionLost(error) => {
+            runtime::observe(
+                "canonical permission modify",
+                Outcome::KnownUpstreamBug,
+                &format!(
+                    "stable gvmd closed the connection without applying the requested permission state ({error})"
+                ),
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn create_role_permission(
@@ -5356,6 +5472,19 @@ async fn create_role_permission(
 async fn connect_client(config: &EnvConfig) -> Result<GmpClient<UnixSocketConnection>, AppError> {
     let connection = UnixSocketConnection::with_path(&config.socket_path);
     Ok(GmpClient::connect(connection).await?)
+}
+
+async fn renew_authenticated_after_response(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    timeout: Duration,
+    label: &str,
+) -> Result<(), AppError> {
+    log_line(&format!(
+        "{label} completed at a connection-closing boundary; renewing authenticated session"
+    ));
+    *client = reconnect_authenticated(config, timeout).await?;
+    Ok(())
 }
 
 async fn reconnect_authenticated(
@@ -5773,6 +5902,308 @@ fn log_line(message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::{Path, PathBuf};
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{UnixListener, UnixStream};
+
+    const VERSION_RESPONSE: &str = concat!(
+        r#"<get_version_response status="200" status_text="OK">"#,
+        "<version>22.7</version></get_version_response>"
+    );
+    const AUTH_RESPONSE: &str = r#"<authenticate_response status="200" status_text="OK"/>"#;
+    const RUNNING_TASK_RESPONSE: &str = concat!(
+        r#"<get_tasks_response status="200" status_text="OK">"#,
+        r#"<task id="task-id"><name>Task</name><status>Running</status></task>"#,
+        "<task_count>1<filtered>1</filtered><page>1</page></task_count>",
+        "</get_tasks_response>"
+    );
+    const START_TASK_RESPONSE: &str = concat!(
+        r#"<start_task_response status="202" status_text="OK, request submitted">"#,
+        "<report_id>report-id</report_id></start_task_response>"
+    );
+    const MODIFIED_PERMISSION_RESPONSE: &str = concat!(
+        r#"<get_permissions_response status="200" status_text="OK">"#,
+        r#"<permission id="permission-id"><name>get_tasks</name>"#,
+        "<comment>permission-modified</comment><writable>1</writable><in_use>0</in_use>",
+        r#"<subject id="role-id"><name>Role</name><type>role</type></subject>"#,
+        "</permission>",
+        "<permission_count>1<filtered>1</filtered><page>1</page></permission_count>",
+        "</get_permissions_response>"
+    );
+
+    type ServerStep = (&'static str, Option<&'static str>);
+
+    fn socket_test_config(path: &Path) -> EnvConfig {
+        EnvConfig {
+            task_progress_timeout_secs: 3,
+            username: "admin".to_string(),
+            password: "admin".to_string(),
+            socket_path: path.display().to_string(),
+            run_scan: false,
+            run_id: "socket-policy-test".to_string(),
+            namespace: "rust-gvm-e2e-socket-policy-test-".to_string(),
+        }
+    }
+
+    fn socket_test_path(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_nanos();
+        env::temp_dir().join(format!(
+            "gce-{}-{}-{nonce:x}.sock",
+            std::process::id(),
+            &label[..label.len().min(3)]
+        ))
+    }
+
+    async fn read_request(stream: &mut UnixStream) -> Vec<u8> {
+        let mut reader = gvm_protocol::XmlReader::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let count = stream.read(&mut buffer).await.expect("read request");
+            assert_ne!(
+                count, 0,
+                "client closed before sending the scripted request"
+            );
+            reader
+                .feed(&buffer[..count])
+                .expect("scripted request must be valid XML");
+            if let Some(frame) = reader.take_frame().expect("extract scripted request") {
+                return frame;
+            }
+        }
+    }
+
+    fn request_root(request: &[u8]) -> String {
+        let text = std::str::from_utf8(request).expect("request must be UTF-8");
+        text.trim_start()
+            .strip_prefix('<')
+            .expect("request must start with an element")
+            .split([' ', '/', '>'])
+            .next()
+            .expect("request root element")
+            .to_string()
+    }
+
+    async fn serve_script(listener: UnixListener, sessions: Vec<Vec<ServerStep>>) -> Vec<String> {
+        let mut commands = Vec::new();
+        for session in sessions {
+            let (mut stream, _) = listener.accept().await.expect("accept scripted client");
+            for (expected_root, response) in session {
+                let request = read_request(&mut stream).await;
+                let root = request_root(&request);
+                assert_eq!(root, expected_root);
+                commands.push(root);
+                let Some(response) = response else {
+                    break;
+                };
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write scripted response");
+            }
+        }
+        commands
+    }
+
+    async fn connect_and_authenticate(config: &EnvConfig) -> GmpClient<UnixSocketConnection> {
+        let mut client = connect_client(config).await.expect("connect test client");
+        client
+            .authenticate(&config.username, &config.password)
+            .await
+            .expect("authenticate test client");
+        client
+    }
+
+    #[test]
+    fn known_closing_response_renews_before_the_next_command() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("response-boundary");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![
+                        vec![
+                            ("get_version", Some(VERSION_RESPONSE)),
+                            ("authenticate", Some(AUTH_RESPONSE)),
+                            ("start_task", Some(START_TASK_RESPONSE)),
+                        ],
+                        vec![
+                            ("get_version", Some(VERSION_RESPONSE)),
+                            ("authenticate", Some(AUTH_RESPONSE)),
+                            ("get_tasks", Some(RUNNING_TASK_RESPONSE)),
+                        ],
+                    ],
+                ));
+                let config = socket_test_config(&path);
+                let mut client = connect_and_authenticate(&config).await;
+                let task_id = EntityId::new("task-id").expect("valid task ID");
+
+                let started = client.start_task(&task_id).await.expect("start task");
+                assert_eq!(started.status, 202);
+                renew_authenticated_after_response(
+                    &mut client,
+                    &config,
+                    Duration::from_secs(2),
+                    "duplicate start_task",
+                )
+                .await
+                .expect("renew after known closing response");
+                let tasks = get_tasks_with_reconnect(
+                    &mut client,
+                    &config,
+                    GetTasksOpts {
+                        filter_string: Some("uuid=task-id".to_string()),
+                        details: Some(true),
+                        ..Default::default()
+                    },
+                    Duration::from_secs(2),
+                    "post-start task read",
+                )
+                .await
+                .expect("read task on replacement session");
+
+                assert_eq!(tasks.items[0].status.as_deref(), Some("Running"));
+                assert_eq!(
+                    server.await.expect("scripted server"),
+                    [
+                        "get_version",
+                        "authenticate",
+                        "start_task",
+                        "get_version",
+                        "authenticate",
+                        "get_tasks",
+                    ]
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
+    }
+
+    #[test]
+    fn idempotent_task_read_retries_after_disconnect() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("idempotent-read");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![
+                        vec![
+                            ("get_version", Some(VERSION_RESPONSE)),
+                            ("authenticate", Some(AUTH_RESPONSE)),
+                            ("get_tasks", None),
+                        ],
+                        vec![
+                            ("get_version", Some(VERSION_RESPONSE)),
+                            ("authenticate", Some(AUTH_RESPONSE)),
+                            ("get_tasks", Some(RUNNING_TASK_RESPONSE)),
+                        ],
+                    ],
+                ));
+                let config = socket_test_config(&path);
+                let mut client = connect_and_authenticate(&config).await;
+
+                let tasks = get_tasks_with_reconnect(
+                    &mut client,
+                    &config,
+                    GetTasksOpts {
+                        filter_string: Some("uuid=task-id".to_string()),
+                        details: Some(true),
+                        ..Default::default()
+                    },
+                    Duration::from_secs(2),
+                    "retry test task read",
+                )
+                .await
+                .expect("idempotent read should recover");
+
+                assert_eq!(tasks.items[0].status.as_deref(), Some("Running"));
+                assert_eq!(
+                    server.await.expect("scripted server"),
+                    [
+                        "get_version",
+                        "authenticate",
+                        "get_tasks",
+                        "get_version",
+                        "authenticate",
+                        "get_tasks",
+                    ]
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
+    }
+
+    #[test]
+    fn mutation_response_loss_is_reconciled_without_retrying_mutation() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("mutation-reconcile");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![
+                        vec![
+                            ("get_version", Some(VERSION_RESPONSE)),
+                            ("authenticate", Some(AUTH_RESPONSE)),
+                            ("modify_permission", None),
+                        ],
+                        vec![
+                            ("get_version", Some(VERSION_RESPONSE)),
+                            ("authenticate", Some(AUTH_RESPONSE)),
+                            ("get_permissions", Some(MODIFIED_PERMISSION_RESPONSE)),
+                        ],
+                    ],
+                ));
+                let config = socket_test_config(&path);
+                let mut client = connect_and_authenticate(&config).await;
+                let permission_id = EntityId::new("permission-id").expect("valid permission ID");
+                let role_id = EntityId::new("role-id").expect("valid role ID");
+
+                modify_role_permission_reconciled(
+                    &mut client,
+                    &config,
+                    &permission_id,
+                    &role_id,
+                    "permission-modified",
+                )
+                .await
+                .expect("ambiguous mutation should reconcile");
+
+                let commands = server.await.expect("scripted server");
+                assert_eq!(
+                    commands,
+                    [
+                        "get_version",
+                        "authenticate",
+                        "modify_permission",
+                        "get_version",
+                        "authenticate",
+                        "get_permissions",
+                    ]
+                );
+                assert_eq!(
+                    commands
+                        .iter()
+                        .filter(|command| command.as_str() == "modify_permission")
+                        .count(),
+                    1,
+                    "a mutation with an ambiguous response must never be retried"
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
+    }
 
     #[test]
     fn tls_certificate_create_request_uses_base64_encoded_pem() {
