@@ -3415,7 +3415,7 @@ async fn run_scan_suite(
     )
     .await?;
 
-    let task_status = wait_task_state(
+    wait_task_state(
         client,
         config,
         &task.id,
@@ -3424,7 +3424,18 @@ async fn run_scan_suite(
     )
     .await?;
     let report_id = resolve_scan_report_id(client, config, &task.id, &started_report_id).await?;
-    if matches!(task_status.as_str(), "Running" | "Stop Requested") {
+    // The deterministic fixture can finish between the first Running snapshot
+    // and this mutation boundary. Re-read immediately before stop_task so a
+    // completed task is not moved back into a permanent Stop Requested state.
+    let task_status = read_task_status(
+        client,
+        config,
+        &task.id,
+        Duration::from_secs(config.task_progress_timeout_secs),
+        "pre-stop task state",
+    )
+    .await?;
+    if task_state_is_stoppable(&task_status) {
         let stop_response = client.call(stop_task(&task.id)).await?;
         assert_stop_task_status(&stop_response, "stop_task")?;
         let stopped = wait_task_state(
@@ -5229,6 +5240,39 @@ async fn get_tasks_with_reconnect(
     Ok(GetTasksResponse::from_response(&response)?)
 }
 
+async fn read_task_status(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    task_id: &EntityId,
+    timeout: Duration,
+    label: &str,
+) -> Result<String, AppError> {
+    let response = get_tasks_with_reconnect(
+        client,
+        config,
+        GetTasksOpts {
+            filter_string: Some(format!("uuid={task_id}")),
+            details: Some(true),
+            ..Default::default()
+        },
+        timeout,
+        label,
+    )
+    .await?;
+    response
+        .items
+        .iter()
+        .find(|task| task.meta.id == *task_id)
+        .ok_or_else(|| {
+            AppError::Assertion(format!(
+                "typed get_tasks did not return task {task_id} for {label}"
+            ))
+        })?
+        .status
+        .clone()
+        .ok_or_else(|| AppError::Assertion(format!("task {task_id} omitted status for {label}")))
+}
+
 async fn get_permissions_with_reconnect(
     client: &mut GmpClient<UnixSocketConnection>,
     config: &EnvConfig,
@@ -5254,32 +5298,16 @@ async fn wait_task_state(
     let mut last_status = String::from("unknown");
 
     while started.elapsed() <= timeout {
-        let response = get_tasks_with_reconnect(
+        last_status = read_task_status(
             client,
             config,
-            GetTasksOpts {
-                filter_string: Some(format!("uuid={task_id}")),
-                details: Some(true),
-                ..Default::default()
-            },
+            task_id,
             timeout.saturating_sub(started.elapsed()),
             "task status poll",
         )
         .await?;
-        let task = response
-            .items
-            .iter()
-            .find(|task| task.meta.id == *task_id)
-            .ok_or_else(|| {
-                AppError::Assertion(format!(
-                    "typed get_tasks did not return polled task {task_id}"
-                ))
-            })?;
-        if let Some(status) = task.status.clone() {
-            last_status = status;
-            if accept(&last_status) {
-                return Ok(last_status);
-            }
+        if accept(&last_status) {
+            return Ok(last_status);
         }
 
         sleep(Duration::from_secs(1)).await;
@@ -5548,6 +5576,10 @@ fn assert_stop_task_status(response: &Response, label: &str) -> Result<(), AppEr
 
 fn stop_task_status_is_success(status: u16) -> bool {
     matches!(status, 200 | 202)
+}
+
+fn task_state_is_stoppable(status: &str) -> bool {
+    matches!(status, "Running" | "Stop Requested")
 }
 
 fn canonical_sync_config_succeeded(response: &Response) -> Result<bool, AppError> {
@@ -6232,6 +6264,19 @@ mod tests {
             assert!(
                 !stop_task_status_is_success(status),
                 "unexpectedly accepted stop_task status {status}"
+            );
+        }
+    }
+
+    #[test]
+    fn completed_scan_is_not_stopped_from_a_stale_running_snapshot() {
+        assert!(task_state_is_stoppable("Running"));
+        assert!(task_state_is_stoppable("Stop Requested"));
+
+        for status in ["Done", "Stopped", "Interrupted", "Internal Error"] {
+            assert!(
+                !task_state_is_stoppable(status),
+                "completed scan state {status} must not be sent stop_task"
             );
         }
     }
