@@ -3424,15 +3424,16 @@ async fn run_scan_suite(
     )
     .await?;
     let report_id = resolve_scan_report_id(client, config, &task.id, &started_report_id).await?;
-    // The deterministic fixture can finish between the first Running snapshot
-    // and this mutation boundary. Re-read immediately before stop_task so a
-    // completed task is not moved back into a permanent Stop Requested state.
-    let task_status = read_task_status(
+    // The deterministic fixture can finish just after the first Running
+    // snapshot. Give that terminal transition a short grace period before the
+    // stop mutation so a completed task is not moved back into a permanent
+    // Stop Requested state.
+    let task_status = settle_task_state_before_stop(
         client,
         config,
         &task.id,
         Duration::from_secs(config.task_progress_timeout_secs),
-        "pre-stop task state",
+        Duration::from_secs(5),
     )
     .await?;
     if task_state_is_stoppable(&task_status) {
@@ -5273,6 +5274,26 @@ async fn read_task_status(
         .ok_or_else(|| AppError::Assertion(format!("task {task_id} omitted status for {label}")))
 }
 
+async fn settle_task_state_before_stop(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    task_id: &EntityId,
+    read_timeout: Duration,
+    grace_period: Duration,
+) -> Result<String, AppError> {
+    let started = tokio::time::Instant::now();
+
+    loop {
+        let status =
+            read_task_status(client, config, task_id, read_timeout, "pre-stop task state").await?;
+        if !task_state_is_stoppable(&status) || started.elapsed() >= grace_period {
+            return Ok(status);
+        }
+
+        sleep(Duration::from_secs(1).min(grace_period.saturating_sub(started.elapsed()))).await;
+    }
+}
+
 async fn get_permissions_with_reconnect(
     client: &mut GmpClient<UnixSocketConnection>,
     config: &EnvConfig,
@@ -5950,6 +5971,12 @@ mod tests {
         "<task_count>1<filtered>1</filtered><page>1</page></task_count>",
         "</get_tasks_response>"
     );
+    const DONE_TASK_RESPONSE: &str = concat!(
+        r#"<get_tasks_response status="200" status_text="OK">"#,
+        r#"<task id="task-id"><name>Task</name><status>Done</status></task>"#,
+        "<task_count>1<filtered>1</filtered><page>1</page></task_count>",
+        "</get_tasks_response>"
+    );
     const START_TASK_RESPONSE: &str = concat!(
         r#"<start_task_response status="202" status_text="OK, request submitted">"#,
         "<report_id>report-id</report_id></start_task_response>"
@@ -6169,6 +6196,47 @@ mod tests {
                         "authenticate",
                         "get_tasks",
                     ]
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
+    }
+
+    #[test]
+    fn pre_stop_grace_observes_a_terminal_scan_transition() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("pre-stop-grace");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![vec![
+                        ("get_version", Some(VERSION_RESPONSE)),
+                        ("authenticate", Some(AUTH_RESPONSE)),
+                        ("get_tasks", Some(RUNNING_TASK_RESPONSE)),
+                        ("get_tasks", Some(DONE_TASK_RESPONSE)),
+                    ]],
+                ));
+                let config = socket_test_config(&path);
+                let mut client = connect_and_authenticate(&config).await;
+                let task_id = EntityId::new("task-id").expect("valid task ID");
+
+                let status = settle_task_state_before_stop(
+                    &mut client,
+                    &config,
+                    &task_id,
+                    Duration::from_secs(2),
+                    Duration::from_secs(2),
+                )
+                .await
+                .expect("terminal transition during grace period");
+
+                assert_eq!(status, "Done");
+                assert_eq!(
+                    server.await.expect("scripted server"),
+                    ["get_version", "authenticate", "get_tasks", "get_tasks",]
                 );
                 std::fs::remove_file(&path).expect("remove scripted socket");
             });
