@@ -3255,38 +3255,51 @@ async fn resolve_scan_report_id(
     task_id: &EntityId,
     started_report_id: &EntityId,
 ) -> Result<EntityId, AppError> {
-    let response = get_tasks_with_reconnect(
-        client,
-        config,
-        GetTasksOpts {
-            filter_string: Some(format!("uuid={task_id}")),
-            details: Some(true),
-            ..Default::default()
-        },
-        Duration::from_secs(config.task_progress_timeout_secs),
-        "resolve scan report",
-    )
-    .await?;
-    let task = response
-        .items
-        .iter()
-        .find(|task| task.meta.id == *task_id)
-        .ok_or_else(|| {
-            AppError::Assertion(format!(
-                "typed get_tasks did not return scan task {task_id} while resolving its report"
-            ))
-        })?;
+    if let Some(report_id) = select_scan_report_id(started_report_id, None, None) {
+        return Ok(report_id);
+    }
 
-    select_scan_report_id(
-        started_report_id,
-        task.current_report.as_ref().map(|report| &report.id),
-        task.last_report.as_ref().map(|report| &report.id),
-    )
-    .ok_or_else(|| {
-        AppError::Assertion(format!(
-            "task {task_id} retained provisional report id {started_report_id} without exposing a current or last report"
-        ))
-    })
+    let timeout = Duration::from_secs(config.task_progress_timeout_secs);
+    let started = tokio::time::Instant::now();
+
+    while started.elapsed() <= timeout {
+        let response = get_tasks_with_reconnect(
+            client,
+            config,
+            GetTasksOpts {
+                filter_string: Some(format!("uuid={task_id}")),
+                details: Some(true),
+                ..Default::default()
+            },
+            timeout.saturating_sub(started.elapsed()),
+            "resolve scan report",
+        )
+        .await?;
+        let task = response
+            .items
+            .iter()
+            .find(|task| task.meta.id == *task_id)
+            .ok_or_else(|| {
+                AppError::Assertion(format!(
+                    "typed get_tasks did not return scan task {task_id} while resolving its report"
+                ))
+            })?;
+
+        if let Some(report_id) = select_scan_report_id(
+            started_report_id,
+            task.current_report.as_ref().map(|report| &report.id),
+            task.last_report.as_ref().map(|report| &report.id),
+        ) {
+            return Ok(report_id);
+        }
+
+        sleep(Duration::from_secs(1)).await;
+    }
+
+    Err(AppError::Assertion(format!(
+        "task {task_id} retained provisional report id {started_report_id} without exposing a current or last report within {} seconds",
+        timeout.as_secs()
+    )))
 }
 
 async fn run_scan_suite(
