@@ -40,10 +40,12 @@ use gvm_gmp::commands::secinfo::{
 };
 use gvm_gmp::commands::tags::{create_tag, delete_tag, get_tag, TagOpts};
 use gvm_gmp::commands::targets::{
-    create_target, delete_target, get_target, get_targets, CreateTargetOpts, GetTargetsOpts,
+    create_target, delete_target, get_target, get_targets, CreateTargetError, CreateTargetOpts,
+    GetTargetsOpts,
 };
 use gvm_gmp::commands::tasks::{
-    create_task, delete_task, get_task, get_tasks, start_task, stop_task, CreateTaskOpts, GetTasksOpts,
+    create_task, delete_task, get_task, get_tasks, start_task, stop_task, CreateTaskOpts,
+    GetTasksOpts,
 };
 use gvm_gmp::enums::{
     AlertCondition, AlertEvent, AlertMethod, CredentialType, EntityType, FilterType,
@@ -55,6 +57,7 @@ use gvm_gmp::responses::scan_config::GetScanConfigsResponse;
 use gvm_gmp::responses::scanner::GetScannersResponse;
 use gvm_gmp::responses::target::GetTargetsResponse;
 use gvm_gmp::types::{EntityId, GmpVersion};
+use gvm_gmp::{TargetHost, TargetHostError, TargetHosts, TargetHostsError, TargetPortSelection};
 use gvm_protocol::Response;
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -456,6 +459,12 @@ enum AppError {
     Parse(#[from] gvm_gmp::responses::ParseError),
     #[error(transparent)]
     Client(#[from] GvmError),
+    #[error(transparent)]
+    TargetHost(#[from] TargetHostError),
+    #[error(transparent)]
+    TargetHosts(#[from] TargetHostsError),
+    #[error(transparent)]
+    CreateTarget(#[from] CreateTargetError),
 }
 
 async fn wait_ready(config: &EnvConfig) -> Result<(), AppError> {
@@ -573,14 +582,7 @@ async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Re
     let port_list_id = first_element_id(&port_lists_response, "port_list")?;
 
     let target_response = client
-        .call(create_target(
-            SMOKE_TARGET_NAME,
-            CreateTargetOpts {
-                hosts: vec!["127.0.0.1".to_string()],
-                port_list_id: Some(port_list_id),
-                ..CreateTargetOpts::default()
-            },
-        ))
+        .call(create_localhost_target(SMOKE_TARGET_NAME, port_list_id)?)
         .await?;
     assert_status(&target_response, 201, "create_target")?;
     let target_id = response_id(&target_response, "create_target")?;
@@ -621,7 +623,6 @@ async fn run_scan_suite(
 ) -> Result<(), AppError> {
     log_line("Running extended scan flow because E2E_RUN_SCAN=1");
 
-
     // Clean up stale scan task from previous runs (persistent volumes)
     // Must happen before target cleanup since targets can't be deleted while referenced by tasks
     {
@@ -660,14 +661,7 @@ async fn run_scan_suite(
     )?;
 
     let scan_target = client
-        .call(create_target(
-            SCAN_TARGET_NAME,
-            CreateTargetOpts {
-                hosts: vec!["127.0.0.1".to_string()],
-                port_list_id: Some(port_list_id),
-                ..CreateTargetOpts::default()
-            },
-        ))
+        .call(create_localhost_target(SCAN_TARGET_NAME, port_list_id)?)
         .await?;
     assert_status(&scan_target, 201, "create scan target")?;
     let target_id = response_id(&scan_target, "create scan target")?;
@@ -703,7 +697,12 @@ async fn run_scan_suite(
     assert_status(&start_response, 202, "start_task")?;
     let report_id = child_entity_id(&start_response, "report_id")?;
 
-    let task_status = poll_task_status(client, &task_id, Duration::from_secs(config.task_progress_timeout_secs)).await?;
+    let task_status = poll_task_status(
+        client,
+        &task_id,
+        Duration::from_secs(config.task_progress_timeout_secs),
+    )
+    .await?;
     if matches!(
         task_status.as_str(),
         "Running" | "Requested" | "Stop Requested"
@@ -880,14 +879,10 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     };
 
     let task_target_resp = client
-        .call(create_target(
+        .call(create_localhost_target(
             "e2e-task-target",
-            CreateTargetOpts {
-                hosts: vec!["127.0.0.1".to_string()],
-                port_list_id: Some(task_port_list_id),
-                ..CreateTargetOpts::default()
-            },
-        ))
+            task_port_list_id,
+        )?)
         .await?;
     assert_status(&task_target_resp, 201, "create task target")?;
     let task_target_id = response_id(&task_target_resp, "create task target")?;
@@ -1316,14 +1311,10 @@ async fn run_target_differential(
     let python_target_name = format!("e2e-diff-python-{run_id}");
 
     let rust_target_response = client
-        .call(create_target(
+        .call(create_localhost_target(
             &rust_target_name,
-            CreateTargetOpts {
-                hosts: vec!["127.0.0.1".to_string()],
-                port_list_id: Some(parse_entity_id(&port_list_id)?),
-                ..CreateTargetOpts::default()
-            },
-        ))
+            parse_entity_id(&port_list_id)?,
+        )?)
         .await?;
     assert_status(
         &rust_target_response,
@@ -1939,6 +1930,16 @@ fn parse_entity_id(value: &str) -> Result<EntityId, AppError> {
     EntityId::from_str(value).map_err(|_| AppError::InvalidEntityId(value.to_string()))
 }
 
+fn create_localhost_target(
+    name: &str,
+    port_list_id: EntityId,
+) -> Result<impl gvm_protocol::Request, AppError> {
+    let localhost = TargetHost::from_str("127.0.0.1")?;
+    let hosts = TargetHosts::new([localhost], [])?;
+    let ports = TargetPortSelection::PortList(port_list_id);
+    Ok(create_target(name, CreateTargetOpts::new(hosts, ports))?)
+}
+
 fn count_elements(response: &Response, element_name: &str) -> Result<usize, AppError> {
     let xml = response.as_str()?;
     let mut reader = Reader::from_str(xml);
@@ -2095,4 +2096,21 @@ fn log_cleanup_result(action: &str, id: &str, status: Option<u16>) {
 
 fn log_line(message: &str) {
     let _ = writeln!(io::stdout(), "{message}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gvm_protocol::Request;
+
+    #[test]
+    fn localhost_target_uses_validated_hosts_and_port_list() -> Result<(), AppError> {
+        let request = create_localhost_target("e2e-target", parse_entity_id("port-list")?)?;
+
+        assert_eq!(
+            request.to_bytes(),
+            b"<create_target><name>e2e-target</name><hosts>127.0.0.1</hosts><exclude_hosts></exclude_hosts><port_list id=\"port-list\"/></create_target>"
+        );
+        Ok(())
+    }
 }
