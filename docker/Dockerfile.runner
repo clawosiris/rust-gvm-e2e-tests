@@ -1,4 +1,4 @@
-FROM rust:1.88
+FROM rust:1.89
 
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 ENV PATH="/usr/local/cargo/bin:${PATH}"
@@ -19,6 +19,8 @@ COPY Cargo.lock /tmp/rust-gvm-e2e-tests/Cargo.lock
 COPY tests/library/src /tmp/rust-gvm-e2e-tests/tests/library/src
 
 RUN --mount=type=secret,id=github_token \
+    GIT_CONFIG_GLOBAL=/tmp/github-auth.gitconfig; \
+    export GIT_CONFIG_GLOBAL; \
     if [ -f /run/secrets/github_token ]; then \
       TOKEN=$(cat /run/secrets/github_token); \
       git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"; \
@@ -33,7 +35,9 @@ RUN --mount=type=secret,id=github_token \
     && cargo build --release --manifest-path /tmp/gvm-rools/Cargo.toml --bin gvm-cli \
     && install -m 0755 /tmp/gvm-rools/target/release/gvm-cli /usr/local/cargo/bin/gvm-cli \
     && rm -rf /tmp/rust-gvm-e2e-tests /tmp/gvm-rools \
-    && git config --global --unset-all url.https://x-access-token.insteadof 2>/dev/null || true \
+    && rm -f "${GIT_CONFIG_GLOBAL}" \
+    && test -x /usr/local/cargo/bin/gvm-community-e2e \
+    && test -x /usr/local/cargo/bin/gvm-cli \
     && echo "Installed binaries:" && ls -la /usr/local/cargo/bin/
 
 CMD ["/bin/bash", "-l"]
