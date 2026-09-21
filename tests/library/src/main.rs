@@ -1,73 +1,71 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Greenbone AG
 
-//! Manual E2E harness for a real Greenbone Community container stack.
+//! Live E2E harness for a real Greenbone Community container stack.
 
 #![allow(clippy::print_stdout, clippy::too_many_lines)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::io::{self, Write};
-use std::process::Command;
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 use std::str::FromStr;
-use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use gvm_client::{parse_version_text, GmpClient, GvmError};
+use gvm_client::{
+    parse_version_text, CommandSupport, GmpClient, GvmError, WireTrace, WireTraceEvent,
+};
 use gvm_connection::UnixSocketConnection;
-use gvm_gmp::commands::alerts::{create_alert, delete_alert, get_alert, AlertOpts};
-use gvm_gmp::commands::authentication::authenticate;
+use gvm_gmp::commands::authentication::AuthenticateRequest;
 use gvm_gmp::commands::credentials::{
-    create_credential, delete_credential, get_credential, CredentialOpts,
+    CreateCredentialRequest, DeleteCredentialRequest, GetCredentialRequest, GetCredentialsRequest,
 };
-use gvm_gmp::commands::feed::get_feeds;
-use gvm_gmp::commands::filters::{create_filter, delete_filter, get_filter, FilterOpts};
-use gvm_gmp::commands::notes::{create_note, delete_note, get_note, NoteOpts};
-use gvm_gmp::commands::nvts::{get_nvts, GetNvtsOpts};
-use gvm_gmp::commands::overrides::{create_override, delete_override, get_override, OverrideOpts};
+use gvm_gmp::commands::feed::GetFeedsRequest;
+use gvm_gmp::commands::filters::{CreateFilterRequest, DeleteFilterRequest, GetFilterRequest};
+use gvm_gmp::commands::notes::{CreateNoteRequest, DeleteNoteRequest, GetNoteRequest};
+use gvm_gmp::commands::nvts::GetNvtsRequest;
+use gvm_gmp::commands::overrides::{
+    CreateOverrideRequest, DeleteOverrideRequest, GetOverrideRequest,
+};
 use gvm_gmp::commands::port_lists::{
-    create_port_list, delete_port_list, get_port_list, get_port_lists, GetPortListsOpts,
-    PortListOpts,
+    CreatePortListRequest, DeletePortListRequest, GetPortListRequest, GetPortListsRequest,
+    ModifyPortListRequest,
 };
-use gvm_gmp::commands::report_formats::{get_report_formats, GetReportFormatsOpts};
-use gvm_gmp::commands::reports::get_report;
-use gvm_gmp::commands::scan_configs::{get_scan_configs, GetScanConfigsOpts};
-use gvm_gmp::commands::scanners::{get_scanners, GetScannersOpts};
-use gvm_gmp::commands::schedules::{create_schedule, delete_schedule, get_schedule, ScheduleOpts};
+use gvm_gmp::commands::report_formats::GetReportFormatsRequest;
+use gvm_gmp::commands::reports::{DeleteReportRequest, GetReportExportRequest, GetReportRequest};
+use gvm_gmp::commands::scan_configs::GetScanConfigsRequest;
+use gvm_gmp::commands::scanners::GetScannersRequest;
+use gvm_gmp::commands::schedules::{
+    CreateScheduleRequest, DeleteScheduleRequest, GetScheduleRequest,
+};
 use gvm_gmp::commands::secinfo::{
-    get_cert_bund_advisories, get_cpes, get_cves, get_dfn_cert_advisories, GetSecInfoOpts,
+    GetCertBundAdvisoriesRequest, GetCpesRequest, GetCvesRequest, GetDfnCertAdvisoriesRequest,
 };
-use gvm_gmp::commands::tags::{create_tag, delete_tag, get_tag, TagOpts};
+use gvm_gmp::commands::tags::{CreateTagRequest, DeleteTagRequest, GetTagRequest, TagResources};
 use gvm_gmp::commands::targets::{
-    create_target, delete_target, get_target, get_targets, CreateTargetError, CreateTargetOpts,
-    GetTargetsOpts,
+    CreateTargetRequest, DeleteTargetRequest, GetTargetRequest, GetTargetsRequest,
+    ModifyTargetRequest,
 };
 use gvm_gmp::commands::tasks::{
-    create_task, delete_task, get_task, get_tasks, start_task, stop_task, CreateTaskOpts, GetTasksOpts,
+    CreateTaskRequest, DeleteTaskRequest, GetTaskRequest, StartTaskRequest, StopTaskRequest,
 };
-use gvm_gmp::enums::{
-    AlertCondition, AlertEvent, AlertMethod, CredentialType, EntityType, FilterType,
+use gvm_gmp::commands::version::GetVersionRequest;
+use gvm_gmp::enums::{CredentialType, EntityType, FilterType};
+use gvm_gmp::responses::ActionResponse;
+use gvm_gmp::{
+    EntityId, GmpRequest, GmpVersion, TargetHost, TargetHostError, TargetHosts, TargetHostsError,
+    TargetPortSelection,
 };
-use gvm_gmp::responses::feed::GetFeedsResponse;
-use gvm_gmp::responses::port_list::GetPortListsResponse;
-use gvm_gmp::responses::report_format::GetReportFormatsResponse;
-use gvm_gmp::responses::scan_config::GetScanConfigsResponse;
-use gvm_gmp::responses::scanner::GetScannersResponse;
-use gvm_gmp::responses::target::GetTargetsResponse;
-use gvm_gmp::types::{EntityId, GmpVersion};
-use gvm_gmp::{TargetHost, TargetHostError, TargetHosts, TargetHostsError, TargetPortSelection};
-use gvm_protocol::Response;
-use quick_xml::events::Event;
-use quick_xml::Reader;
 use serde_json::Value;
 use thiserror::Error;
 use tokio::runtime::Builder;
-use tokio::time::sleep;
+use tokio::time::{sleep, Instant};
 
-const SMOKE_TARGET_NAME: &str = "e2e-test-target";
-const SCAN_TARGET_NAME: &str = "e2e-scan-target";
-const SCAN_TASK_NAME: &str = "e2e-scan-task";
+const SMOKE_TARGET_PREFIX: &str = "e2e-679-smoke-target";
+const SCAN_TARGET_PREFIX: &str = "e2e-679-scan-target";
+const SCAN_TASK_PREFIX: &str = "e2e-679-scan-task";
+const SECRET_SENTINEL: &str = "e2e-679-secret-sentinel-do-not-log";
 
 fn main() -> ExitCode {
     match Builder::new_multi_thread().enable_all().build() {
@@ -90,57 +88,64 @@ fn main() -> ExitCode {
 
 async fn async_main() -> Result<(), AppError> {
     let mode = Mode::from_args(env::args().skip(1))?;
-    let config = EnvConfig::from_env()?;
+    let config = EnvConfig::from_env();
 
     match mode {
         Mode::WaitReady => {
             wait_ready(&config).await?;
-            log_line("gvmd is responsive");
+            log_line("gvmd protocol and authenticated feed data are ready");
         }
-        Mode::Smoke => {
-            let mut tracker = CleanupTracker::new(config.clone());
-            run_smoke_suite(&config, &mut tracker).await?;
-            tracker.cleanup_now().await?;
-            log_line("E2E smoke suite passed");
-        }
-        Mode::Crud => {
-            let mut tracker = CleanupTracker::new(config.clone());
-            run_crud_suite(&config, &mut tracker).await?;
-            tracker.cleanup_now().await?;
-            log_line("E2E CRUD suite passed");
-        }
+        Mode::Smoke => run_mutating_suite(&config, MutatingSuite::Smoke).await?,
+        Mode::Crud => run_mutating_suite(&config, MutatingSuite::Crud).await?,
         Mode::SecInfo => {
             run_secinfo_suite(&config).await?;
             log_line("E2E SecInfo suite passed");
         }
-        Mode::Differential => {
-            let mut tracker = CleanupTracker::new(config.clone());
-            run_differential_suite(&config, &mut tracker).await?;
-            tracker.cleanup_now().await?;
-            log_line("E2E differential suite completed");
-        }
+        Mode::Differential => run_mutating_suite(&config, MutatingSuite::Differential).await?,
         Mode::All => {
-            let mut tracker = CleanupTracker::new(config.clone());
-            run_smoke_suite(&config, &mut tracker).await?;
-            tracker.cleanup_now().await?;
-            log_line("E2E smoke suite passed");
-
-            let mut tracker = CleanupTracker::new(config.clone());
-            run_crud_suite(&config, &mut tracker).await?;
-            tracker.cleanup_now().await?;
-            log_line("E2E CRUD suite passed");
-
+            run_mutating_suite(&config, MutatingSuite::Smoke).await?;
+            run_mutating_suite(&config, MutatingSuite::Crud).await?;
             run_secinfo_suite(&config).await?;
             log_line("E2E SecInfo suite passed");
         }
     }
+    Ok(())
+}
 
+#[derive(Clone, Copy)]
+enum MutatingSuite {
+    Smoke,
+    Crud,
+    Differential,
+}
+
+async fn run_mutating_suite(config: &EnvConfig, suite: MutatingSuite) -> Result<(), AppError> {
+    let mut tracker = CleanupTracker::new(config.clone());
+    let label = match suite {
+        MutatingSuite::Smoke => {
+            run_smoke_suite(config, &mut tracker).await?;
+            "smoke"
+        }
+        MutatingSuite::Crud => {
+            run_crud_suite(config, &mut tracker).await?;
+            "CRUD"
+        }
+        MutatingSuite::Differential => {
+            run_differential_suite(config, &mut tracker).await?;
+            "differential"
+        }
+    };
+    tracker.cleanup_now().await?;
+    log_line(&format!("E2E {label} suite passed"));
     Ok(())
 }
 
 #[derive(Clone, Debug)]
 struct EnvConfig {
     task_progress_timeout_secs: u64,
+    readiness_timeout_secs: u64,
+    readiness_poll_interval_secs: u64,
+    readiness_max_reconnects: usize,
     username: String,
     password: String,
     socket_path: String,
@@ -148,12 +153,12 @@ struct EnvConfig {
 }
 
 impl EnvConfig {
-    fn from_env() -> Result<Self, AppError> {
-        let task_progress_timeout_secs = env::var("E2E_TASK_PROGRESS_TIMEOUT_SECS")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(90);
-        Ok(Self {
+    fn from_env() -> Self {
+        Self {
+            task_progress_timeout_secs: env_u64("E2E_TASK_PROGRESS_TIMEOUT_SECS", 90),
+            readiness_timeout_secs: env_u64("E2E_READINESS_TIMEOUT_SECS", 7200),
+            readiness_poll_interval_secs: env_u64("E2E_READINESS_POLL_INTERVAL_SECS", 30),
+            readiness_max_reconnects: env_usize("E2E_READINESS_MAX_RECONNECTS", 12),
             username: env::var("GVM_ADMIN_USER").unwrap_or_else(|_| "admin".to_string()),
             password: env::var("GVM_ADMIN_PASS").unwrap_or_else(|_| "admin".to_string()),
             socket_path: env::var("GVM_SOCKET_PATH")
@@ -164,9 +169,22 @@ impl EnvConfig {
                     .as_str(),
                 "1" | "true" | "TRUE" | "yes" | "YES"
             ),
-            task_progress_timeout_secs,
-        })
+        }
     }
+}
+
+fn env_u64(name: &str, default: u64) -> u64 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_usize(name: &str, default: usize) -> usize {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -185,256 +203,31 @@ impl Mode {
         if values.is_empty() {
             return Ok(Self::Smoke);
         }
-
-        if values.len() == 2 {
-            if values[0] == "--mode" {
-                return match values[1].as_str() {
-                    "smoke" => Ok(Self::Smoke),
-                    "wait-ready" => Ok(Self::WaitReady),
-                    other => Err(AppError::Usage(format!(
-                        "unsupported mode `{other}`; expected `smoke` or `wait-ready`"
-                    ))),
-                };
-            }
-            if values[0] == "--suite" {
-                return match values[1].as_str() {
-                    "smoke" => Ok(Self::Smoke),
-                    "crud" => Ok(Self::Crud),
-                    "secinfo" => Ok(Self::SecInfo),
-                    "differential" => Ok(Self::Differential),
-                    "all" => Ok(Self::All),
-                    other => Err(AppError::Usage(format!(
-                        "unsupported suite `{other}`; expected `smoke`, `crud`, `secinfo`, `differential`, or `all`"
-                    ))),
-                };
-            }
+        if values.len() == 2 && values[0] == "--mode" {
+            return match values[1].as_str() {
+                "smoke" => Ok(Self::Smoke),
+                "wait-ready" => Ok(Self::WaitReady),
+                other => Err(AppError::Usage(format!(
+                    "unsupported mode `{other}`; expected `smoke` or `wait-ready`"
+                ))),
+            };
         }
-
+        if values.len() == 2 && values[0] == "--suite" {
+            return match values[1].as_str() {
+                "smoke" => Ok(Self::Smoke),
+                "crud" => Ok(Self::Crud),
+                "secinfo" => Ok(Self::SecInfo),
+                "differential" => Ok(Self::Differential),
+                "all" => Ok(Self::All),
+                other => Err(AppError::Usage(format!(
+                    "unsupported suite `{other}`; expected `smoke`, `crud`, `secinfo`, `differential`, or `all`"
+                ))),
+            };
+        }
         Err(AppError::Usage(
             "usage: gvm-community-e2e [--mode <smoke|wait-ready> | --suite <smoke|crud|secinfo|differential|all>]"
                 .to_string(),
         ))
-    }
-}
-
-#[derive(Debug)]
-struct CleanupTracker {
-    config: EnvConfig,
-    target_ids: Vec<String>,
-    task_ids: Vec<String>,
-    port_list_ids: Vec<String>,
-    credential_ids: Vec<String>,
-    schedule_ids: Vec<String>,
-    filter_ids: Vec<String>,
-    note_ids: Vec<String>,
-    override_ids: Vec<String>,
-    tag_ids: Vec<String>,
-    alert_ids: Vec<String>,
-    armed: bool,
-}
-
-impl CleanupTracker {
-    fn new(config: EnvConfig) -> Self {
-        Self {
-            config,
-            target_ids: Vec::new(),
-            task_ids: Vec::new(),
-            port_list_ids: Vec::new(),
-            credential_ids: Vec::new(),
-            schedule_ids: Vec::new(),
-            filter_ids: Vec::new(),
-            note_ids: Vec::new(),
-            override_ids: Vec::new(),
-            tag_ids: Vec::new(),
-            alert_ids: Vec::new(),
-            armed: true,
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.task_ids.is_empty()
-            && self.target_ids.is_empty()
-            && self.port_list_ids.is_empty()
-            && self.credential_ids.is_empty()
-            && self.schedule_ids.is_empty()
-            && self.filter_ids.is_empty()
-            && self.note_ids.is_empty()
-            && self.override_ids.is_empty()
-            && self.tag_ids.is_empty()
-            && self.alert_ids.is_empty()
-    }
-
-    fn track_target(&mut self, id: &EntityId) {
-        self.target_ids.push(id.to_string());
-    }
-
-    fn track_task(&mut self, id: &EntityId) {
-        self.task_ids.push(id.to_string());
-    }
-
-    fn track_port_list(&mut self, id: &EntityId) {
-        self.port_list_ids.push(id.to_string());
-    }
-
-    fn track_credential(&mut self, id: &EntityId) {
-        self.credential_ids.push(id.to_string());
-    }
-
-    fn track_schedule(&mut self, id: &EntityId) {
-        self.schedule_ids.push(id.to_string());
-    }
-
-    fn track_filter(&mut self, id: &EntityId) {
-        self.filter_ids.push(id.to_string());
-    }
-
-    fn track_note(&mut self, id: &EntityId) {
-        self.note_ids.push(id.to_string());
-    }
-
-    fn track_override(&mut self, id: &EntityId) {
-        self.override_ids.push(id.to_string());
-    }
-
-    fn track_tag(&mut self, id: &EntityId) {
-        self.tag_ids.push(id.to_string());
-    }
-
-    fn track_alert(&mut self, id: &EntityId) {
-        self.alert_ids.push(id.to_string());
-    }
-
-    async fn cleanup_now(&mut self) -> Result<(), AppError> {
-        self.cleanup_inner().await?;
-        self.armed = false;
-        Ok(())
-    }
-
-    async fn cleanup_inner(&mut self) -> Result<(), AppError> {
-        if self.is_empty() {
-            return Ok(());
-        }
-
-        let mut client = connect_client(&self.config).await?;
-
-        while let Some(task_id) = self.task_ids.pop() {
-            let entity_id = parse_entity_id(&task_id)?;
-            let response = client.send(delete_task(&entity_id, true)).await?;
-            log_cleanup_result("delete_task", &task_id, response.status_code());
-        }
-
-        while let Some(target_id) = self.target_ids.pop() {
-            let entity_id = parse_entity_id(&target_id)?;
-            let response = client.send(delete_target(&entity_id, true)).await?;
-            log_cleanup_result("delete_target", &target_id, response.status_code());
-        }
-
-        while let Some(alert_id) = self.alert_ids.pop() {
-            let entity_id = parse_entity_id(&alert_id)?;
-            let response = client.send(delete_alert(&entity_id, true)).await?;
-            log_cleanup_result("delete_alert", &alert_id, response.status_code());
-        }
-
-        while let Some(note_id) = self.note_ids.pop() {
-            let entity_id = parse_entity_id(&note_id)?;
-            let response = client.send(delete_note(&entity_id, true)).await?;
-            log_cleanup_result("delete_note", &note_id, response.status_code());
-        }
-
-        while let Some(override_id) = self.override_ids.pop() {
-            let entity_id = parse_entity_id(&override_id)?;
-            let response = client.send(delete_override(&entity_id, true)).await?;
-            log_cleanup_result("delete_override", &override_id, response.status_code());
-        }
-
-        while let Some(tag_id) = self.tag_ids.pop() {
-            let entity_id = parse_entity_id(&tag_id)?;
-            let response = client.send(delete_tag(&entity_id, true)).await?;
-            log_cleanup_result("delete_tag", &tag_id, response.status_code());
-        }
-
-        while let Some(filter_id) = self.filter_ids.pop() {
-            let entity_id = parse_entity_id(&filter_id)?;
-            let response = client.send(delete_filter(&entity_id, true)).await?;
-            log_cleanup_result("delete_filter", &filter_id, response.status_code());
-        }
-
-        while let Some(schedule_id) = self.schedule_ids.pop() {
-            let entity_id = parse_entity_id(&schedule_id)?;
-            let response = client.send(delete_schedule(&entity_id, true)).await?;
-            log_cleanup_result("delete_schedule", &schedule_id, response.status_code());
-        }
-
-        while let Some(credential_id) = self.credential_ids.pop() {
-            let entity_id = parse_entity_id(&credential_id)?;
-            let response = client.send(delete_credential(&entity_id, true)).await?;
-            log_cleanup_result("delete_credential", &credential_id, response.status_code());
-        }
-
-        while let Some(port_list_id) = self.port_list_ids.pop() {
-            let entity_id = parse_entity_id(&port_list_id)?;
-            let response = client.send(delete_port_list(&entity_id, true)).await?;
-            log_cleanup_result("delete_port_list", &port_list_id, response.status_code());
-        }
-
-        client.disconnect().await?;
-        Ok(())
-    }
-}
-
-impl Drop for CleanupTracker {
-    fn drop(&mut self) {
-        if !self.armed || self.is_empty() {
-            return;
-        }
-
-        let config = self.config.clone();
-        let task_ids = self.task_ids.clone();
-        let target_ids = self.target_ids.clone();
-        let port_list_ids = self.port_list_ids.clone();
-        let credential_ids = self.credential_ids.clone();
-        let schedule_ids = self.schedule_ids.clone();
-        let filter_ids = self.filter_ids.clone();
-        let note_ids = self.note_ids.clone();
-        let override_ids = self.override_ids.clone();
-        let tag_ids = self.tag_ids.clone();
-        let alert_ids = self.alert_ids.clone();
-
-        let cleanup = async move {
-            let mut tracker = CleanupTracker {
-                config,
-                task_ids,
-                target_ids,
-                port_list_ids,
-                credential_ids,
-                schedule_ids,
-                filter_ids,
-                note_ids,
-                override_ids,
-                tag_ids,
-                alert_ids,
-                armed: false,
-            };
-            tracker.cleanup_inner().await
-        };
-
-        // If we're inside a tokio runtime, use block_in_place to avoid
-        // the "Cannot start a runtime from within a runtime" panic.
-        let result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| handle.block_on(cleanup))
-        } else {
-            match Builder::new_current_thread().enable_all().build() {
-                Ok(runtime) => runtime.block_on(cleanup),
-                Err(error) => {
-                    log_line(&format!("failed to build cleanup runtime: {error}"));
-                    return;
-                }
-            }
-        };
-
-        if let Err(error) = result {
-            log_line(&format!("cleanup after failure was incomplete: {error}"));
-        }
     }
 }
 
@@ -449,683 +242,1269 @@ enum AppError {
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
-    Protocol(#[from] gvm_protocol::error::ProtocolError),
-    #[error(transparent)]
-    Xml(#[from] quick_xml::Error),
-    #[error(transparent)]
     Json(#[from] serde_json::Error),
-    #[error(transparent)]
-    Parse(#[from] gvm_gmp::responses::ParseError),
     #[error(transparent)]
     Client(#[from] GvmError),
     #[error(transparent)]
     TargetHost(#[from] TargetHostError),
     #[error(transparent)]
     TargetHosts(#[from] TargetHostsError),
+}
+
+#[derive(Debug)]
+struct CleanupTracker {
+    config: EnvConfig,
+    report_ids: Vec<EntityId>,
+    task_ids: Vec<EntityId>,
+    target_ids: Vec<EntityId>,
+    port_list_ids: Vec<EntityId>,
+    credential_ids: Vec<EntityId>,
+    schedule_ids: Vec<EntityId>,
+    filter_ids: Vec<EntityId>,
+    note_ids: Vec<EntityId>,
+    override_ids: Vec<EntityId>,
+    tag_ids: Vec<EntityId>,
+    armed: bool,
+}
+
+impl CleanupTracker {
+    fn new(config: EnvConfig) -> Self {
+        Self {
+            config,
+            report_ids: Vec::new(),
+            task_ids: Vec::new(),
+            target_ids: Vec::new(),
+            port_list_ids: Vec::new(),
+            credential_ids: Vec::new(),
+            schedule_ids: Vec::new(),
+            filter_ids: Vec::new(),
+            note_ids: Vec::new(),
+            override_ids: Vec::new(),
+            tag_ids: Vec::new(),
+            armed: true,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.report_ids.is_empty()
+            && self.task_ids.is_empty()
+            && self.target_ids.is_empty()
+            && self.port_list_ids.is_empty()
+            && self.credential_ids.is_empty()
+            && self.schedule_ids.is_empty()
+            && self.filter_ids.is_empty()
+            && self.note_ids.is_empty()
+            && self.override_ids.is_empty()
+            && self.tag_ids.is_empty()
+    }
+
+    fn track_report(&mut self, id: &EntityId) {
+        self.report_ids.push(id.clone());
+    }
+    fn track_task(&mut self, id: &EntityId) {
+        self.task_ids.push(id.clone());
+    }
+    fn track_target(&mut self, id: &EntityId) {
+        self.target_ids.push(id.clone());
+    }
+    fn track_port_list(&mut self, id: &EntityId) {
+        self.port_list_ids.push(id.clone());
+    }
+    fn track_credential(&mut self, id: &EntityId) {
+        self.credential_ids.push(id.clone());
+    }
+    fn track_schedule(&mut self, id: &EntityId) {
+        self.schedule_ids.push(id.clone());
+    }
+    fn track_filter(&mut self, id: &EntityId) {
+        self.filter_ids.push(id.clone());
+    }
+    fn track_note(&mut self, id: &EntityId) {
+        self.note_ids.push(id.clone());
+    }
+    fn track_override(&mut self, id: &EntityId) {
+        self.override_ids.push(id.clone());
+    }
+    fn track_tag(&mut self, id: &EntityId) {
+        self.tag_ids.push(id.clone());
+    }
+
+    fn untrack(ids: &mut Vec<EntityId>, id: &EntityId) {
+        ids.retain(|value| value != id);
+    }
+
+    async fn cleanup_now(&mut self) -> Result<(), AppError> {
+        let result = self.cleanup_inner().await;
+        if self.is_empty() {
+            self.armed = false;
+        }
+        result
+    }
+
+    async fn cleanup_inner(&mut self) -> Result<(), AppError> {
+        if self.is_empty() {
+            return Ok(());
+        }
+        let mut client = connect_authenticated(&self.config).await?;
+        let mut errors = Vec::new();
+
+        cleanup_ids(
+            &mut client,
+            "delete_report",
+            &mut self.report_ids,
+            DeleteReportRequest::new,
+            &mut errors,
+        )
+        .await;
+        cleanup_ids(
+            &mut client,
+            "delete_task",
+            &mut self.task_ids,
+            |id| DeleteTaskRequest::new(id, true),
+            &mut errors,
+        )
+        .await;
+        cleanup_ids(
+            &mut client,
+            "delete_target",
+            &mut self.target_ids,
+            |id| DeleteTargetRequest::new(id, true),
+            &mut errors,
+        )
+        .await;
+        cleanup_ids(
+            &mut client,
+            "delete_tag",
+            &mut self.tag_ids,
+            |id| DeleteTagRequest::new(id, true),
+            &mut errors,
+        )
+        .await;
+        cleanup_ids(
+            &mut client,
+            "delete_note",
+            &mut self.note_ids,
+            |id| DeleteNoteRequest::new(id, true),
+            &mut errors,
+        )
+        .await;
+        cleanup_ids(
+            &mut client,
+            "delete_override",
+            &mut self.override_ids,
+            |id| DeleteOverrideRequest::new(id, true),
+            &mut errors,
+        )
+        .await;
+        cleanup_ids(
+            &mut client,
+            "delete_filter",
+            &mut self.filter_ids,
+            |id| DeleteFilterRequest::new(id, true),
+            &mut errors,
+        )
+        .await;
+        cleanup_ids(
+            &mut client,
+            "delete_schedule",
+            &mut self.schedule_ids,
+            |id| DeleteScheduleRequest::new(id, true),
+            &mut errors,
+        )
+        .await;
+        cleanup_ids(
+            &mut client,
+            "delete_credential",
+            &mut self.credential_ids,
+            |id| DeleteCredentialRequest::new(id, true),
+            &mut errors,
+        )
+        .await;
+        cleanup_ids(
+            &mut client,
+            "delete_port_list",
+            &mut self.port_list_ids,
+            |id| DeletePortListRequest::new(id, true),
+            &mut errors,
+        )
+        .await;
+
+        if let Err(error) = client.disconnect().await {
+            errors.push(format!("disconnect after cleanup: {error}"));
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(AppError::Assertion(format!(
+                "cleanup incomplete; retained IDs for retry: {}",
+                errors.join("; ")
+            )))
+        }
+    }
+}
+
+async fn cleanup_ids<R, F>(
+    client: &mut GmpClient<UnixSocketConnection>,
+    action: &str,
+    ids: &mut Vec<EntityId>,
+    request: F,
+    errors: &mut Vec<String>,
+) where
+    R: GmpRequest<Response = ActionResponse>,
+    F: Fn(EntityId) -> R,
+{
+    let pending = std::mem::take(ids);
+    let mut retained = Vec::new();
+    for id in pending.into_iter().rev() {
+        match client.execute(request(id.clone())).await {
+            Ok(response) => {
+                log_cleanup_result(action, &id, response.status);
+            }
+            Err(GvmError::Server { status: 404, .. }) => {
+                log_cleanup_result(action, &id, 404);
+            }
+            Err(error) => {
+                errors.push(format!("{action} {id}: {error}"));
+                retained.push(id);
+            }
+        }
+    }
+    retained.reverse();
+    *ids = retained;
+}
+
+impl Drop for CleanupTracker {
+    fn drop(&mut self) {
+        if !self.armed || self.is_empty() {
+            return;
+        }
+        let config = self.config.clone();
+        let mut retry = CleanupTracker {
+            config,
+            report_ids: self.report_ids.clone(),
+            task_ids: self.task_ids.clone(),
+            target_ids: self.target_ids.clone(),
+            port_list_ids: self.port_list_ids.clone(),
+            credential_ids: self.credential_ids.clone(),
+            schedule_ids: self.schedule_ids.clone(),
+            filter_ids: self.filter_ids.clone(),
+            note_ids: self.note_ids.clone(),
+            override_ids: self.override_ids.clone(),
+            tag_ids: self.tag_ids.clone(),
+            armed: false,
+        };
+        let cleanup = async move { retry.cleanup_inner().await };
+        let result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(cleanup))
+        } else {
+            match Builder::new_current_thread().enable_all().build() {
+                Ok(runtime) => runtime.block_on(cleanup),
+                Err(error) => {
+                    log_line(&format!("failed to build cleanup runtime: {error}"));
+                    return;
+                }
+            }
+        };
+        if let Err(error) = result {
+            log_line(&format!("cleanup after failure was incomplete: {error}"));
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ReadinessPolicy {
+    timeout: Duration,
+    poll_interval: Duration,
+    max_reconnects: usize,
+}
+
+#[derive(Debug, Error)]
+enum ReadinessFailure {
+    #[error("connection dropped: {0}")]
+    Dropped(String),
     #[error(transparent)]
-    CreateTarget(#[from] CreateTargetError),
+    Fatal(#[from] AppError),
+}
+
+#[allow(async_fn_in_trait)]
+trait FeedReadinessBackend {
+    type Session;
+
+    async fn connect(&mut self) -> Result<Self::Session, ReadinessFailure>;
+    async fn authenticate(&mut self, session: &mut Self::Session) -> Result<(), ReadinessFailure>;
+    async fn scan_config_count(
+        &mut self,
+        session: &mut Self::Session,
+    ) -> Result<usize, ReadinessFailure>;
+    async fn disconnect(&mut self, session: &mut Self::Session);
+}
+
+struct LiveReadinessBackend<'a> {
+    config: &'a EnvConfig,
+}
+
+impl FeedReadinessBackend for LiveReadinessBackend<'_> {
+    type Session = GmpClient<UnixSocketConnection>;
+
+    async fn connect(&mut self) -> Result<Self::Session, ReadinessFailure> {
+        connect_client(self.config)
+            .await
+            .map_err(classify_readiness_error)
+    }
+
+    async fn authenticate(&mut self, session: &mut Self::Session) -> Result<(), ReadinessFailure> {
+        let response = session
+            .authenticate(AuthenticateRequest::new(
+                &self.config.username,
+                &self.config.password,
+            ))
+            .await
+            .map_err(classify_gvm_readiness_error)?;
+        assert_typed_status(response.status, &response.status_text, 200, "authenticate")
+            .map_err(ReadinessFailure::Fatal)
+    }
+
+    async fn scan_config_count(
+        &mut self,
+        session: &mut Self::Session,
+    ) -> Result<usize, ReadinessFailure> {
+        let response = session
+            .get_scan_configs(GetScanConfigsRequest::new())
+            .await
+            .map_err(classify_gvm_readiness_error)?;
+        assert_typed_status(
+            response.status,
+            &response.status_text,
+            200,
+            "get_scan_configs readiness",
+        )
+        .map_err(ReadinessFailure::Fatal)?;
+        Ok(response.items.len())
+    }
+
+    async fn disconnect(&mut self, session: &mut Self::Session) {
+        let _ = session.disconnect().await;
+    }
+}
+
+fn classify_readiness_error(error: AppError) -> ReadinessFailure {
+    match error {
+        AppError::Client(client_error) => classify_gvm_readiness_error(client_error),
+        other => ReadinessFailure::Fatal(other),
+    }
+}
+
+fn classify_gvm_readiness_error(error: GvmError) -> ReadinessFailure {
+    match error {
+        GvmError::Connection(_) | GvmError::Timeout(_) => {
+            ReadinessFailure::Dropped(error.to_string())
+        }
+        other => ReadinessFailure::Fatal(AppError::Client(other)),
+    }
 }
 
 async fn wait_ready(config: &EnvConfig) -> Result<(), AppError> {
-    let mut client = connect_client(config).await?;
+    let mut protocol_client = connect_client(config).await?;
+    let version = protocol_client.version();
+    protocol_client.disconnect().await?;
+    log_line(&format!(
+        "gvmd unauthenticated protocol readiness passed (GMP {version})"
+    ));
 
-    // Phase 1: Verify GMP protocol is responding
-    let response = client
-        .send(gvm_gmp::commands::version::get_version())
-        .await?;
-    assert_status(&response, 200, "get_version")?;
-    log_line("gvmd protocol responding");
+    let policy = ReadinessPolicy {
+        timeout: Duration::from_secs(config.readiness_timeout_secs),
+        poll_interval: Duration::from_secs(config.readiness_poll_interval_secs),
+        max_reconnects: config.readiness_max_reconnects,
+    };
+    let mut backend = LiveReadinessBackend { config };
+    wait_for_feed(&mut backend, policy).await
+}
 
-    // Phase 2: Wait for feed data to be loaded (scan configs appear after feed sync)
-    // Clean-volume feed syncs on CI can take 60-90 min; 2h ceiling with workflow timeout as hard stop.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(7200);
+async fn wait_for_feed<B: FeedReadinessBackend>(
+    backend: &mut B,
+    policy: ReadinessPolicy,
+) -> Result<(), AppError> {
+    let started = Instant::now();
+    let deadline = started + policy.timeout;
+    let mut reconnects = 0_usize;
+    let mut polls = 0_usize;
+
     loop {
-        let auth = client
-            .call(authenticate(&config.username, &config.password))
-            .await?;
-        if auth.status_code() != Some(200) {
-            if tokio::time::Instant::now() >= deadline {
-                return Err(AppError::Assertion(
-                    "timed out waiting for authentication to succeed".to_string(),
-                ));
+        if Instant::now() >= deadline {
+            return Err(readiness_timeout(started, polls, reconnects));
+        }
+        let mut session = match backend.connect().await {
+            Ok(session) => session,
+            Err(ReadinessFailure::Dropped(message)) => {
+                reconnects = register_reconnect(reconnects, policy.max_reconnects, &message)?;
+                bounded_sleep(policy.poll_interval, deadline).await;
+                continue;
             }
-            sleep(Duration::from_secs(5)).await;
-            continue;
-        }
+            Err(ReadinessFailure::Fatal(error)) => return Err(error),
+        };
 
-        let configs = client
-            .call(get_scan_configs(GetScanConfigsOpts::default()))
-            .await?;
-        if configs.status_code() == Some(200) {
-            let count = count_elements(&configs, "config")?;
-            if count >= 1 {
-                log_line(&format!("feed ready: {count} scan config(s) available"));
-                break;
+        match backend.authenticate(&mut session).await {
+            Ok(()) => {}
+            Err(ReadinessFailure::Dropped(message)) => {
+                backend.disconnect(&mut session).await;
+                reconnects = register_reconnect(reconnects, policy.max_reconnects, &message)?;
+                bounded_sleep(policy.poll_interval, deadline).await;
+                continue;
+            }
+            Err(ReadinessFailure::Fatal(error)) => {
+                backend.disconnect(&mut session).await;
+                return Err(error);
             }
         }
 
-        if tokio::time::Instant::now() >= deadline {
-            return Err(AppError::Assertion(
-                "timed out waiting for scan configs (feed data may not be loaded)".to_string(),
-            ));
+        loop {
+            if Instant::now() >= deadline {
+                backend.disconnect(&mut session).await;
+                return Err(readiness_timeout(started, polls, reconnects));
+            }
+            polls += 1;
+            match backend.scan_config_count(&mut session).await {
+                Ok(count) if count > 0 => {
+                    backend.disconnect(&mut session).await;
+                    log_line(&format!(
+                        "feed ready after {polls} poll(s) and {reconnects} reconnect(s): {count} scan config(s)"
+                    ));
+                    return Ok(());
+                }
+                Ok(_) => {
+                    log_line(&format!(
+                        "waiting for feed data: poll {polls} returned zero scan configs; authenticated session retained"
+                    ));
+                    bounded_sleep(policy.poll_interval, deadline).await;
+                }
+                Err(ReadinessFailure::Dropped(message)) => {
+                    backend.disconnect(&mut session).await;
+                    reconnects = register_reconnect(reconnects, policy.max_reconnects, &message)?;
+                    bounded_sleep(policy.poll_interval, deadline).await;
+                    break;
+                }
+                Err(ReadinessFailure::Fatal(error)) => {
+                    backend.disconnect(&mut session).await;
+                    return Err(error);
+                }
+            }
         }
-
-        log_line("waiting for feed data (scan configs not yet available)...");
-        sleep(Duration::from_secs(30)).await;
     }
+}
 
-    client.disconnect().await?;
-    Ok(())
+fn register_reconnect(current: usize, maximum: usize, diagnostic: &str) -> Result<usize, AppError> {
+    let next = current + 1;
+    if next > maximum {
+        return Err(AppError::Assertion(format!(
+            "feed readiness exceeded {maximum} reconnect attempt(s); last connection failure: {diagnostic}"
+        )));
+    }
+    log_line(&format!(
+        "feed readiness connection lost; reconnect {next}/{maximum}: {diagnostic}"
+    ));
+    Ok(next)
+}
+
+fn readiness_timeout(started: Instant, polls: usize, reconnects: usize) -> AppError {
+    AppError::Assertion(format!(
+        "feed readiness timed out after {}s ({polls} feed poll(s), {reconnects} reconnect(s)); gvmd authenticated successfully but no usable scan config became available",
+        started.elapsed().as_secs()
+    ))
+}
+
+async fn bounded_sleep(interval: Duration, deadline: Instant) {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    sleep(interval.min(remaining)).await;
 }
 
 async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Result<(), AppError> {
+    let suffix = run_suffix();
+    let target_name = format!("{SMOKE_TARGET_PREFIX}-{suffix}");
     let mut client = connect_client(config).await?;
 
-    let version_response = client
-        .send(gvm_gmp::commands::version::get_version())
-        .await?;
-    assert_status(&version_response, 200, "get_version")?;
-    let version_text = version_response
-        .child_text("version")
-        .ok_or_else(|| AppError::Assertion("get_version response missing <version>".to_string()))?;
-    let version = parse_version_text(&version_text)?;
+    let version_response = client.get_version(GetVersionRequest::new()).await?;
+    assert_typed_status(
+        version_response.status,
+        &version_response.status_text,
+        200,
+        "get_version",
+    )?;
+    let version = parse_version_text(&version_response.version)?;
     ensure(
         version >= GmpVersion(22, 4),
         &format!("expected GMP version >= 22.4, got {version}"),
     )?;
-    log_pass("01", &format!("version negotiation ({version})"));
+    log_pass("01", &format!("typed version negotiation ({version})"));
 
-    let auth_response = client
-        .call(authenticate(&config.username, &config.password))
-        .await?;
-    assert_status(&auth_response, 200, "authenticate")?;
-    log_pass("02", "authentication");
+    authenticate(&mut client, config).await?;
+    log_pass("02", "typed authentication");
 
-    let configs_response = client
-        .call(get_scan_configs(GetScanConfigsOpts::default()))
-        .await?;
-    assert_status(&configs_response, 200, "get_scan_configs")?;
-    let config_count = count_elements(&configs_response, "config")?;
-    ensure(config_count >= 1, "expected at least one scan config")?;
-    log_pass("03", &format!("list scan configs ({config_count})"));
-
-    let scanners_response = client
-        .call(get_scanners(GetScannersOpts::default()))
-        .await?;
-    assert_status(&scanners_response, 200, "get_scanners")?;
-    let scanner_count = count_elements(&scanners_response, "scanner")?;
-    ensure(scanner_count >= 1, "expected at least one scanner")?;
-    log_pass("04", &format!("list scanners ({scanner_count})"));
-
-    let report_formats_response = client
-        .call(get_report_formats(GetReportFormatsOpts::default()))
-        .await?;
-    assert_status(&report_formats_response, 200, "get_report_formats")?;
+    ensure(
+        client.command_support("export_scan_report") == CommandSupport::RequiresDiscovery,
+        "export_scan_report should require explicit help discovery before classification",
+    )?;
+    let help = client.discover_commands().await?;
+    assert_typed_status(help.status, &help.status_text, 200, "help discovery")?;
+    let advertised = help
+        .schema
+        .as_ref()
+        .map(|schema| schema.commands.len())
+        .unwrap_or_default();
+    ensure(
+        advertised > 0,
+        "help discovery returned no command inventory",
+    )?;
+    let export_support = client.command_support("export_scan_report");
+    ensure(
+        matches!(
+            export_support,
+            CommandSupport::Supported | CommandSupport::NotAdvertised
+        ),
+        &format!("unexpected post-discovery capability state: {export_support:?}"),
+    )?;
     log_pass(
-        "05",
+        "03",
         &format!(
-            "list report formats ({})",
-            count_elements(&report_formats_response, "report_format")?
+            "help/capability discovery ({advertised} commands; export_scan_report={export_support:?})"
         ),
     );
 
-    let port_lists_response = client
-        .call(get_port_lists(GetPortListsOpts::default()))
+    let configs = client
+        .get_scan_configs(GetScanConfigsRequest::new())
         .await?;
-    assert_status(&port_lists_response, 200, "get_port_lists")?;
-    let port_list_count = count_elements(&port_lists_response, "port_list")?;
-    ensure(port_list_count >= 1, "expected at least one port list")?;
-    log_pass("06", &format!("list port lists ({port_list_count})"));
-
-    // Pick the first port list for target creation (GMP requires PORT_LIST or PORT_RANGE)
-    let port_list_id = first_element_id(&port_lists_response, "port_list")?;
-
-    let target_response = client
-        .call(create_localhost_target(SMOKE_TARGET_NAME, port_list_id)?)
-        .await?;
-    assert_status(&target_response, 201, "create_target")?;
-    let target_id = response_id(&target_response, "create_target")?;
-    tracker.track_target(&target_id);
-    log_pass("07", &format!("create target ({target_id})"));
-
-    let get_target_response = client.call(get_target(&target_id)).await?;
-    assert_status(&get_target_response, 200, "get_target")?;
-    ensure(
-        response_contains(&get_target_response, SMOKE_TARGET_NAME)?,
-        "expected created target name in get_target response",
+    assert_typed_status(
+        configs.status,
+        &configs.status_text,
+        200,
+        "get_scan_configs",
     )?;
-    log_pass("08", "get target by UUID");
+    ensure(
+        !configs.items.is_empty(),
+        "expected at least one scan config",
+    )?;
+    log_pass(
+        "04",
+        &format!("list scan configs ({})", configs.items.len()),
+    );
 
-    let delete_target_response = client.call(delete_target(&target_id, true)).await?;
-    assert_status(&delete_target_response, 200, "delete_target")?;
-    tracker
-        .target_ids
-        .retain(|value| value != target_id.as_str());
-    log_pass("09", "delete target");
+    let scanners = client.get_scanners(GetScannersRequest::default()).await?;
+    assert_typed_status(scanners.status, &scanners.status_text, 200, "get_scanners")?;
+    ensure(!scanners.items.is_empty(), "expected at least one scanner")?;
+    log_pass("05", &format!("list scanners ({})", scanners.items.len()));
 
-    let verify_delete_response = client.send(get_target(&target_id)).await?;
-    assert_status(&verify_delete_response, 404, "verify target deletion")?;
-    log_pass("10", "verify deletion");
+    let formats = client
+        .get_report_formats(GetReportFormatsRequest::new())
+        .await?;
+    assert_typed_status(
+        formats.status,
+        &formats.status_text,
+        200,
+        "get_report_formats",
+    )?;
+    ensure(
+        !formats.items.is_empty(),
+        "expected at least one report format",
+    )?;
+    log_pass(
+        "06",
+        &format!("list report formats ({})", formats.items.len()),
+    );
+
+    let port_lists = client
+        .get_port_lists(GetPortListsRequest::default())
+        .await?;
+    assert_typed_status(
+        port_lists.status,
+        &port_lists.status_text,
+        200,
+        "get_port_lists",
+    )?;
+    let port_list_id = first_meta_id(&port_lists.items, |item| &item.meta, "port list")?;
+    log_pass(
+        "07",
+        &format!("list port lists ({})", port_lists.items.len()),
+    );
+
+    let targets_before = client.get_targets(GetTargetsRequest::default()).await?;
+    assert_typed_status(
+        targets_before.status,
+        &targets_before.status_text,
+        200,
+        "get_targets",
+    )?;
+    log_pass(
+        "08",
+        &format!("list targets ({})", targets_before.items.len()),
+    );
+
+    let created = client
+        .create_target(create_localhost_target(&target_name, port_list_id)?)
+        .await?;
+    assert_typed_status(created.status, &created.status_text, 201, "create_target")?;
+    let target_id = created.id;
+    tracker.track_target(&target_id);
+    log_pass("09", &format!("create target ({target_id})"));
+
+    let detail = client
+        .get_target(GetTargetRequest::new(target_id.clone()))
+        .await?;
+    assert_typed_status(detail.status, &detail.status_text, 200, "get_target")?;
+    let target = only_item(&detail.items, "get_target")?;
+    ensure(
+        target.meta.name == target_name,
+        "get_target returned an unexpected name",
+    )?;
+    log_pass("10", "typed target detail");
+
+    let mut set_comment = ModifyTargetRequest::new(target_id.clone());
+    set_comment.comment = Some("issue-679-set-clear".to_string());
+    let modified = client.modify_target(set_comment).await?;
+    assert_typed_status(
+        modified.status,
+        &modified.status_text,
+        200,
+        "modify_target set comment",
+    )?;
+    let set_detail = client
+        .get_target(GetTargetRequest::new(target_id.clone()))
+        .await?;
+    ensure(
+        only_item(&set_detail.items, "get_target after set")?
+            .meta
+            .comment
+            .as_deref()
+            == Some("issue-679-set-clear"),
+        "target comment was not set",
+    )?;
+
+    let mut clear_comment = ModifyTargetRequest::new(target_id.clone());
+    clear_comment.comment = Some(String::new());
+    let cleared = client.modify_target(clear_comment).await?;
+    assert_typed_status(
+        cleared.status,
+        &cleared.status_text,
+        200,
+        "modify_target clear comment",
+    )?;
+    let cleared_detail = client
+        .get_target(GetTargetRequest::new(target_id.clone()))
+        .await?;
+    ensure(
+        only_item(&cleared_detail.items, "get_target after clear")?
+            .meta
+            .comment
+            .as_deref()
+            .is_none_or(str::is_empty),
+        "target comment was not cleared",
+    )?;
+    log_pass("11", "target set/clear mutation semantics");
+
+    let deleted = client
+        .delete_target(DeleteTargetRequest::new(target_id.clone(), true))
+        .await?;
+    assert_typed_status(deleted.status, &deleted.status_text, 200, "delete_target")?;
+    CleanupTracker::untrack(&mut tracker.target_ids, &target_id);
+    let absent = client
+        .get_target(GetTargetRequest::new(target_id.clone()))
+        .await
+        .expect_err("deleted target must return a server error");
+    assert_server_error(absent, 404, &["find", "target"], "deleted target")?;
+    log_pass("12", "delete target and exact typed server error");
 
     if config.run_scan {
-        run_scan_suite(&mut client, config, tracker).await?;
+        let xml_format = formats
+            .items
+            .iter()
+            .find(|format| format.extension.as_deref() == Some("xml"))
+            .or_else(|| {
+                formats.items.iter().find(|format| {
+                    format
+                        .content_type
+                        .as_deref()
+                        .is_some_and(|value| value.contains("xml"))
+                })
+            })
+            .ok_or_else(|| AppError::Assertion("no XML report format available".to_string()))?
+            .meta
+            .id
+            .clone();
+        run_scan_suite(
+            &mut client,
+            config,
+            tracker,
+            &suffix,
+            &port_lists.items[0].meta.id,
+            &configs.items[0].meta.id,
+            &scanners.items[0].meta.id,
+            &xml_format,
+        )
+        .await?;
     }
 
     client.disconnect().await?;
+    let mut reconnected = connect_authenticated(config).await?;
+    let after_reconnect = reconnected
+        .get_targets(GetTargetsRequest::default())
+        .await?;
+    assert_typed_status(
+        after_reconnect.status,
+        &after_reconnect.status_text,
+        200,
+        "get_targets after reconnect",
+    )?;
+    reconnected.disconnect().await?;
+    log_pass("13", "fresh reconnect with explicit re-authentication");
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_scan_suite(
     client: &mut GmpClient<UnixSocketConnection>,
     config: &EnvConfig,
     tracker: &mut CleanupTracker,
+    suffix: &str,
+    port_list_id: &EntityId,
+    scan_config_id: &EntityId,
+    scanner_id: &EntityId,
+    xml_format_id: &EntityId,
 ) -> Result<(), AppError> {
-    log_line("Running extended scan flow because E2E_RUN_SCAN=1");
+    log_line("Running extended typed scan flow because E2E_RUN_SCAN=1");
+    let target_name = format!("{SCAN_TARGET_PREFIX}-{suffix}");
+    let task_name = format!("{SCAN_TASK_PREFIX}-{suffix}");
 
-
-    // Clean up stale scan task from previous runs (persistent volumes)
-    // Must happen before target cleanup since targets can't be deleted while referenced by tasks
-    {
-        let tasks_response = client.call(get_tasks(GetTasksOpts::default())).await?;
-        let xml = tasks_response.as_str()?;
-        let stale_ids = find_elements_by_name(xml, "task", SCAN_TASK_NAME)?;
-        for stale_id in &stale_ids {
-            log_line(&format!("cleaning up stale scan task {stale_id}"));
-            if let Ok(entity_id) = stale_id.parse() {
-                // Stop task if running, then delete
-                let _ = client.call(stop_task(&entity_id)).await;
-                let _ = client.call(delete_task(&entity_id, true)).await;
-            }
-        }
-    }
-
-    // Clean up stale scan target from previous runs (persistent volumes)
-    {
-        let targets_response = client.call(get_targets(GetTargetsOpts::default())).await?;
-        let xml = targets_response.as_str()?;
-        let stale_ids = find_elements_by_name(xml, "target", SCAN_TARGET_NAME)?;
-        for stale_id in &stale_ids {
-            log_line(&format!("cleaning up stale scan target {stale_id}"));
-            if let Ok(entity_id) = stale_id.parse() {
-                let _ = client.call(delete_target(&entity_id, true)).await;
-            }
-        }
-    }
-
-    // Get port list (GMP requires PORT_LIST or PORT_RANGE)
-    let port_list_id = first_element_id(
-        &client
-            .call(get_port_lists(GetPortListsOpts::default()))
-            .await?,
-        "port_list",
-    )?;
-
-    let scan_target = client
-        .call(create_localhost_target(SCAN_TARGET_NAME, port_list_id)?)
+    let target = client
+        .create_target(create_localhost_target(&target_name, port_list_id.clone())?)
         .await?;
-    assert_status(&scan_target, 201, "create scan target")?;
-    let target_id = response_id(&scan_target, "create scan target")?;
+    assert_typed_status(
+        target.status,
+        &target.status_text,
+        201,
+        "create scan target",
+    )?;
+    let target_id = target.id;
     tracker.track_target(&target_id);
 
-    let config_id = first_element_id(
-        &client
-            .call(get_scan_configs(GetScanConfigsOpts::default()))
-            .await?,
-        "config",
-    )?;
-    let scanner_id = first_element_id(
-        &client
-            .call(get_scanners(GetScannersOpts::default()))
-            .await?,
-        "scanner",
-    )?;
-
-    let create_task_response = client
-        .call(create_task(
-            SCAN_TASK_NAME,
-            &config_id,
-            &target_id,
-            &scanner_id,
-            CreateTaskOpts::default(),
+    let task = client
+        .create_task(CreateTaskRequest::new(
+            &task_name,
+            scan_config_id.clone(),
+            target_id.clone(),
+            scanner_id.clone(),
         ))
         .await?;
-    assert_status(&create_task_response, 201, "create_task")?;
-    let task_id = response_id(&create_task_response, "create_task")?;
+    assert_typed_status(task.status, &task.status_text, 201, "create_task")?;
+    let task_id = task.id;
     tracker.track_task(&task_id);
 
-    let start_response = client.call(start_task(&task_id)).await?;
-    assert_status(&start_response, 202, "start_task")?;
-    let report_id = child_entity_id(&start_response, "report_id")?;
+    let started = client
+        .start_task(StartTaskRequest::new(task_id.clone()))
+        .await?;
+    assert_typed_status(started.status, &started.status_text, 202, "start_task")?;
+    let report_id = started.report_id.ok_or_else(|| {
+        AppError::Assertion("start_task response missing typed report_id".to_string())
+    })?;
+    tracker.track_report(&report_id);
 
-    let task_status = poll_task_status(client, &task_id, Duration::from_secs(config.task_progress_timeout_secs)).await?;
-    if matches!(
-        task_status.as_str(),
-        "Running" | "Requested" | "Stop Requested"
-    ) {
-        let stop_response = client.call(stop_task(&task_id)).await?;
-        assert_status(&stop_response, 200, "stop_task")?;
-    } else {
-        log_line(&format!(
-            "scan task reached terminal status `{task_status}` before stop_task"
-        ));
+    let status = poll_task_status(
+        client,
+        &task_id,
+        Duration::from_secs(config.task_progress_timeout_secs),
+    )
+    .await?;
+    if matches!(status.as_str(), "Running" | "Requested" | "Stop Requested") {
+        let stopped = client
+            .stop_task(StopTaskRequest::new(task_id.clone()))
+            .await?;
+        assert_typed_status(stopped.status, &stopped.status_text, 200, "stop_task")?;
     }
 
-    let report_response = client.call(get_report(&report_id)).await?;
-    assert_status(&report_response, 200, "get_report")?;
+    let report = client
+        .get_report(GetReportRequest::new(report_id.clone()))
+        .await?;
+    assert_typed_status(report.status, &report.status_text, 200, "get_report")?;
     ensure(
-        response_contains(&report_response, "<report ")?
-            || response_contains(&report_response, "<results>")?
-            || response_contains(&report_response, "<result>")?,
-        "expected report payload in get_report response",
+        report.items.iter().any(|item| item.meta.id == report_id),
+        "typed get_report response omitted the requested report",
     )?;
 
-    let delete_task_response = client.call(delete_task(&task_id, true)).await?;
-    assert_status(&delete_task_response, 200, "delete_task")?;
-    tracker.task_ids.retain(|value| value != task_id.as_str());
+    let export = client
+        .get_report_export(GetReportExportRequest::new(
+            report_id.clone(),
+            xml_format_id.clone(),
+        ))
+        .await?;
+    ensure(
+        !export.bytes.is_empty(),
+        "decoded XML report export was empty",
+    )?;
+    log_pass(
+        "scan 01",
+        &format!(
+            "typed report/export decoding ({} bytes)",
+            export.bytes.len()
+        ),
+    );
 
-    let delete_target_response = client.call(delete_target(&target_id, true)).await?;
-    assert_status(&delete_target_response, 200, "delete_target")?;
-    tracker
-        .target_ids
-        .retain(|value| value != target_id.as_str());
+    let deleted_report = client
+        .delete_report(DeleteReportRequest::new(report_id.clone()))
+        .await?;
+    assert_typed_status(
+        deleted_report.status,
+        &deleted_report.status_text,
+        200,
+        "delete_report",
+    )?;
+    CleanupTracker::untrack(&mut tracker.report_ids, &report_id);
 
-    log_pass("11", "extended scan flow");
+    let deleted_task = client
+        .delete_task(DeleteTaskRequest::new(task_id.clone(), true))
+        .await?;
+    assert_typed_status(
+        deleted_task.status,
+        &deleted_task.status_text,
+        200,
+        "delete_task",
+    )?;
+    CleanupTracker::untrack(&mut tracker.task_ids, &task_id);
+
+    let deleted_target = client
+        .delete_target(DeleteTargetRequest::new(target_id.clone(), true))
+        .await?;
+    assert_typed_status(
+        deleted_target.status,
+        &deleted_target.status_text,
+        200,
+        "delete_target",
+    )?;
+    CleanupTracker::untrack(&mut tracker.target_ids, &target_id);
+    log_pass("scan 02", "task/report/target cleanup");
     Ok(())
 }
 
+#[derive(Clone, Default)]
+struct TraceCapture(Arc<Mutex<Vec<WireTraceEvent>>>);
+
+impl WireTrace for TraceCapture {
+    fn trace(&self, event: WireTraceEvent) {
+        if let Ok(mut events) = self.0.lock() {
+            events.push(event);
+        }
+    }
+}
+
+impl TraceCapture {
+    fn rendered(&self) -> String {
+        self.0
+            .lock()
+            .map(|events| {
+                events
+                    .iter()
+                    .map(|event| String::from_utf8_lossy(&event.bytes))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default()
+    }
+}
+
 async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Result<(), AppError> {
-    let mut client = connect_client(config).await?;
+    let suffix = run_suffix();
+    let trace = TraceCapture::default();
+    let connection = UnixSocketConnection::with_path(&config.socket_path);
+    let mut client = GmpClient::connect_with_wire_trace(connection, trace.clone()).await?;
+    authenticate(&mut client, config).await?;
 
-    let auth_response = client
-        .call(authenticate(&config.username, &config.password))
+    let mut port_list_request = CreatePortListRequest::new(format!("e2e-679-port-list-{suffix}"));
+    port_list_request.port_range = Some("T:1-100".to_string());
+    let port_list = client.create_port_list(port_list_request).await?;
+    assert_typed_status(
+        port_list.status,
+        &port_list.status_text,
+        201,
+        "create_port_list",
+    )?;
+    let port_list_id = port_list.id;
+    tracker.track_port_list(&port_list_id);
+    let detail = client
+        .get_port_list(GetPortListRequest::new(port_list_id.clone()))
         .await?;
-    assert_status(&auth_response, 200, "authenticate")?;
-
-    // --- port_list CRUD ---
-    let pl_resp = client
-        .call(create_port_list(
-            "e2e-port-list",
-            PortListOpts {
-                port_range: Some("T:1-100".into()),
-                ..PortListOpts::default()
-            },
-        ))
+    assert_one_id(
+        &detail.items,
+        |item| &item.meta.id,
+        &port_list_id,
+        "port list",
+    )?;
+    let mut replace = ModifyPortListRequest::new(port_list_id.clone());
+    replace.name = Some(format!("e2e-679-port-list-replaced-{suffix}"));
+    replace.comment = Some("replacement preserves ranges".to_string());
+    let replaced = client.modify_port_list(replace).await?;
+    assert_typed_status(
+        replaced.status,
+        &replaced.status_text,
+        200,
+        "modify_port_list",
+    )?;
+    let replaced_detail = client
+        .get_port_list(GetPortListRequest::new(port_list_id.clone()))
         .await?;
-    assert_status(&pl_resp, 201, "create_port_list")?;
-    let pl_id = response_id(&pl_resp, "create_port_list")?;
-    tracker.track_port_list(&pl_id);
-    log_pass("crud 01", &format!("create port_list ({pl_id})"));
+    ensure(
+        only_item(&replaced_detail.items, "replaced port list")?
+            .port_range
+            .as_deref()
+            .is_some_and(|ranges| ranges.contains("1-100")),
+        "port-list metadata replacement unexpectedly discarded the port range",
+    )?;
+    delete_and_verify_port_list(&mut client, tracker, &port_list_id).await?;
+    log_pass("crud 01", "port-list create/detail/replace-preserve/delete");
 
-    let get_pl_resp = client.call(get_port_list(&pl_id)).await?;
-    assert_status(&get_pl_resp, 200, "get_port_list")?;
-    log_pass("crud 02", "get port_list");
+    let credentials_before = client.execute(GetCredentialsRequest::default()).await?;
+    let ids_before = credentials_before
+        .items
+        .iter()
+        .map(|item| item.meta.id.to_string())
+        .collect::<BTreeSet<_>>();
+    let mut invalid = CreateCredentialRequest::new(format!("e2e-679-invalid-{suffix}"));
+    invalid.credential_type = Some(CredentialType::UsernamePassword);
+    invalid.login = Some("invalid-without-password".to_string());
+    let validation_error = client
+        .create_credential(invalid)
+        .await
+        .expect_err("missing password must fail before transport");
+    ensure(
+        matches!(validation_error, GvmError::Request(_)),
+        "invalid credential did not fail as a request-validation error",
+    )?;
+    let credentials_after = client.execute(GetCredentialsRequest::default()).await?;
+    let ids_after = credentials_after
+        .items
+        .iter()
+        .map(|item| item.meta.id.to_string())
+        .collect::<BTreeSet<_>>();
+    ensure(
+        ids_before == ids_after,
+        "invalid credential validation changed live server state",
+    )?;
+    log_pass("crud 02", "invalid request rejected before mutation");
 
-    let del_pl_resp = client.call(delete_port_list(&pl_id, true)).await?;
-    assert_status(&del_pl_resp, 200, "delete_port_list")?;
-    tracker.port_list_ids.retain(|v| v != pl_id.as_str());
-    log_pass("crud 03", "delete port_list");
-
-    let verify_pl_resp = client.send(get_port_list(&pl_id)).await?;
-    assert_status(&verify_pl_resp, 404, "verify port_list absent")?;
-    log_pass("crud 04", "verify port_list absent");
-
-    // --- credential CRUD ---
-    let cred_resp = client
-        .call(create_credential(
-            "e2e-cred",
-            CredentialOpts {
-                credential_type: Some(CredentialType::UsernamePassword),
-                login: Some("testuser".into()),
-                password: Some("testpass".into()),
-                ..CredentialOpts::default()
-            },
-        ))
+    let mut credential_request =
+        CreateCredentialRequest::new(format!("e2e-679-credential-{suffix}"));
+    credential_request.credential_type = Some(CredentialType::UsernamePassword);
+    credential_request.login = Some("e2e-679-user".to_string());
+    credential_request.password = Some(SECRET_SENTINEL.to_string());
+    let credential = client.create_credential(credential_request).await?;
+    assert_typed_status(
+        credential.status,
+        &credential.status_text,
+        201,
+        "create_credential",
+    )?;
+    let credential_id = credential.id;
+    tracker.track_credential(&credential_id);
+    let detail = client
+        .execute(GetCredentialRequest::new(credential_id.clone()))
         .await?;
-    assert_status(&cred_resp, 201, "create_credential")?;
-    let cred_id = response_id(&cred_resp, "create_credential")?;
-    tracker.track_credential(&cred_id);
-    log_pass("crud 05", &format!("create credential ({cred_id})"));
+    assert_one_id(
+        &detail.items,
+        |item| &item.meta.id,
+        &credential_id,
+        "credential",
+    )?;
+    let deleted = client
+        .delete_credential(DeleteCredentialRequest::new(credential_id.clone(), true))
+        .await?;
+    assert_typed_status(
+        deleted.status,
+        &deleted.status_text,
+        200,
+        "delete_credential",
+    )?;
+    CleanupTracker::untrack(&mut tracker.credential_ids, &credential_id);
+    assert_missing_credential(&mut client, &credential_id).await?;
+    let trace_text = trace.rendered();
+    ensure(
+        !trace_text.contains(SECRET_SENTINEL),
+        "secret sentinel leaked through the live client wire trace",
+    )?;
+    ensure(
+        trace_text.contains("redacted"),
+        "wire trace did not contain a structural redaction marker",
+    )?;
+    log_pass(
+        "crud 03",
+        "credential lifecycle and live secret-sentinel redaction",
+    );
 
-    let get_cred_resp = client.call(get_credential(&cred_id)).await?;
-    assert_status(&get_cred_resp, 200, "get_credential")?;
-    log_pass("crud 06", "get credential");
-
-    let del_cred_resp = client.call(delete_credential(&cred_id, true)).await?;
-    assert_status(&del_cred_resp, 200, "delete_credential")?;
-    tracker.credential_ids.retain(|v| v != cred_id.as_str());
-    log_pass("crud 07", "delete credential");
-
-    let verify_cred_resp = client.send(get_credential(&cred_id)).await?;
-    assert_status(&verify_cred_resp, 404, "verify credential absent")?;
-    log_pass("crud 08", "verify credential absent");
-
-    // --- schedule CRUD ---
     let ical = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//e2e//EN\r\nBEGIN:VEVENT\r\nDTSTART:20260401T060000Z\r\nDURATION:PT0S\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\nEND:VCALENDAR";
-    let sched_resp = client
-        .call(create_schedule(
-            "e2e-schedule",
-            ScheduleOpts {
-                icalendar: Some(ical.into()),
-                timezone: Some("UTC".into()),
-                comment: Some("e2e test schedule".into()),
-                ..Default::default()
-            },
-        ))
+    let mut schedule_request =
+        CreateScheduleRequest::new(format!("e2e-679-schedule-{suffix}"), ical);
+    schedule_request.timezone = Some("UTC".to_string());
+    schedule_request.comment = Some("issue 679 canonical schedule".to_string());
+    let schedule = client.create_schedule(schedule_request).await?;
+    assert_typed_status(
+        schedule.status,
+        &schedule.status_text,
+        201,
+        "create_schedule",
+    )?;
+    let schedule_id = schedule.id;
+    tracker.track_schedule(&schedule_id);
+    let detail = client
+        .get_schedule(GetScheduleRequest::new(schedule_id.clone()))
         .await?;
-    assert_status(&sched_resp, 201, "create_schedule")?;
-    let sched_id = response_id(&sched_resp, "create_schedule")?;
-    tracker.track_schedule(&sched_id);
-    log_pass("crud 09", &format!("create schedule ({sched_id})"));
-
-    let get_sched_resp = client.call(get_schedule(&sched_id)).await?;
-    assert_status(&get_sched_resp, 200, "get_schedule")?;
-    log_pass("crud 10", "get schedule");
-
-    let del_sched_resp = client.call(delete_schedule(&sched_id, true)).await?;
-    assert_status(&del_sched_resp, 200, "delete_schedule")?;
-    tracker.schedule_ids.retain(|v| v != sched_id.as_str());
-    log_pass("crud 11", "delete schedule");
-
-    let verify_sched_resp = client.send(get_schedule(&sched_id)).await?;
-    assert_status(&verify_sched_resp, 404, "verify schedule absent")?;
-    log_pass("crud 12", "verify schedule absent");
-
-    // --- filter CRUD ---
-    let filter_resp = client
-        .call(create_filter(
-            "e2e-filter",
-            FilterOpts {
-                term: Some("name=test".into()),
-                filter_type: Some(FilterType::Task),
-                ..FilterOpts::default()
-            },
-        ))
+    assert_one_id(
+        &detail.items,
+        |item| &item.meta.id,
+        &schedule_id,
+        "schedule",
+    )?;
+    let deleted = client
+        .delete_schedule(DeleteScheduleRequest::new(schedule_id.clone(), true))
         .await?;
-    assert_status(&filter_resp, 201, "create_filter")?;
-    let filter_id = response_id(&filter_resp, "create_filter")?;
+    assert_typed_status(deleted.status, &deleted.status_text, 200, "delete_schedule")?;
+    CleanupTracker::untrack(&mut tracker.schedule_ids, &schedule_id);
+    assert_missing(
+        client
+            .get_schedule(GetScheduleRequest::new(schedule_id.clone()))
+            .await,
+        "schedule",
+    )?;
+    log_pass("crud 04", "schedule lifecycle");
+
+    let mut filter_request = CreateFilterRequest::new(format!("e2e-679-filter-{suffix}"));
+    filter_request.term = Some("name=test".to_string());
+    filter_request.filter_type = Some(FilterType::Task);
+    let filter = client.create_filter(filter_request).await?;
+    assert_typed_status(filter.status, &filter.status_text, 201, "create_filter")?;
+    let filter_id = filter.id;
     tracker.track_filter(&filter_id);
-    log_pass("crud 13", &format!("create filter ({filter_id})"));
-
-    let get_filter_resp = client.call(get_filter(&filter_id)).await?;
-    assert_status(&get_filter_resp, 200, "get_filter")?;
-    log_pass("crud 14", "get filter");
-
-    let del_filter_resp = client.call(delete_filter(&filter_id, true)).await?;
-    assert_status(&del_filter_resp, 200, "delete_filter")?;
-    tracker.filter_ids.retain(|v| v != filter_id.as_str());
-    log_pass("crud 15", "delete filter");
-
-    let verify_filter_resp = client.send(get_filter(&filter_id)).await?;
-    assert_status(&verify_filter_resp, 404, "verify filter absent")?;
-    log_pass("crud 16", "verify filter absent");
-
-    // --- task CRUD (requires target, scan_config, scanner) ---
-    let pl_list_resp = client
-        .call(get_port_lists(GetPortListsOpts::default()))
+    let detail = client
+        .get_filter(GetFilterRequest::new(filter_id.clone()))
         .await?;
-    assert_status(&pl_list_resp, 200, "get_port_lists for task prereq")?;
-    let task_port_list_id = match first_element_id(&pl_list_resp, "port_list") {
-        Ok(id) => id,
-        Err(_) => {
-            log_line("[skip] crud 17-24 task CRUD: no port list available");
-            client.disconnect().await?;
-            return Ok(());
-        }
-    };
-
-    let task_target_resp = client
-        .call(create_localhost_target(
-            "e2e-task-target",
-            task_port_list_id,
-        )?)
+    assert_one_id(&detail.items, |item| &item.meta.id, &filter_id, "filter")?;
+    let deleted = client
+        .delete_filter(DeleteFilterRequest::new(filter_id.clone(), true))
         .await?;
-    assert_status(&task_target_resp, 201, "create task target")?;
-    let task_target_id = response_id(&task_target_resp, "create task target")?;
-    tracker.track_target(&task_target_id);
+    assert_typed_status(deleted.status, &deleted.status_text, 200, "delete_filter")?;
+    CleanupTracker::untrack(&mut tracker.filter_ids, &filter_id);
+    assert_missing(
+        client
+            .get_filter(GetFilterRequest::new(filter_id.clone()))
+            .await,
+        "filter",
+    )?;
+    log_pass("crud 05", "filter lifecycle");
 
-    let scan_configs_resp = client
-        .call(get_scan_configs(GetScanConfigsOpts::default()))
-        .await?;
-    let scan_config_id = match first_element_id(&scan_configs_resp, "config") {
-        Ok(id) => id,
-        Err(_) => {
-            log_line("[skip] crud 17-24 task CRUD: no scan config available");
-            client.disconnect().await?;
-            return Ok(());
-        }
-    };
-
-    let scanners_resp = client
-        .call(get_scanners(GetScannersOpts::default()))
-        .await?;
-    let scanner_id = match first_element_id(&scanners_resp, "scanner") {
-        Ok(id) => id,
-        Err(_) => {
-            log_line("[skip] crud 17-24 task CRUD: no scanner available");
-            client.disconnect().await?;
-            return Ok(());
-        }
-    };
-
-    let task_resp = client
-        .call(create_task(
-            "e2e-task",
-            &scan_config_id,
-            &task_target_id,
-            &scanner_id,
-            CreateTaskOpts::default(),
-        ))
-        .await?;
-    assert_status(&task_resp, 201, "create_task")?;
-    let task_id = response_id(&task_resp, "create_task")?;
-    tracker.track_task(&task_id);
-    log_pass("crud 17", &format!("create task ({task_id})"));
-
-    let get_task_resp = client.call(get_task(&task_id)).await?;
-    assert_status(&get_task_resp, 200, "get_task")?;
-    log_pass("crud 18", "get task");
-
-    let del_task_resp = client.call(delete_task(&task_id, true)).await?;
-    assert_status(&del_task_resp, 200, "delete_task")?;
-    tracker.task_ids.retain(|v| v != task_id.as_str());
-    log_pass("crud 19", "delete task");
-
-    let del_task_target_resp = client.call(delete_target(&task_target_id, true)).await?;
-    assert_status(&del_task_target_resp, 200, "delete task target")?;
-    tracker.target_ids.retain(|v| v != task_target_id.as_str());
-    log_pass("crud 20", "delete task target");
-
-    // --- notes and overrides (require an NVT OID) ---
-    let nvts_resp = client
-        .call(get_nvts(GetNvtsOpts {
-            filter_string: Some("rows=1".into()),
-            ..GetNvtsOpts::default()
-        }))
-        .await?;
-    assert_status(&nvts_resp, 200, "get_nvts for note prereq")?;
-
-    let nvt_oid = match first_nvt_oid(&nvts_resp) {
-        Ok(oid) => oid,
-        Err(_) => {
-            log_line("[skip] crud 21-32 notes/overrides: no NVT available");
-            client.disconnect().await?;
-            return Ok(());
-        }
-    };
-
-    // --- note CRUD ---
-    let note_resp = client
-        .call(create_note(
-            &nvt_oid,
-            NoteOpts {
-                text: Some("e2e test note".into()),
-                ..NoteOpts::default()
-            },
-        ))
-        .await?;
-    assert_status(&note_resp, 201, "create_note")?;
-    let note_id = response_id(&note_resp, "create_note")?;
-    tracker.track_note(&note_id);
-    log_pass("crud 21", &format!("create note ({note_id})"));
-
-    let get_note_resp = client.call(get_note(&note_id)).await?;
-    assert_status(&get_note_resp, 200, "get_note")?;
-    log_pass("crud 22", "get note");
-
-    let del_note_resp = client.call(delete_note(&note_id, true)).await?;
-    assert_status(&del_note_resp, 200, "delete_note")?;
-    tracker.note_ids.retain(|v| v != note_id.as_str());
-    log_pass("crud 23", "delete note");
-
-    let verify_note_resp = client.send(get_note(&note_id)).await?;
-    assert_status(&verify_note_resp, 404, "verify note absent")?;
-    log_pass("crud 24", "verify note absent");
-
-    // --- override CRUD ---
-    let override_resp = client
-        .call(create_override(
-            &nvt_oid,
-            OverrideOpts {
-                text: Some("e2e test override".into()),
-                new_severity: Some("-1".into()),
-                ..OverrideOpts::default()
-            },
-        ))
-        .await?;
-    assert_status(&override_resp, 201, "create_override")?;
-    let override_id = response_id(&override_resp, "create_override")?;
-    tracker.track_override(&override_id);
-    log_pass("crud 25", &format!("create override ({override_id})"));
-
-    let get_override_resp = client.call(get_override(&override_id)).await?;
-    assert_status(&get_override_resp, 200, "get_override")?;
-    log_pass("crud 26", "get override");
-
-    let del_override_resp = client.call(delete_override(&override_id, true)).await?;
-    assert_status(&del_override_resp, 200, "delete_override")?;
-    tracker.override_ids.retain(|v| v != override_id.as_str());
-    log_pass("crud 27", "delete override");
-
-    let verify_override_resp = client.send(get_override(&override_id)).await?;
-    assert_status(&verify_override_resp, 404, "verify override absent")?;
-    log_pass("crud 28", "verify override absent");
-
-    // --- tag CRUD ---
-    let tag_resp = client
-        .call(create_tag(
-            "e2e:test-tag",
-            TagOpts {
-                resource_type: Some(EntityType::Task),
-                value: Some("e2e-value".into()),
-                comment: Some("e2e test tag".into()),
-                active: Some(true),
-                ..Default::default()
-            },
-        ))
-        .await?;
-    assert_status(&tag_resp, 201, "create_tag")?;
-    let tag_id = response_id(&tag_resp, "create_tag")?;
-    tracker.track_tag(&tag_id);
-    log_pass("crud 29", &format!("create tag ({tag_id})"));
-
-    let get_tag_resp = client.call(get_tag(&tag_id)).await?;
-    assert_status(&get_tag_resp, 200, "get_tag")?;
-    log_pass("crud 30", "get tag");
-
-    let del_tag_resp = client.call(delete_tag(&tag_id, true)).await?;
-    assert_status(&del_tag_resp, 200, "delete_tag")?;
-    tracker.tag_ids.retain(|v| v != tag_id.as_str());
-    log_pass("crud 31", "delete tag");
-
-    let verify_tag_resp = client.send(get_tag(&tag_id)).await?;
-    assert_status(&verify_tag_resp, 404, "verify tag absent")?;
-    log_pass("crud 32", "verify tag absent");
-
-    // --- alert CRUD ---
-    // TODO: Verify alert XML structure matches GMP 22.5+ requirements.
-    // Skip until create_alert is validated against real server.
-    log_line("[skip] crud 33-36: alert CRUD (needs validation against GMP 22.5+)");
+    run_task_crud(&mut client, tracker, &suffix).await?;
+    run_note_override_tag_crud(&mut client, tracker, &suffix).await?;
 
     client.disconnect().await?;
     Ok(())
 }
 
+async fn run_task_crud(
+    client: &mut GmpClient<UnixSocketConnection>,
+    tracker: &mut CleanupTracker,
+    suffix: &str,
+) -> Result<(), AppError> {
+    let port_lists = client
+        .get_port_lists(GetPortListsRequest::default())
+        .await?;
+    let configs = client
+        .get_scan_configs(GetScanConfigsRequest::new())
+        .await?;
+    let scanners = client.get_scanners(GetScannersRequest::default()).await?;
+    let port_list_id = first_meta_id(&port_lists.items, |item| &item.meta, "port list")?;
+    let config_id = first_meta_id(&configs.items, |item| &item.meta, "scan config")?;
+    let scanner_id = first_meta_id(&scanners.items, |item| &item.meta, "scanner")?;
+
+    let target = client
+        .create_target(create_localhost_target(
+            &format!("e2e-679-task-target-{suffix}"),
+            port_list_id,
+        )?)
+        .await?;
+    assert_typed_status(
+        target.status,
+        &target.status_text,
+        201,
+        "create task target",
+    )?;
+    let target_id = target.id;
+    tracker.track_target(&target_id);
+
+    let task = client
+        .create_task(CreateTaskRequest::new(
+            format!("e2e-679-task-{suffix}"),
+            config_id,
+            target_id.clone(),
+            scanner_id,
+        ))
+        .await?;
+    assert_typed_status(task.status, &task.status_text, 201, "create_task")?;
+    let task_id = task.id;
+    tracker.track_task(&task_id);
+    let detail = client
+        .get_task(GetTaskRequest::new(task_id.clone()))
+        .await?;
+    assert_one_id(&detail.items, |item| &item.meta.id, &task_id, "task")?;
+    let deleted = client
+        .delete_task(DeleteTaskRequest::new(task_id.clone(), true))
+        .await?;
+    assert_typed_status(deleted.status, &deleted.status_text, 200, "delete_task")?;
+    CleanupTracker::untrack(&mut tracker.task_ids, &task_id);
+    assert_missing(
+        client.get_task(GetTaskRequest::new(task_id.clone())).await,
+        "task",
+    )?;
+    let deleted_target = client
+        .delete_target(DeleteTargetRequest::new(target_id.clone(), true))
+        .await?;
+    assert_typed_status(
+        deleted_target.status,
+        &deleted_target.status_text,
+        200,
+        "delete task target",
+    )?;
+    CleanupTracker::untrack(&mut tracker.target_ids, &target_id);
+    log_pass("crud 06", "task lifecycle with dependency-first cleanup");
+    Ok(())
+}
+
+async fn run_note_override_tag_crud(
+    client: &mut GmpClient<UnixSocketConnection>,
+    tracker: &mut CleanupTracker,
+    suffix: &str,
+) -> Result<(), AppError> {
+    let nvts = client.get_nvts(GetNvtsRequest::default()).await?;
+    assert_typed_status(nvts.status, &nvts.status_text, 200, "get_nvts")?;
+    let nvt_oid = nvts
+        .items
+        .first()
+        .ok_or_else(|| AppError::Assertion("no NVT available for note/override CRUD".to_string()))?
+        .oid
+        .clone();
+
+    let note = client
+        .create_note(CreateNoteRequest::new(&nvt_oid, "issue 679 canonical note"))
+        .await?;
+    assert_typed_status(note.status, &note.status_text, 201, "create_note")?;
+    let note_id = note.id;
+    tracker.track_note(&note_id);
+    let detail = client
+        .get_note(GetNoteRequest::new(note_id.clone()))
+        .await?;
+    assert_one_id(&detail.items, |item| &item.meta.id, &note_id, "note")?;
+    let deleted = client
+        .delete_note(DeleteNoteRequest::new(note_id.clone(), true))
+        .await?;
+    assert_typed_status(deleted.status, &deleted.status_text, 200, "delete_note")?;
+    CleanupTracker::untrack(&mut tracker.note_ids, &note_id);
+    assert_missing(
+        client.get_note(GetNoteRequest::new(note_id.clone())).await,
+        "note",
+    )?;
+
+    let override_response = client
+        .create_override(CreateOverrideRequest::new(
+            &nvt_oid,
+            "issue 679 canonical override",
+            -1.0,
+        ))
+        .await?;
+    assert_typed_status(
+        override_response.status,
+        &override_response.status_text,
+        201,
+        "create_override",
+    )?;
+    let override_id = override_response.id;
+    tracker.track_override(&override_id);
+    let detail = client
+        .get_override(GetOverrideRequest::new(override_id.clone()))
+        .await?;
+    assert_one_id(
+        &detail.items,
+        |item| &item.meta.id,
+        &override_id,
+        "override",
+    )?;
+    let deleted = client
+        .delete_override(DeleteOverrideRequest::new(override_id.clone(), true))
+        .await?;
+    assert_typed_status(deleted.status, &deleted.status_text, 200, "delete_override")?;
+    CleanupTracker::untrack(&mut tracker.override_ids, &override_id);
+    assert_missing(
+        client
+            .get_override(GetOverrideRequest::new(override_id.clone()))
+            .await,
+        "override",
+    )?;
+
+    let resources = TagResources::new(EntityType::Task);
+    let mut tag_request = CreateTagRequest::new(format!("e2e-679-tag-{suffix}"), resources);
+    tag_request.value = Some("issue-679".to_string());
+    tag_request.active = Some(true);
+    let tag = client.create_tag(tag_request).await?;
+    assert_typed_status(tag.status, &tag.status_text, 201, "create_tag")?;
+    let tag_id = tag.id;
+    tracker.track_tag(&tag_id);
+    let detail = client.get_tag(GetTagRequest::new(tag_id.clone())).await?;
+    assert_one_id(&detail.items, |item| &item.meta.id, &tag_id, "tag")?;
+    let deleted = client
+        .delete_tag(DeleteTagRequest::new(tag_id.clone(), true))
+        .await?;
+    assert_typed_status(deleted.status, &deleted.status_text, 200, "delete_tag")?;
+    CleanupTracker::untrack(&mut tracker.tag_ids, &tag_id);
+    assert_missing(
+        client.get_tag(GetTagRequest::new(tag_id.clone())).await,
+        "tag",
+    )?;
+    log_pass("crud 07", "note, override, and tag lifecycles");
+    Ok(())
+}
+
 async fn run_secinfo_suite(config: &EnvConfig) -> Result<(), AppError> {
-    let mut client = connect_client(config).await?;
+    let mut client = connect_authenticated(config).await?;
+    let feeds = client.get_feeds(GetFeedsRequest::new()).await?;
+    assert_typed_status(feeds.status, &feeds.status_text, 200, "get_feeds")?;
+    ensure(!feeds.items.is_empty(), "expected at least one feed")?;
+    log_pass("secinfo 01", &format!("get_feeds ({})", feeds.items.len()));
 
-    let auth_response = client
-        .call(authenticate(&config.username, &config.password))
+    let cves = client.get_cves(GetCvesRequest::default()).await?;
+    assert_typed_status(cves.status, &cves.status_text, 200, "get_cves")?;
+    log_pass("secinfo 02", &format!("get_cves ({})", cves.items.len()));
+
+    let cpes = client.get_cpes(GetCpesRequest::default()).await?;
+    assert_typed_status(cpes.status, &cpes.status_text, 200, "get_cpes")?;
+    log_pass("secinfo 03", &format!("get_cpes ({})", cpes.items.len()));
+
+    let cert = client
+        .get_cert_bund_advisories(GetCertBundAdvisoriesRequest::default())
         .await?;
-    assert_status(&auth_response, 200, "authenticate")?;
-
-    // 01: feeds
-    let feeds_resp = client.call(get_feeds()).await?;
-    assert_status(&feeds_resp, 200, "get_feeds")?;
-    let feed_count = count_elements(&feeds_resp, "feed")?;
-    ensure(feed_count >= 1, "expected at least one feed")?;
-    log_pass("secinfo 01", &format!("get_feeds ({feed_count} feeds)"));
-
-    // 02: CVEs
-    let cves_resp = client.call(get_cves(GetSecInfoOpts::default())).await?;
-    assert_status(&cves_resp, 200, "get_cves")?;
-    let cve_count = count_elements(&cves_resp, "info")?;
-    if cve_count == 0 {
-        log_line("[warn] secinfo 02 get_cves: feed not yet populated, skipping count check");
-    }
-    log_pass("secinfo 02", &format!("get_cves ({cve_count} entries)"));
-
-    // 03: CPEs
-    let cpes_resp = client.call(get_cpes(GetSecInfoOpts::default())).await?;
-    assert_status(&cpes_resp, 200, "get_cpes")?;
-    let cpe_count = count_elements(&cpes_resp, "info")?;
-    if cpe_count == 0 {
-        log_line("[warn] secinfo 03 get_cpes: feed not yet populated, skipping count check");
-    }
-    log_pass("secinfo 03", &format!("get_cpes ({cpe_count} entries)"));
-
-    // 04: CERT-Bund advisories
-    let cert_resp = client
-        .call(get_cert_bund_advisories(GetSecInfoOpts::default()))
-        .await?;
-    assert_status(&cert_resp, 200, "get_cert_bund_advisories")?;
-    let cert_count = count_elements(&cert_resp, "info")?;
-    if cert_count == 0 {
-        log_line("[warn] secinfo 04 get_cert_bund_advisories: feed not yet populated");
-    }
+    assert_typed_status(
+        cert.status,
+        &cert.status_text,
+        200,
+        "get_cert_bund_advisories",
+    )?;
     log_pass(
         "secinfo 04",
-        &format!("get_cert_bund_advisories ({cert_count} entries)"),
+        &format!("get_cert_bund_advisories ({})", cert.items.len()),
     );
 
-    // 05: DFN-CERT advisories
-    let dfn_resp = client
-        .call(get_dfn_cert_advisories(GetSecInfoOpts::default()))
+    let dfn = client
+        .get_dfn_cert_advisories(GetDfnCertAdvisoriesRequest::default())
         .await?;
-    assert_status(&dfn_resp, 200, "get_dfn_cert_advisories")?;
-    let dfn_count = count_elements(&dfn_resp, "info")?;
-    if dfn_count == 0 {
-        log_line("[warn] secinfo 05 get_dfn_cert_advisories: feed not yet populated");
-    }
+    assert_typed_status(dfn.status, &dfn.status_text, 200, "get_dfn_cert_advisories")?;
     log_pass(
         "secinfo 05",
-        &format!("get_dfn_cert_advisories ({dfn_count} entries)"),
+        &format!("get_dfn_cert_advisories ({})", dfn.items.len()),
     );
 
-    // 06: NVTs
-    let nvts_resp = client
-        .call(get_nvts(GetNvtsOpts {
-            filter_string: Some("rows=10".into()),
-            ..GetNvtsOpts::default()
-        }))
-        .await?;
-    assert_status(&nvts_resp, 200, "get_nvts")?;
-    let nvt_count = count_elements(&nvts_resp, "nvt")?;
-    ensure(
-        nvt_count >= 1,
-        "expected at least one NVT; VT feed may not be loaded",
-    )?;
-    log_pass("secinfo 06", &format!("get_nvts ({nvt_count} entries)"));
-
+    let nvts = client.get_nvts(GetNvtsRequest::default()).await?;
+    assert_typed_status(nvts.status, &nvts.status_text, 200, "get_nvts")?;
+    ensure(!nvts.items.is_empty(), "expected at least one NVT")?;
+    log_pass("secinfo 06", &format!("get_nvts ({})", nvts.items.len()));
     client.disconnect().await?;
     Ok(())
 }
@@ -1156,31 +1535,18 @@ async fn run_differential_suite(
     config: &EnvConfig,
     tracker: &mut CleanupTracker,
 ) -> Result<(), AppError> {
-    let mut client = connect_client(config).await?;
-    let auth_response = client
-        .call(authenticate(&config.username, &config.password))
-        .await?;
-    assert_status(&auth_response, 200, "authenticate")?;
+    let mut client = connect_authenticated(config).await?;
+    let mut warnings = Vec::new();
 
-    let mut warnings: Vec<String> = Vec::new();
-
-    // 01: get_version
-    let rust_version_response = client
-        .send(gvm_gmp::commands::version::get_version())
-        .await?;
-    assert_status(&rust_version_response, 200, "get_version")?;
-    let rust_version = rust_version_response
-        .child_text("version")
-        .unwrap_or_default();
-    compare_get_version(&rust_version, &mut warnings)?;
+    let version = client.get_version(GetVersionRequest::new()).await?;
+    assert_typed_status(version.status, &version.status_text, 200, "get_version")?;
+    compare_get_version(&version.version, &mut warnings)?;
     log_pass("diff 01", "get_version compared");
 
-    // 02: get_scan_configs
-    let rust_scan_configs_response = client
-        .call(get_scan_configs(GetScanConfigsOpts::default()))
+    let configs = client
+        .get_scan_configs(GetScanConfigsRequest::new())
         .await?;
-    assert_status(&rust_scan_configs_response, 200, "get_scan_configs")?;
-    let rust_scan_configs = GetScanConfigsResponse::from_response(&rust_scan_configs_response)?
+    let rust_configs = configs
         .items
         .into_iter()
         .map(|entry| IdNameEntity {
@@ -1188,15 +1554,11 @@ async fn run_differential_suite(
             name: entry.meta.name,
         })
         .collect::<Vec<_>>();
-    compare_id_name_command("get_scan_configs", &rust_scan_configs, &mut warnings)?;
+    compare_id_name_command("get_scan_configs", &rust_configs, &mut warnings)?;
     log_pass("diff 02", "get_scan_configs compared");
 
-    // 03: get_scanners
-    let rust_scanners_response = client
-        .call(get_scanners(GetScannersOpts::default()))
-        .await?;
-    assert_status(&rust_scanners_response, 200, "get_scanners")?;
-    let rust_scanners = GetScannersResponse::from_response(&rust_scanners_response)?
+    let scanners = client.get_scanners(GetScannersRequest::default()).await?;
+    let rust_scanners = scanners
         .items
         .into_iter()
         .map(|entry| IdNameEntity {
@@ -1207,12 +1569,10 @@ async fn run_differential_suite(
     compare_id_name_command("get_scanners", &rust_scanners, &mut warnings)?;
     log_pass("diff 03", "get_scanners compared");
 
-    // 04: get_port_lists
-    let rust_port_lists_response = client
-        .call(get_port_lists(GetPortListsOpts::default()))
+    let port_lists = client
+        .get_port_lists(GetPortListsRequest::default())
         .await?;
-    assert_status(&rust_port_lists_response, 200, "get_port_lists")?;
-    let rust_port_lists = GetPortListsResponse::from_response(&rust_port_lists_response)?
+    let rust_port_lists = port_lists
         .items
         .into_iter()
         .map(|entry| IdNameEntity {
@@ -1223,64 +1583,46 @@ async fn run_differential_suite(
     compare_id_name_command("get_port_lists", &rust_port_lists, &mut warnings)?;
     log_pass("diff 04", "get_port_lists compared");
 
-    // 05: get_feeds
-    let rust_feeds_response = client.call(get_feeds()).await?;
-    assert_status(&rust_feeds_response, 200, "get_feeds")?;
-    let rust_feeds = GetFeedsResponse::from_response(&rust_feeds_response)?
+    let feeds = client.get_feeds(GetFeedsRequest::new()).await?;
+    let rust_feeds = feeds
         .items
         .into_iter()
-        .map(|entry| {
-            let currently_syncing = entry
-                .currently_syncing
-                .as_deref()
-                .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
-                .unwrap_or(false);
-            FeedEntity {
-                feed_type: entry.type_,
-                name: entry.name,
-                status: entry.status.unwrap_or_default(),
-                currently_syncing,
-            }
+        .map(|entry| FeedEntity {
+            feed_type: entry.type_,
+            name: entry.name,
+            status: entry.status.unwrap_or_default(),
+            currently_syncing: entry.currently_syncing.as_deref().is_some_and(|value| {
+                matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes")
+            }),
         })
         .collect::<Vec<_>>();
     compare_get_feeds(&rust_feeds, &mut warnings)?;
     log_pass("diff 05", "get_feeds compared");
 
-    // 06: get_report_formats
-    let rust_report_formats_response = client
-        .call(get_report_formats(GetReportFormatsOpts::default()))
+    let formats = client
+        .get_report_formats(GetReportFormatsRequest::new())
         .await?;
-    assert_status(&rust_report_formats_response, 200, "get_report_formats")?;
-    let rust_report_formats =
-        GetReportFormatsResponse::from_response(&rust_report_formats_response)?
-            .items
-            .into_iter()
-            .map(|entry| ReportFormatEntity {
-                id: entry.meta.id.to_string(),
-                name: entry.meta.name,
-                extension: entry.extension.unwrap_or_default(),
-                content_type: entry.content_type.unwrap_or_default(),
-            })
-            .collect::<Vec<_>>();
-    compare_get_report_formats(&rust_report_formats, &mut warnings)?;
+    let rust_formats = formats
+        .items
+        .into_iter()
+        .map(|entry| ReportFormatEntity {
+            id: entry.meta.id.to_string(),
+            name: entry.meta.name,
+            extension: entry.extension.unwrap_or_default(),
+            content_type: entry.content_type.unwrap_or_default(),
+        })
+        .collect::<Vec<_>>();
+    compare_get_report_formats(&rust_formats, &mut warnings)?;
     log_pass("diff 06", "get_report_formats compared");
 
-    // 07: create/get/delete target via both clients and cross-verify existence
     run_target_differential(&mut client, tracker, &rust_port_lists, &mut warnings).await?;
     log_pass("diff 07", "cross-client target lifecycle");
-
+    for warning in &warnings {
+        log_line(&format!("[warn] {warning}"));
+    }
     if warnings.is_empty() {
         log_line("[pass] differential comparison had no mismatches");
-    } else {
-        log_line(&format!(
-            "[warn] differential comparison detected {} mismatch(es)",
-            warnings.len()
-        ));
-        for warning in warnings {
-            log_line(&format!("[warn] {warning}"));
-        }
     }
-
     client.disconnect().await?;
     Ok(())
 }
@@ -1291,54 +1633,39 @@ async fn run_target_differential(
     rust_port_lists: &[IdNameEntity],
     warnings: &mut Vec<String>,
 ) -> Result<(), AppError> {
-    let Some(port_list_id) = rust_port_lists.first().map(|entry| entry.id.clone()) else {
-        warnings.push(
-            "target differential: no port list available; skipping target checks".to_string(),
-        );
-        return Ok(());
-    };
+    let port_list_id = rust_port_lists
+        .first()
+        .ok_or_else(|| AppError::Assertion("target differential requires a port list".to_string()))?
+        .id
+        .clone();
+    let suffix = run_suffix();
+    let rust_name = format!("e2e-679-diff-rust-{suffix}");
+    let python_name = format!("e2e-679-diff-python-{suffix}");
 
-    let run_id = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    let rust_target_name = format!("e2e-diff-rust-{run_id}");
-    let python_target_name = format!("e2e-diff-python-{run_id}");
-
-    let rust_target_response = client
-        .call(create_localhost_target(
-            &rust_target_name,
+    let created = client
+        .create_target(create_localhost_target(
+            &rust_name,
             parse_entity_id(&port_list_id)?,
         )?)
         .await?;
-    assert_status(
-        &rust_target_response,
-        201,
-        "differential create_target rust",
-    )?;
-    let rust_target_id = response_id(&rust_target_response, "differential create_target rust")?;
-    tracker.track_target(&rust_target_id);
+    let rust_id = created.id;
+    tracker.track_target(&rust_id);
 
     let python_create = run_python_helper(
         "create_target",
         &[
-            ("--name", python_target_name.as_str()),
+            ("--name", python_name.as_str()),
             ("--hosts", "127.0.0.1"),
             ("--port-list-id", port_list_id.as_str()),
         ],
     )?;
-    let python_target_id = parse_python_target_id(&python_create, "create_target", warnings);
-    if let Some(id) = python_target_id.as_deref() {
-        if let Ok(entity_id) = parse_entity_id(id) {
-            tracker.track_target(&entity_id);
-        } else {
-            warnings.push(format!("create_target python returned invalid UUID `{id}`"));
-        }
+    let python_id = parse_python_target_id(&python_create, "create_target", warnings);
+    if let Some(id) = python_id.as_deref() {
+        tracker.track_target(&parse_entity_id(id)?);
     }
 
-    let rust_targets_response = client.call(get_targets(GetTargetsOpts::default())).await?;
-    assert_status(&rust_targets_response, 200, "get_targets rust")?;
-    let rust_targets = GetTargetsResponse::from_response(&rust_targets_response)?
+    let targets = client.get_targets(GetTargetsRequest::default()).await?;
+    let rust_targets = targets
         .items
         .into_iter()
         .map(|entry| IdNameEntity {
@@ -1346,55 +1673,42 @@ async fn run_target_differential(
             name: entry.meta.name,
         })
         .collect::<Vec<_>>();
-
-    let python_targets_json = run_python_helper("get_targets", &[])?;
-    let python_targets = parse_python_id_name_entities(&python_targets_json, "targets", warnings);
-
+    let python_targets =
+        parse_python_id_name_entities(&run_python_helper("get_targets", &[])?, "targets", warnings);
     compare_target_visibility(
         "rust target",
-        rust_target_id.as_str(),
-        &rust_target_name,
+        rust_id.as_str(),
+        &rust_name,
         &rust_targets,
         &python_targets,
         warnings,
     );
-    if let Some(id) = python_target_id.as_deref() {
+    if let Some(id) = python_id.as_deref() {
         compare_target_visibility(
             "python target",
             id,
-            &python_target_name,
+            &python_name,
             &rust_targets,
             &python_targets,
             warnings,
         );
     }
 
-    let rust_delete_response = client.call(delete_target(&rust_target_id, true)).await?;
-    assert_status(
-        &rust_delete_response,
-        200,
-        "differential delete_target rust",
-    )?;
-    tracker
-        .target_ids
-        .retain(|value| value != rust_target_id.as_str());
-
-    if let Some(id) = python_target_id {
-        let python_delete = run_python_helper("delete_target", &[("--target-id", id.as_str())])?;
-        if python_delete
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            != "ok"
-        {
+    client
+        .delete_target(DeleteTargetRequest::new(rust_id.clone(), true))
+        .await?;
+    CleanupTracker::untrack(&mut tracker.target_ids, &rust_id);
+    if let Some(id) = python_id {
+        let deleted = run_python_helper("delete_target", &[("--target-id", id.as_str())])?;
+        if deleted.get("status").and_then(Value::as_str) != Some("ok") {
             warnings.push(format!(
-                "delete_target python returned non-ok status: {}",
-                python_delete
+                "delete_target python returned non-ok status: {deleted}"
             ));
+        } else {
+            let entity_id = parse_entity_id(&id)?;
+            CleanupTracker::untrack(&mut tracker.target_ids, &entity_id);
         }
-        tracker.target_ids.retain(|value| value != id.as_str());
     }
-
     Ok(())
 }
 
@@ -1406,304 +1720,166 @@ fn compare_target_visibility(
     python_targets: &[IdNameEntity],
     warnings: &mut Vec<String>,
 ) {
-    let rust_map: BTreeMap<&str, &str> = rust_targets
-        .iter()
-        .map(|entry| (entry.id.as_str(), entry.name.as_str()))
-        .collect();
-    let python_map: BTreeMap<&str, &str> = python_targets
-        .iter()
-        .map(|entry| (entry.id.as_str(), entry.name.as_str()))
-        .collect();
-
-    match rust_map.get(expected_id) {
-        Some(name) if *name == expected_name => {}
-        Some(name) => warnings.push(format!(
-            "{label} mismatch in rust get_targets: id `{expected_id}` has name `{name}`, expected `{expected_name}`"
-        )),
-        None => warnings.push(format!(
-            "{label} missing in rust get_targets: id `{expected_id}`"
-        )),
-    }
-    match python_map.get(expected_id) {
-        Some(name) if *name == expected_name => {}
-        Some(name) => warnings.push(format!(
-            "{label} mismatch in python get_targets: id `{expected_id}` has name `{name}`, expected `{expected_name}`"
-        )),
-        None => warnings.push(format!(
-            "{label} missing in python get_targets: id `{expected_id}`"
-        )),
+    for (client, targets) in [("rust", rust_targets), ("python", python_targets)] {
+        match targets.iter().find(|entry| entry.id == expected_id) {
+            Some(entry) if entry.name == expected_name => {}
+            Some(entry) => warnings.push(format!(
+                "{label} mismatch in {client} get_targets: `{}` != `{expected_name}`",
+                entry.name
+            )),
+            None => warnings.push(format!(
+                "{label} missing in {client} get_targets: id `{expected_id}`"
+            )),
+        }
     }
 }
 
 fn compare_get_version(rust_version: &str, warnings: &mut Vec<String>) -> Result<(), AppError> {
-    let python_json = run_python_helper("get_version", &[])?;
-    let python_status = python_json
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    if python_status != "ok" {
-        warnings.push(format!(
-            "get_version python helper returned non-ok status: {python_json}"
-        ));
-        return Ok(());
-    }
-
-    let python_version = python_json
+    let payload = run_python_helper("get_version", &[])?;
+    let python = payload
         .get("data")
         .and_then(|data| data.get("version"))
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if rust_version != python_version {
+    if payload.get("status").and_then(Value::as_str) != Some("ok") {
         warnings.push(format!(
-            "get_version mismatch: rust `{rust_version}` vs python `{python_version}`"
+            "get_version python returned non-ok status: {payload}"
+        ));
+    } else if rust_version != python {
+        warnings.push(format!(
+            "get_version mismatch: rust `{rust_version}` vs python `{python}`"
         ));
     }
-
     Ok(())
 }
 
 fn compare_id_name_command(
     command: &str,
-    rust_entities: &[IdNameEntity],
+    rust: &[IdNameEntity],
     warnings: &mut Vec<String>,
 ) -> Result<(), AppError> {
-    let python_json = run_python_helper(command, &[])?;
-    let python_entities =
-        parse_python_id_name_entities(&python_json, list_key_for_command(command), warnings);
-    compare_id_name_entities(command, rust_entities, &python_entities, warnings);
+    let payload = run_python_helper(command, &[])?;
+    let python = parse_python_id_name_entities(&payload, list_key_for_command(command), warnings);
+    compare_id_name_entities(command, rust, &python, warnings);
     Ok(())
 }
 
 fn compare_id_name_entities(
     label: &str,
-    rust_entities: &[IdNameEntity],
-    python_entities: &[IdNameEntity],
+    rust: &[IdNameEntity],
+    python: &[IdNameEntity],
     warnings: &mut Vec<String>,
 ) {
-    if rust_entities.len() != python_entities.len() {
+    if rust.len() != python.len() {
         warnings.push(format!(
             "{label} count mismatch: rust {} vs python {}",
-            rust_entities.len(),
-            python_entities.len()
+            rust.len(),
+            python.len()
         ));
     }
-
-    let rust_ids: BTreeSet<&str> = rust_entities
-        .iter()
-        .map(|entry| entry.id.as_str())
-        .collect();
-    let python_ids: BTreeSet<&str> = python_entities
-        .iter()
-        .map(|entry| entry.id.as_str())
-        .collect();
-
-    for missing in rust_ids.difference(&python_ids) {
-        warnings.push(format!("{label} UUID missing in python: {missing}"));
-    }
-    for missing in python_ids.difference(&rust_ids) {
-        warnings.push(format!("{label} UUID missing in rust: {missing}"));
-    }
-
-    let rust_map: BTreeMap<&str, &str> = rust_entities
+    let rust_map = rust
         .iter()
         .map(|entry| (entry.id.as_str(), entry.name.as_str()))
-        .collect();
-    let python_map: BTreeMap<&str, &str> = python_entities
+        .collect::<BTreeMap<_, _>>();
+    let python_map = python
         .iter()
         .map(|entry| (entry.id.as_str(), entry.name.as_str()))
-        .collect();
-
-    for id in rust_ids.intersection(&python_ids) {
-        let rust_name = rust_map.get(id).copied().unwrap_or_default();
-        let python_name = python_map.get(id).copied().unwrap_or_default();
-        if rust_name != python_name {
-            warnings.push(format!(
-                "{label} name mismatch for UUID `{id}`: rust `{rust_name}` vs python `{python_name}`"
-            ));
+        .collect::<BTreeMap<_, _>>();
+    for id in rust_map
+        .keys()
+        .chain(python_map.keys())
+        .collect::<BTreeSet<_>>()
+    {
+        match (rust_map.get(id), python_map.get(id)) {
+            (Some(rust_name), Some(python_name)) if rust_name == python_name => {}
+            (Some(rust_name), Some(python_name)) => warnings.push(format!(
+                "{label} name mismatch for `{id}`: rust `{rust_name}` vs python `{python_name}`"
+            )),
+            (Some(_), None) => warnings.push(format!("{label} UUID missing in python: {id}")),
+            (None, Some(_)) => warnings.push(format!("{label} UUID missing in rust: {id}")),
+            (None, None) => {}
         }
     }
 }
 
-fn compare_get_feeds(
-    rust_feeds: &[FeedEntity],
-    warnings: &mut Vec<String>,
-) -> Result<(), AppError> {
-    let python_json = run_python_helper("get_feeds", &[])?;
-    let python_status = python_json
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    if python_status != "ok" {
-        warnings.push(format!(
-            "get_feeds python helper returned non-ok status: {python_json}"
-        ));
-        return Ok(());
-    }
-
-    let python_feeds = parse_python_feeds(&python_json, warnings);
-    if rust_feeds.len() != python_feeds.len() {
+fn compare_get_feeds(rust: &[FeedEntity], warnings: &mut Vec<String>) -> Result<(), AppError> {
+    let payload = run_python_helper("get_feeds", &[])?;
+    let python = parse_python_feeds(&payload, warnings);
+    let rust_map = rust
+        .iter()
+        .map(|entry| (entry.feed_type.as_str(), entry))
+        .collect::<BTreeMap<_, _>>();
+    let python_map = python
+        .iter()
+        .map(|entry| (entry.feed_type.as_str(), entry))
+        .collect::<BTreeMap<_, _>>();
+    if rust_map.len() != python_map.len() {
         warnings.push(format!(
             "get_feeds count mismatch: rust {} vs python {}",
-            rust_feeds.len(),
-            python_feeds.len()
+            rust_map.len(),
+            python_map.len()
         ));
     }
-
-    let rust_types: BTreeSet<&str> = rust_feeds
-        .iter()
-        .map(|entry| entry.feed_type.as_str())
-        .collect();
-    let python_types: BTreeSet<&str> = python_feeds
-        .iter()
-        .map(|entry| entry.feed_type.as_str())
-        .collect();
-    for missing in rust_types.difference(&python_types) {
-        warnings.push(format!("get_feeds type missing in python: {missing}"));
-    }
-    for missing in python_types.difference(&rust_types) {
-        warnings.push(format!("get_feeds type missing in rust: {missing}"));
-    }
-
-    let rust_map: BTreeMap<&str, &FeedEntity> = rust_feeds
-        .iter()
-        .map(|entry| (entry.feed_type.as_str(), entry))
-        .collect();
-    let python_map: BTreeMap<&str, &FeedEntity> = python_feeds
-        .iter()
-        .map(|entry| (entry.feed_type.as_str(), entry))
-        .collect();
-    for key in rust_types.intersection(&python_types) {
-        let Some(rust_entry) = rust_map.get(key).copied() else {
-            continue;
-        };
-        let Some(python_entry) = python_map.get(key).copied() else {
-            continue;
-        };
-        if rust_entry.name != python_entry.name {
-            warnings.push(format!(
-                "get_feeds name mismatch for type `{key}`: rust `{}` vs python `{}`",
-                rust_entry.name, python_entry.name
-            ));
-        }
-        if rust_entry.status != python_entry.status {
-            warnings.push(format!(
-                "get_feeds status mismatch for type `{key}`: rust `{}` vs python `{}`",
-                rust_entry.status, python_entry.status
-            ));
-        }
-        if rust_entry.currently_syncing != python_entry.currently_syncing {
-            warnings.push(format!(
-                "get_feeds currently_syncing mismatch for type `{key}`: rust `{}` vs python `{}`",
-                rust_entry.currently_syncing, python_entry.currently_syncing
-            ));
+    for (kind, rust_entry) in rust_map {
+        match python_map.get(kind) {
+            Some(python_entry)
+                if rust_entry.name == python_entry.name
+                    && rust_entry.status == python_entry.status
+                    && rust_entry.currently_syncing == python_entry.currently_syncing => {}
+            Some(python_entry) => warnings.push(format!(
+                "get_feeds mismatch for `{kind}`: rust {rust_entry:?} vs python {python_entry:?}"
+            )),
+            None => warnings.push(format!("get_feeds type missing in python: {kind}")),
         }
     }
-
     Ok(())
 }
 
 fn compare_get_report_formats(
-    rust_formats: &[ReportFormatEntity],
+    rust: &[ReportFormatEntity],
     warnings: &mut Vec<String>,
 ) -> Result<(), AppError> {
-    let python_json = run_python_helper("get_report_formats", &[])?;
-    let python_status = python_json
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    if python_status != "ok" {
-        warnings.push(format!(
-            "get_report_formats python helper returned non-ok status: {python_json}"
-        ));
-        return Ok(());
-    }
-
-    let python_formats = parse_python_report_formats(&python_json, warnings);
-    if rust_formats.len() != python_formats.len() {
-        warnings.push(format!(
-            "get_report_formats count mismatch: rust {} vs python {}",
-            rust_formats.len(),
-            python_formats.len()
-        ));
-    }
-
-    let rust_ids: BTreeSet<&str> = rust_formats.iter().map(|entry| entry.id.as_str()).collect();
-    let python_ids: BTreeSet<&str> = python_formats
-        .iter()
-        .map(|entry| entry.id.as_str())
-        .collect();
-    for missing in rust_ids.difference(&python_ids) {
-        warnings.push(format!(
-            "get_report_formats UUID missing in python: {missing}"
-        ));
-    }
-    for missing in python_ids.difference(&rust_ids) {
-        warnings.push(format!(
-            "get_report_formats UUID missing in rust: {missing}"
-        ));
-    }
-
-    let rust_map: BTreeMap<&str, &ReportFormatEntity> = rust_formats
+    let payload = run_python_helper("get_report_formats", &[])?;
+    let python = parse_python_report_formats(&payload, warnings);
+    let rust_map = rust
         .iter()
         .map(|entry| (entry.id.as_str(), entry))
-        .collect();
-    let python_map: BTreeMap<&str, &ReportFormatEntity> = python_formats
+        .collect::<BTreeMap<_, _>>();
+    let python_map = python
         .iter()
         .map(|entry| (entry.id.as_str(), entry))
-        .collect();
-    for id in rust_ids.intersection(&python_ids) {
-        let Some(rust_entry) = rust_map.get(id).copied() else {
-            continue;
-        };
-        let Some(python_entry) = python_map.get(id).copied() else {
-            continue;
-        };
-        if rust_entry.name != python_entry.name {
-            warnings.push(format!(
-                "get_report_formats name mismatch for `{id}`: rust `{}` vs python `{}`",
-                rust_entry.name, python_entry.name
-            ));
-        }
-        if rust_entry.extension != python_entry.extension {
-            warnings.push(format!(
-                "get_report_formats extension mismatch for `{id}`: rust `{}` vs python `{}`",
-                rust_entry.extension, python_entry.extension
-            ));
-        }
-        if rust_entry.content_type != python_entry.content_type {
-            warnings.push(format!(
-                "get_report_formats content_type mismatch for `{id}`: rust `{}` vs python `{}`",
-                rust_entry.content_type, python_entry.content_type
-            ));
+        .collect::<BTreeMap<_, _>>();
+    for (id, rust_entry) in rust_map {
+        match python_map.get(id) {
+            Some(python_entry)
+                if rust_entry.name == python_entry.name
+                    && rust_entry.extension == python_entry.extension
+                    && rust_entry.content_type == python_entry.content_type => {}
+            Some(python_entry) => warnings.push(format!(
+                "get_report_formats mismatch for `{id}`: rust {rust_entry:?} vs python {python_entry:?}"
+            )),
+            None => warnings.push(format!("get_report_formats UUID missing in python: {id}")),
         }
     }
-
     Ok(())
 }
 
 fn run_python_helper(command: &str, args: &[(&str, &str)]) -> Result<Value, AppError> {
     let helper_path = env::var("DIFFERENTIAL_HELPER_PATH")
         .unwrap_or_else(|_| "/workspace/docker/scripts/differential-helper.py".to_string());
-    let mut helper_command = Command::new("python3");
-    helper_command.arg(helper_path).arg(command);
+    let mut helper = Command::new("python3");
+    helper.arg(helper_path).arg(command);
     for (flag, value) in args {
-        helper_command.arg(flag).arg(value);
+        helper.arg(flag).arg(value);
     }
-
-    let output = helper_command.output()?;
+    let output = helper.output()?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if stdout.is_empty() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let rendered = if !stderr.is_empty() {
-            stderr
-        } else {
-            "no output".to_string()
-        };
         return Err(AppError::Assertion(format!(
-            "python helper `{command}` returned empty stdout: {rendered}"
+            "python helper `{command}` returned empty stdout: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-
     Ok(serde_json::from_str(&stdout)?)
 }
 
@@ -1719,123 +1895,104 @@ fn list_key_for_command(command: &str) -> &str {
 
 fn parse_python_id_name_entities(
     payload: &Value,
-    list_key: &str,
+    key: &str,
     warnings: &mut Vec<String>,
 ) -> Vec<IdNameEntity> {
-    let status = payload.get("status").and_then(Value::as_str).unwrap_or("");
-    if status != "ok" {
+    if payload.get("status").and_then(Value::as_str) != Some("ok") {
         warnings.push(format!(
-            "python helper returned non-ok status for `{list_key}`: {payload}"
+            "python helper returned non-ok status for `{key}`: {payload}"
         ));
         return Vec::new();
     }
-
-    let Some(items) = payload
+    payload
         .get("data")
-        .and_then(|data| data.get(list_key))
+        .and_then(|data| data.get(key))
         .and_then(Value::as_array)
-    else {
-        warnings.push(format!(
-            "python helper payload missing data.{list_key}: {payload}"
-        ));
-        return Vec::new();
-    };
-
-    let mut entities = Vec::new();
-    for item in items {
-        if let Some(id) = item.get("id").and_then(Value::as_str) {
-            let name = item
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            entities.push(IdNameEntity {
-                id: id.to_string(),
-                name,
-            });
-        }
-    }
-    entities
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    Some(IdNameEntity {
+                        id: item.get("id")?.as_str()?.to_string(),
+                        name: item
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_else(|| {
+            warnings.push(format!(
+                "python helper payload missing data.{key}: {payload}"
+            ));
+            Vec::new()
+        })
 }
 
 fn parse_python_feeds(payload: &Value, warnings: &mut Vec<String>) -> Vec<FeedEntity> {
-    let Some(items) = payload
+    payload
         .get("data")
         .and_then(|data| data.get("feeds"))
         .and_then(Value::as_array)
-    else {
-        warnings.push(format!(
-            "python helper payload missing data.feeds: {payload}"
-        ));
-        return Vec::new();
-    };
-
-    let mut feeds = Vec::new();
-    for item in items {
-        feeds.push(FeedEntity {
-            feed_type: item
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            name: item
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            status: item
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            currently_syncing: item
-                .get("currently_syncing")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-        });
-    }
-    feeds
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| FeedEntity {
+                    feed_type: json_string(item, "type"),
+                    name: json_string(item, "name"),
+                    status: json_string(item, "status"),
+                    currently_syncing: item
+                        .get("currently_syncing")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                })
+                .collect()
+        })
+        .unwrap_or_else(|| {
+            warnings.push(format!(
+                "python helper payload missing data.feeds: {payload}"
+            ));
+            Vec::new()
+        })
 }
 
 fn parse_python_report_formats(
     payload: &Value,
     warnings: &mut Vec<String>,
 ) -> Vec<ReportFormatEntity> {
-    let Some(items) = payload
+    payload
         .get("data")
         .and_then(|data| data.get("report_formats"))
         .and_then(Value::as_array)
-    else {
-        warnings.push(format!(
-            "python helper payload missing data.report_formats: {payload}"
-        ));
-        return Vec::new();
-    };
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    Some(ReportFormatEntity {
+                        id: item.get("id")?.as_str()?.to_string(),
+                        name: json_string(item, "name"),
+                        extension: json_string(item, "extension"),
+                        content_type: json_string(item, "content_type"),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_else(|| {
+            warnings.push(format!(
+                "python helper payload missing data.report_formats: {payload}"
+            ));
+            Vec::new()
+        })
+}
 
-    let mut formats = Vec::new();
-    for item in items {
-        if let Some(id) = item.get("id").and_then(Value::as_str) {
-            formats.push(ReportFormatEntity {
-                id: id.to_string(),
-                name: item
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                extension: item
-                    .get("extension")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                content_type: item
-                    .get("content_type")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-            });
-        }
-    }
-    formats
+fn json_string(value: &Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn parse_python_target_id(
@@ -1843,25 +2000,23 @@ fn parse_python_target_id(
     command: &str,
     warnings: &mut Vec<String>,
 ) -> Option<String> {
-    let status = payload.get("status").and_then(Value::as_str).unwrap_or("");
-    if status != "ok" {
+    if payload.get("status").and_then(Value::as_str) != Some("ok") {
         warnings.push(format!(
             "{command} python helper returned non-ok status: {payload}"
         ));
         return None;
     }
-
-    let Some(id) = payload
+    let id = payload
         .get("data")
         .and_then(|data| data.get("id"))
         .and_then(Value::as_str)
-    else {
+        .map(str::to_string);
+    if id.is_none() {
         warnings.push(format!(
             "{command} python helper payload missing data.id: {payload}"
         ));
-        return None;
-    };
-    Some(id.to_string())
+    }
+    id
 }
 
 async fn poll_task_status(
@@ -1869,24 +2024,23 @@ async fn poll_task_status(
     task_id: &EntityId,
     timeout: Duration,
 ) -> Result<String, AppError> {
-    let started = tokio::time::Instant::now();
-    let mut last_status = String::from("unknown");
-
+    let started = Instant::now();
+    let mut last = "unknown".to_string();
     while started.elapsed() <= timeout {
-        let response = client.call(get_task(task_id)).await?;
-        assert_status(&response, 200, "get_task")?;
-        if let Some(status) = response.child_text("status") {
-            last_status = status;
-            if last_status != "New" {
-                return Ok(last_status);
+        let response = client
+            .get_task(GetTaskRequest::new(task_id.clone()))
+            .await?;
+        let task = only_item(&response.items, "get_task while polling")?;
+        if let Some(status) = &task.status {
+            last.clone_from(status);
+            if status != "New" {
+                return Ok(last);
             }
         }
-
         sleep(Duration::from_secs(1)).await;
     }
-
     Err(AppError::Assertion(format!(
-        "task {task_id} did not progress within {} seconds; last status: {last_status}",
+        "task {task_id} did not progress within {} seconds; last status: {last}",
         timeout.as_secs()
     )))
 }
@@ -1896,180 +2050,159 @@ async fn connect_client(config: &EnvConfig) -> Result<GmpClient<UnixSocketConnec
     Ok(GmpClient::connect(connection).await?)
 }
 
-fn assert_status(response: &Response, expected: u16, label: &str) -> Result<(), AppError> {
-    let actual = response.status_code().unwrap_or_default();
-    ensure(
-        actual == expected,
-        &format!(
-            "{label} returned status {actual}, expected {expected}. Response: {}",
-            response_summary(response)?
-        ),
-    )
+async fn connect_authenticated(
+    config: &EnvConfig,
+) -> Result<GmpClient<UnixSocketConnection>, AppError> {
+    let mut client = connect_client(config).await?;
+    authenticate(&mut client, config).await?;
+    Ok(client)
 }
 
-fn response_id(response: &Response, label: &str) -> Result<EntityId, AppError> {
-    let id = response.id().ok_or_else(|| {
-        AppError::Assertion(format!("{label} response missing resource id attribute"))
-    })?;
-    parse_entity_id(&id)
+async fn authenticate(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+) -> Result<(), AppError> {
+    let response = client
+        .authenticate(AuthenticateRequest::new(&config.username, &config.password))
+        .await?;
+    assert_typed_status(response.status, &response.status_text, 200, "authenticate")
 }
 
-fn child_entity_id(response: &Response, child_name: &str) -> Result<EntityId, AppError> {
-    let id = response
-        .child_text(child_name)
-        .ok_or_else(|| AppError::Assertion(format!("response missing <{child_name}> element")))?;
-    parse_entity_id(&id)
+fn create_localhost_target(
+    name: &str,
+    port_list_id: EntityId,
+) -> Result<CreateTargetRequest, AppError> {
+    let localhost = TargetHost::from_str("127.0.0.1")?;
+    let hosts = TargetHosts::new([localhost], [])?;
+    Ok(CreateTargetRequest::new(
+        name,
+        hosts,
+        TargetPortSelection::PortList(port_list_id),
+    ))
 }
 
 fn parse_entity_id(value: &str) -> Result<EntityId, AppError> {
     EntityId::from_str(value).map_err(|_| AppError::InvalidEntityId(value.to_string()))
 }
 
-fn create_localhost_target(
-    name: &str,
-    port_list_id: EntityId,
-) -> Result<impl gvm_protocol::Request, AppError> {
-    let localhost = TargetHost::from_str("127.0.0.1")?;
-    let hosts = TargetHosts::new([localhost], [])?;
-    let ports = TargetPortSelection::PortList(port_list_id);
-    Ok(create_target(name, CreateTargetOpts::new(hosts, ports))?)
+fn first_meta_id<T, F>(items: &[T], meta: F, label: &str) -> Result<EntityId, AppError>
+where
+    F: Fn(&T) -> &gvm_gmp::responses::EntityMeta,
+{
+    items
+        .first()
+        .map(|item| meta(item).id.clone())
+        .ok_or_else(|| AppError::Assertion(format!("expected at least one {label}")))
 }
 
-fn count_elements(response: &Response, element_name: &str) -> Result<usize, AppError> {
-    let xml = response.as_str()?;
-    let mut reader = Reader::from_str(xml);
-    let mut count = 0_usize;
+fn only_item<'a, T>(items: &'a [T], label: &str) -> Result<&'a T, AppError> {
+    ensure(
+        items.len() == 1,
+        &format!("{label} returned {} items, expected exactly 1", items.len()),
+    )?;
+    Ok(&items[0])
+}
 
-    loop {
-        match reader.read_event()? {
-            Event::Start(ref event) | Event::Empty(ref event)
-                if event.name().as_ref() == element_name.as_bytes() =>
-            {
-                count += 1;
+fn assert_one_id<T, F>(items: &[T], id: F, expected: &EntityId, label: &str) -> Result<(), AppError>
+where
+    F: Fn(&T) -> &EntityId,
+{
+    let item = only_item(items, label)?;
+    ensure(
+        id(item) == expected,
+        &format!("{label} detail returned an unexpected ID"),
+    )
+}
+
+fn assert_typed_status(
+    actual: u16,
+    status_text: &str,
+    expected: u16,
+    label: &str,
+) -> Result<(), AppError> {
+    ensure(
+        actual == expected,
+        &format!("{label} returned status {actual} ({status_text}), expected exactly {expected}"),
+    )
+}
+
+fn assert_server_error(
+    error: GvmError,
+    expected_status: u16,
+    message_terms: &[&str],
+    label: &str,
+) -> Result<(), AppError> {
+    match error {
+        GvmError::Server { status, message } => {
+            ensure(
+                status == expected_status,
+                &format!("{label} returned server status {status}, expected {expected_status}"),
+            )?;
+            let lower = message.to_ascii_lowercase();
+            for term in message_terms {
+                ensure(
+                    lower.contains(&term.to_ascii_lowercase()),
+                    &format!("{label} server error `{message}` did not contain `{term}`"),
+                )?;
             }
-            Event::Eof => break,
-            _ => {}
+            Ok(())
         }
+        other => Err(AppError::Assertion(format!(
+            "{label} returned {other}, expected a typed server error"
+        ))),
     }
-
-    Ok(count)
 }
 
-fn first_element_id(response: &Response, element_name: &str) -> Result<EntityId, AppError> {
-    let xml = response.as_str()?;
-    let mut reader = Reader::from_str(xml);
-
-    loop {
-        match reader.read_event()? {
-            Event::Start(ref event) | Event::Empty(ref event)
-                if event.name().as_ref() == element_name.as_bytes() =>
-            {
-                for attribute in event.attributes().flatten() {
-                    if attribute.key.as_ref() == b"id" {
-                        let value = attribute
-                            .decode_and_unescape_value(reader.decoder())?
-                            .into_owned();
-                        return parse_entity_id(&value);
-                    }
-                }
-            }
-            Event::Eof => break,
-            _ => {}
-        }
+fn assert_missing<T>(result: Result<T, GvmError>, resource: &str) -> Result<(), AppError> {
+    match result {
+        Ok(_) => Err(AppError::Assertion(format!(
+            "deleted {resource} unexpectedly remained available"
+        ))),
+        Err(error) => assert_server_error(error, 404, &["find", resource], resource),
     }
-
-    Err(AppError::Assertion(format!(
-        "response did not contain <{element_name} id=\"...\">"
-    )))
 }
 
-fn first_nvt_oid(response: &Response) -> Result<String, AppError> {
-    let xml = response.as_str()?;
-    let mut reader = Reader::from_str(xml);
-
-    loop {
-        match reader.read_event()? {
-            Event::Start(ref event) | Event::Empty(ref event)
-                if event.name().as_ref() == b"nvt" =>
-            {
-                for attribute in event.attributes().flatten() {
-                    if attribute.key.as_ref() == b"oid" {
-                        return Ok(attribute
-                            .decode_and_unescape_value(reader.decoder())?
-                            .into_owned());
-                    }
-                }
-            }
-            Event::Eof => break,
-            _ => {}
-        }
-    }
-
-    Err(AppError::Assertion(
-        "response did not contain <nvt oid=\"...\">".to_string(),
-    ))
+async fn delete_and_verify_port_list(
+    client: &mut GmpClient<UnixSocketConnection>,
+    tracker: &mut CleanupTracker,
+    id: &EntityId,
+) -> Result<(), AppError> {
+    let deleted = client
+        .delete_port_list(DeletePortListRequest::new(id.clone(), true))
+        .await?;
+    assert_typed_status(
+        deleted.status,
+        &deleted.status_text,
+        200,
+        "delete_port_list",
+    )?;
+    CleanupTracker::untrack(&mut tracker.port_list_ids, id);
+    assert_missing(
+        client
+            .get_port_list(GetPortListRequest::new(id.clone()))
+            .await,
+        "port list",
+    )
 }
 
-fn response_contains(response: &Response, needle: &str) -> Result<bool, AppError> {
-    Ok(response.as_str()?.contains(needle))
+async fn assert_missing_credential(
+    client: &mut GmpClient<UnixSocketConnection>,
+    id: &EntityId,
+) -> Result<(), AppError> {
+    assert_missing(
+        client.execute(GetCredentialRequest::new(id.clone())).await,
+        "credential",
+    )
 }
 
-fn response_summary(response: &Response) -> Result<String, AppError> {
-    let xml = response.as_str()?;
-    Ok(xml.chars().take(240).collect())
+fn run_suffix() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("{}-{nanos}", std::process::id())
 }
 
-/// Find all `<element_name>` elements whose `<name>` child matches `target_name`,
-/// returning their `id` attributes.
-fn find_elements_by_name(
-    xml: &str,
-    element_name: &str,
-    target_name: &str,
-) -> Result<Vec<String>, AppError> {
-    let mut reader = Reader::from_str(xml);
-    let mut ids = Vec::new();
-    let mut current_id: Option<String> = None;
-    let mut inside_element = false;
-    let mut inside_name = false;
-
-    loop {
-        match reader.read_event()? {
-            Event::Start(ref e) if e.name().as_ref() == element_name.as_bytes() => {
-                inside_element = true;
-                current_id = None;
-                for attr in e.attributes().flatten() {
-                    if attr.key.as_ref() == b"id" {
-                        current_id = Some(
-                            attr.decode_and_unescape_value(reader.decoder())?
-                                .into_owned(),
-                        );
-                    }
-                }
-            }
-            Event::End(ref e) if e.name().as_ref() == element_name.as_bytes() => {
-                inside_element = false;
-                current_id = None;
-            }
-            Event::Start(ref e) if inside_element && e.name().as_ref() == b"name" => {
-                inside_name = true;
-            }
-            Event::End(ref e) if e.name().as_ref() == b"name" => {
-                inside_name = false;
-            }
-            Event::Text(ref e) if inside_element && inside_name => {
-                let name = String::from_utf8_lossy(e.as_ref()).into_owned();
-                if name == target_name {
-                    if let Some(ref id) = current_id {
-                        ids.push(id.clone());
-                    }
-                }
-            }
-            Event::Eof => break,
-            _ => {}
-        }
-    }
-    Ok(ids)
-}
 fn ensure(condition: bool, message: &str) -> Result<(), AppError> {
     if condition {
         Ok(())
@@ -2082,11 +2215,8 @@ fn log_pass(step: &str, label: &str) {
     log_line(&format!("[pass] {step} {label}"));
 }
 
-fn log_cleanup_result(action: &str, id: &str, status: Option<u16>) {
-    let rendered_status = status
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-    log_line(&format!("[cleanup] {action} {id} -> {rendered_status}"));
+fn log_cleanup_result(action: &str, id: &EntityId, status: u16) {
+    log_line(&format!("[cleanup] {action} {id} -> {status}"));
 }
 
 fn log_line(message: &str) {
@@ -2095,17 +2225,120 @@ fn log_line(message: &str) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+
     use super::*;
-    use gvm_protocol::Request;
+    use gvm_gmp::{GmpRequestCodec, GmpRequestError};
+
+    #[derive(Debug)]
+    struct FakeSession(usize);
+
+    #[derive(Default)]
+    struct FakeReadiness {
+        plans: VecDeque<VecDeque<Result<usize, &'static str>>>,
+        connects: usize,
+        authentications: usize,
+        disconnects: usize,
+    }
+
+    impl FeedReadinessBackend for FakeReadiness {
+        type Session = FakeSession;
+
+        async fn connect(&mut self) -> Result<Self::Session, ReadinessFailure> {
+            let index = self.connects;
+            self.connects += 1;
+            Ok(FakeSession(index))
+        }
+
+        async fn authenticate(
+            &mut self,
+            _session: &mut Self::Session,
+        ) -> Result<(), ReadinessFailure> {
+            self.authentications += 1;
+            Ok(())
+        }
+
+        async fn scan_config_count(
+            &mut self,
+            session: &mut Self::Session,
+        ) -> Result<usize, ReadinessFailure> {
+            self.plans
+                .get_mut(session.0)
+                .and_then(VecDeque::pop_front)
+                .unwrap_or(Ok(1))
+                .map_err(|message| ReadinessFailure::Dropped(message.to_string()))
+        }
+
+        async fn disconnect(&mut self, _session: &mut Self::Session) {
+            self.disconnects += 1;
+        }
+    }
+
+    fn test_policy() -> ReadinessPolicy {
+        ReadinessPolicy {
+            timeout: Duration::from_secs(1),
+            poll_interval: Duration::ZERO,
+            max_reconnects: 2,
+        }
+    }
 
     #[test]
-    fn localhost_target_uses_validated_hosts_and_port_list() -> Result<(), AppError> {
-        let request = create_localhost_target("e2e-target", parse_entity_id("port-list")?)?;
+    fn empty_feed_polls_authenticate_only_once_for_one_session() {
+        let mut fake = FakeReadiness {
+            plans: VecDeque::from([VecDeque::from([Ok(0), Ok(0), Ok(3)])]),
+            ..FakeReadiness::default()
+        };
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(wait_for_feed(&mut fake, test_policy()))
+            .expect("feed becomes ready");
+        assert_eq!(fake.connects, 1);
+        assert_eq!(fake.authentications, 1);
+        assert_eq!(fake.disconnects, 1);
+    }
 
+    #[test]
+    fn dropped_feed_connection_reconnects_and_reauthenticates() {
+        let mut fake = FakeReadiness {
+            plans: VecDeque::from([
+                VecDeque::from([Ok(0), Err("peer reset")]),
+                VecDeque::from([Ok(2)]),
+            ]),
+            ..FakeReadiness::default()
+        };
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(wait_for_feed(&mut fake, test_policy()))
+            .expect("feed becomes ready after reconnect");
+        assert_eq!(fake.connects, 2);
+        assert_eq!(fake.authentications, 2);
+        assert_eq!(fake.disconnects, 2);
+    }
+
+    #[test]
+    fn canonical_target_request_uses_validated_hosts_and_port_list() -> Result<(), AppError> {
+        let request = create_localhost_target("e2e-target", parse_entity_id("port-list")?)?;
         assert_eq!(
-            request.to_bytes(),
+            request.encode(GmpVersion(22, 7)).expect("valid request"),
             b"<create_target><name>e2e-target</name><hosts>127.0.0.1</hosts><exclude_hosts></exclude_hosts><port_list id=\"port-list\"/></create_target>"
         );
         Ok(())
+    }
+
+    #[test]
+    fn invalid_credential_is_rejected_without_exposing_secret() {
+        let mut request = CreateCredentialRequest::new("invalid");
+        request.credential_type = Some(CredentialType::UsernamePassword);
+        request.login = Some(String::new());
+        request.password = Some(SECRET_SENTINEL.to_string());
+        let error = request
+            .validate()
+            .expect_err("empty credential login must be rejected");
+        assert!(matches!(error, GmpRequestError::InvalidField { .. }));
+        assert!(!format!("{request:?} {error}").contains(SECRET_SENTINEL));
     }
 }

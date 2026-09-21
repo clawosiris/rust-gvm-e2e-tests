@@ -94,7 +94,7 @@ Trigger via **workflow_dispatch** at [Actions → E2E Tests → Run workflow](..
 
 | Input | Default | Description |
 |-------|---------|-------------|
-| `rust-gvm-ref` | `main` | rust-gvm branch/tag/SHA to test |
+| `rust-gvm-ref` | audited SHA | rust-gvm branch/tag/full SHA, resolved and logged as an immutable commit |
 | `gvm-rools-ref` | `main` | gvm-rools branch/tag/SHA to test |
 | `gvm-version` | `stable` | GVM runtime image tag to test |
 | `run-scan` | `false` | Run extended scan test (~10min+) |
@@ -104,7 +104,11 @@ Trigger via **workflow_dispatch** at [Actions → E2E Tests → Run workflow](..
 `gvm-version` is applied to the runtime stack images (`gvmd`, `ospd-openvas`, `openvas-scanner`, `pg-gvm`, `redis-server`, `gpg-data`, and `gsad`). The default `stable` tag is the supported CI baseline. Other tags, such as `oldstable`, `edge`, or release-specific tags like `22.4`/`23.x`, are useful for compatibility checks when the Greenbone registry publishes the tag across all runtime images. Use `clean=true` when switching stack versions on a persistent runner to avoid reusing incompatible database or feed volumes.
 
 ### Cross-Repo Triggering
-Component repos can trigger E2E tests via `repository_dispatch`:
+Component repos can trigger E2E tests via `repository_dispatch`. The workflow
+resolves branch or tag inputs once, records the full commit in the build
+provenance, pins all four rust-gvm crates and `Cargo.lock` to that commit, and
+rejects an image whose revision label differs. rust-gvm's protected-main
+trigger passes its source `github.sha` directly.
 
 ```bash
 gh api repos/clawosiris/rust-gvm-e2e-tests/dispatches \

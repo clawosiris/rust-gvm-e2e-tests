@@ -23,6 +23,14 @@ A comprehensive overview of all test cases covered by the rust-gvm E2E test suit
 | 08 | Get target | Retrieve target by UUID, verify attributes |
 | 09 | Delete target | Remove target, handle dependencies |
 | 10 | Verify deletion | Confirm 404 response for deleted target |
+| 11 | Validation-before-mutation | Invalid canonical credential input is rejected without creating a resource |
+| 12 | Secret redaction | Sentinel credential value is absent from captured wire diagnostics |
+| 13 | Reconnect | A fresh connection explicitly re-authenticates before reuse |
+
+Readiness separately proves that feed polling authenticates once per healthy
+connection and reconnects with a new authenticated session after a transport
+failure. Polling and reconnects are bounded by explicit environment-controlled
+deadlines.
 
 ### Extended Scan (opt-in)
 
@@ -201,6 +209,11 @@ A comprehensive overview of all test cases covered by the rust-gvm E2E test suit
 ---
 
 ## Test Infrastructure
+
+The runner image builds with Rust 1.89. The workflow resolves the requested
+rust-gvm ref to one full commit SHA, pins the manifest and lockfile to that SHA,
+records it in `runner-provenance.txt`, and labels the image with the same
+revision. The live job fails before starting the stack if those values disagree.
 
 ### Fixtures & Dependencies
 
