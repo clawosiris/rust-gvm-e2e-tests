@@ -6,38 +6,60 @@ set -euo pipefail
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker/docker-compose.yml}"
 SOCKET_PATH="/run/gvmd/gvmd.sock"
-MAX_WAIT=600
+READINESS_TIMEOUT_SECS="${E2E_READINESS_TIMEOUT_SECS:-8400}"
+
+if ! [[ "$READINESS_TIMEOUT_SECS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: E2E_READINESS_TIMEOUT_SECS must be a positive integer" >&2
+  exit 2
+fi
+
+STARTED_AT=$(date +%s)
+NEXT_STATUS_AT=60
 
 echo "=== Waiting for gvmd to accept connections ==="
 ready=false
-for i in $(seq 1 "$MAX_WAIT"); do
+while true; do
+  elapsed=$(( $(date +%s) - STARTED_AT ))
+  if (( elapsed >= READINESS_TIMEOUT_SECS )); then
+    break
+  fi
   # Check that gvmd is actually listening, not just that the socket file exists
   if docker compose -f "$COMPOSE_FILE" exec -T gvmd \
       bash -c "echo '<get_version/>' | socat - UNIX-CONNECT:${SOCKET_PATH} 2>/dev/null | grep -q 'get_version_response'" 2>/dev/null; then
-    echo "gvmd responding on socket after ${i}s"
+    echo "gvmd responding on socket after ${elapsed}s"
     ready=true
     break
   fi
-  if (( i % 60 == 0 )); then
-    echo "Still waiting for gvmd... (${i}s)"
+  if (( elapsed >= NEXT_STATUS_AT )); then
+    echo "Still waiting for gvmd... (${elapsed}s)"
     docker compose -f "$COMPOSE_FILE" logs --tail=3 gvmd 2>&1 | tail -3 || true
+    NEXT_STATUS_AT=$((elapsed + 60))
   fi
   sleep 1
 done
 
 if [ "$ready" != "true" ]; then
-  echo "ERROR: gvmd did not respond within ${MAX_WAIT}s"
+  echo "ERROR: gvmd did not respond within the ${READINESS_TIMEOUT_SECS}s readiness budget"
   docker compose -f "$COMPOSE_FILE" logs --tail=20 gvmd 2>&1 || true
   docker compose -f "$COMPOSE_FILE" logs --tail=10 pg-gvm 2>&1 || true
   exit 1
 fi
 
+elapsed=$(( $(date +%s) - STARTED_AT ))
+remaining=$((READINESS_TIMEOUT_SECS - elapsed))
+if (( remaining <= 0 )); then
+  echo "ERROR: no readiness budget remains for feed validation" >&2
+  exit 1
+fi
+
 echo "=== Running GMP readiness check via rust-gvm (polling for feed data) ==="
+echo "Feed readiness budget: ${remaining}s (${elapsed}s already used for socket readiness)"
 docker compose -f "$COMPOSE_FILE" --profile runner run --rm -T \
   --entrypoint "" \
   -e GVM_ADMIN_USER="${GVM_ADMIN_USER:-admin}" \
   -e GVM_ADMIN_PASS="${GVM_ADMIN_PASS:-admin}" \
   -e GVM_SOCKET_PATH="${GVM_SOCKET_PATH:-/run/gvmd/gvmd.sock}" \
+  -e E2E_READINESS_TIMEOUT_SECS="$remaining" \
   rust-gvm-e2e \
   gvm-community-e2e --mode wait-ready
 
