@@ -235,7 +235,17 @@ jobs:
           docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=50 openvasd
           docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=30 redis-server
           docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=30 pg-gvm
-      - name: Checkpoint PostgreSQL before teardown
+      - name: Quiesce GVM writers before checkpoint
+        if: always()
+        timeout-minutes: 10
+        run: |
+          if ! docker compose -f ${{ env.COMPOSE_FILE }} stop --timeout 120 \
+              gsad openvasd ospd-openvas gvmd; then
+            echo "Graceful writer shutdown failed; forcing only non-database services" >&2
+            docker compose -f ${{ env.COMPOSE_FILE }} kill \
+              gsad openvasd ospd-openvas gvmd || true
+          fi
+      - name: Checkpoint PostgreSQL after writers stop
         if: always()
         timeout-minutes: 10
         run: |
@@ -249,4 +259,6 @@ jobs:
       - name: Stop containers (keep volumes)
         if: always()
         timeout-minutes: 10
-        run: docker compose -f ${{ env.COMPOSE_FILE }} down --timeout 300
+        run: |
+          docker compose -f ${{ env.COMPOSE_FILE }} stop --timeout 300 pg-gvm
+          docker compose -f ${{ env.COMPOSE_FILE }} down --timeout 60

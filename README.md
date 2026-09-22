@@ -123,9 +123,15 @@ Tests run on a permanent Hetzner VPS runner with Docker. Persistent volumes keep
 - **Clean run** (`clean=true`): Full feed sync (~60-90 min)
 - **Warm run** (`clean=false`): Reuses cached feed data (~13 min)
 
-The workflow checkpoints PostgreSQL before teardown and allows up to five
-minutes for its final shutdown checkpoint. This keeps the persistent database
-warm without interrupting PostgreSQL while it is flushing dirty pages.
+The stack does not start `gvmd` until PostgreSQL and each mounted feed-data
+producer report healthy. This matters because the stock `gvmd` entrypoint
+imports scan configurations once at startup; merely waiting for the data
+containers to start can leave that one-time import with an empty volume.
+
+During teardown the workflow first quiesces the GVM writers, checkpoints
+PostgreSQL, and then allows up to five minutes for PostgreSQL's clean stop.
+This keeps the persistent database warm without interrupting it while dirty
+pages are still being flushed.
 
 ### Runner Image
 A custom Docker image (`rust-gvm-e2e-runner`) is built in CI with:

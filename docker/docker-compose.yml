@@ -182,17 +182,17 @@ services:
       - psql-socket:/var/run/postgresql
     depends_on:
       pg-gvm:
-        condition: service_started
+        condition: service_healthy
       scap-data:
-        condition: service_started
+        condition: service_healthy
       cert-bund-data:
-        condition: service_started
+        condition: service_healthy
       dfn-cert-data:
-        condition: service_started
+        condition: service_healthy
       data-objects:
-        condition: service_started
+        condition: service_healthy
       report-formats:
-        condition: service_started
+        condition: service_healthy
       ospd-openvas:
         condition: service_started
 
