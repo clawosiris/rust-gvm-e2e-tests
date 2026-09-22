@@ -21,7 +21,7 @@ on:
         description: "rust-gvm branch, tag, or full SHA to resolve and test"
         required: false
         type: string
-        default: "f0e62a41d6155a28fcf37a6ee9c4f4bc9a3cde2b"
+        default: "a1297f6fdf1b3b0123f404986b772dbe2b8dfe95"
       gvm-rools-ref:
         description: "gvm-rools branch/tag/SHA to test against"
         required: false
@@ -75,11 +75,11 @@ jobs:
       - name: Resolve component refs
         id: refs
         run: |
-          RUST_GVM_REF="f0e62a41d6155a28fcf37a6ee9c4f4bc9a3cde2b"
+          RUST_GVM_REF="a1297f6fdf1b3b0123f404986b772dbe2b8dfe95"
           GVM_ROOLS_REF="main"
           GVM_VERSION="stable"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            RUST_GVM_REF="${{ inputs.rust-gvm-ref || 'f0e62a41d6155a28fcf37a6ee9c4f4bc9a3cde2b' }}"
+            RUST_GVM_REF="${{ inputs.rust-gvm-ref || 'a1297f6fdf1b3b0123f404986b772dbe2b8dfe95' }}"
             GVM_ROOLS_REF="${{ inputs.gvm-rools-ref || 'main' }}"
             GVM_VERSION="${{ inputs['gvm-version'] || 'stable' }}"
           elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then
@@ -235,6 +235,18 @@ jobs:
           docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=50 openvasd
           docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=30 redis-server
           docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=30 pg-gvm
+      - name: Checkpoint PostgreSQL before teardown
+        if: always()
+        timeout-minutes: 10
+        run: |
+          if [ -n "$(docker compose -f ${{ env.COMPOSE_FILE }} ps --status running --quiet pg-gvm)" ]; then
+            docker compose -f ${{ env.COMPOSE_FILE }} exec -T --user postgres pg-gvm \
+              psql --host=/var/run/postgresql --dbname=postgres --no-psqlrc \
+              -v ON_ERROR_STOP=1 -c 'CHECKPOINT;'
+          else
+            echo "PostgreSQL is not running; skipping checkpoint"
+          fi
       - name: Stop containers (keep volumes)
         if: always()
-        run: docker compose -f ${{ env.COMPOSE_FILE }} down
+        timeout-minutes: 10
+        run: docker compose -f ${{ env.COMPOSE_FILE }} down --timeout 300

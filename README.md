@@ -123,6 +123,10 @@ Tests run on a permanent Hetzner VPS runner with Docker. Persistent volumes keep
 - **Clean run** (`clean=true`): Full feed sync (~60-90 min)
 - **Warm run** (`clean=false`): Reuses cached feed data (~13 min)
 
+The workflow checkpoints PostgreSQL before teardown and allows up to five
+minutes for its final shutdown checkpoint. This keeps the persistent database
+warm without interrupting PostgreSQL while it is flushing dirty pages.
+
 ### Runner Image
 A custom Docker image (`rust-gvm-e2e-runner`) is built in CI with:
 - Pre-compiled `gvm-community-e2e` binary (Rust test harness)

@@ -73,6 +73,12 @@ cargo run --example e2e_gvm_community -- --mode wait-ready
 
 - If `wait-ready.sh` fails on socket detection, inspect the stack with `docker compose ps` and `docker compose logs gvmd pg-gvm ospd-openvas`.
 - If the socket exists but `get_version` keeps failing, `gvmd` is usually still importing feed or waiting on PostgreSQL. Keep the data volumes and retry once the logs quiet down.
+- If `pg-gvm` repeatedly exits with `pg_ctl: server did not start in time`
+  while an end-of-recovery checkpoint is active, stop the retry loop. The stock
+  image's startup wait can interrupt the same recovery repeatedly; recover the
+  volume with one uninterrupted PostgreSQL start or use an explicitly
+  authorized clean bootstrap. Increasing the gvmd readiness timeout does not
+  repair that state.
 - If the extended scan flow fails quickly, confirm the container host permits raw socket capabilities for `ospd-openvas`.
 - On harness failure, capture logs with:
 
