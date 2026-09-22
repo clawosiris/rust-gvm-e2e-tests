@@ -230,6 +230,8 @@ jobs:
       - name: Collect logs on failure
         if: failure()
         run: |
+          docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=30 \
+            scap-data cert-bund-data dfn-cert-data data-objects report-formats
           docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=200 gvmd
           docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=50 ospd-openvas
           docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=50 openvasd

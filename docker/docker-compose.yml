@@ -20,6 +20,12 @@ services:
     image: registry.community.greenbone.net/community/scap-data:latest
     environment:
       KEEP_ALIVE: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "test -e $$STATE_FILE"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 10m
     volumes:
       - scap-data:/mnt
 

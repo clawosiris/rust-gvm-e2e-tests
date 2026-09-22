@@ -78,6 +78,10 @@ cargo run --example e2e_gvm_community -- --mode wait-ready
   containers became healthy. The stock entrypoint performs the configuration
   import once; a `service_started` dependency can race the initial volume copy,
   and waiting longer inside the already-running `gvmd` does not rerun it.
+- The SCAP producer copies roughly 10 GiB before creating its health marker.
+  Keep its Compose start period long enough for that copy; the image default
+  can mark it unhealthy after about two minutes even though the copy is still
+  making progress.
 - If `pg-gvm` repeatedly exits with `pg_ctl: server did not start in time`
   while an end-of-recovery checkpoint is active, stop the retry loop. The stock
   image's startup wait can interrupt the same recovery repeatedly; recover the

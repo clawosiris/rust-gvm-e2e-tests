@@ -127,6 +127,9 @@ The stack does not start `gvmd` until PostgreSQL and each mounted feed-data
 producer report healthy. This matters because the stock `gvmd` entrypoint
 imports scan configurations once at startup; merely waiting for the data
 containers to start can leave that one-time import with an empty volume.
+The SCAP image copies roughly 10 GiB before its health marker appears, so its
+healthcheck receives a ten-minute start period instead of being declared
+unhealthy while that copy is still progressing.
 
 During teardown the workflow first quiesces the GVM writers, checkpoints
 PostgreSQL, and then allows up to five minutes for PostgreSQL's clean stop.
