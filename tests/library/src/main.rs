@@ -535,6 +535,8 @@ impl FeedReadinessState {
 enum ReadinessFailure {
     #[error("connection dropped: {0}")]
     Dropped(String),
+    #[error("feed database unavailable: {0}")]
+    Unavailable(String),
     #[error(transparent)]
     Fatal(#[from] AppError),
 }
@@ -581,17 +583,10 @@ impl FeedReadinessBackend for LiveReadinessBackend<'_> {
         &mut self,
         session: &mut Self::Session,
     ) -> Result<FeedReadinessState, ReadinessFailure> {
-        let response = match session.get_scan_configs(GetScanConfigsRequest::new()).await {
-            Ok(response) => response,
-            Err(error) if feed_database_unavailable(&error, "SCAP") => {
-                return Ok(FeedReadinessState {
-                    scan_config_count: 0,
-                    scap_ready: false,
-                    cert_ready: false,
-                });
-            }
-            Err(error) => return Err(classify_gvm_readiness_error(error)),
-        };
+        let response = session
+            .get_scan_configs(GetScanConfigsRequest::new())
+            .await
+            .map_err(classify_gvm_readiness_error)?;
         assert_typed_status(
             response.status,
             &response.status_text,
@@ -623,7 +618,6 @@ impl FeedReadinessBackend for LiveReadinessBackend<'_> {
                 .map_err(ReadinessFailure::Fatal)?;
                 true
             }
-            Err(error) if feed_database_unavailable(&error, "SCAP") => false,
             Err(error) => return Err(classify_gvm_readiness_error(error)),
         };
         let cert_probe = GetCertBundAdvisoriesRequest {
@@ -641,7 +635,6 @@ impl FeedReadinessBackend for LiveReadinessBackend<'_> {
                 .map_err(ReadinessFailure::Fatal)?;
                 true
             }
-            Err(error) if feed_database_unavailable(&error, "CERT") => false,
             Err(error) => return Err(classify_gvm_readiness_error(error)),
         };
 
@@ -665,6 +658,9 @@ fn classify_readiness_error(error: AppError) -> ReadinessFailure {
 }
 
 fn classify_gvm_readiness_error(error: GvmError) -> ReadinessFailure {
+    if feed_database_unavailable(&error, "SCAP") || feed_database_unavailable(&error, "CERT") {
+        return ReadinessFailure::Unavailable(error.to_string());
+    }
     match error {
         GvmError::Connection(_) | GvmError::Timeout(_) => {
             ReadinessFailure::Dropped(error.to_string())
@@ -718,6 +714,11 @@ async fn wait_for_feed<B: FeedReadinessBackend>(
                 bounded_sleep(policy.poll_interval, deadline).await;
                 continue;
             }
+            Err(ReadinessFailure::Unavailable(message)) => {
+                log_readiness_unavailable("connect", &message);
+                bounded_sleep(policy.poll_interval, deadline).await;
+                continue;
+            }
             Err(ReadinessFailure::Fatal(error)) => return Err(error),
         };
 
@@ -726,6 +727,12 @@ async fn wait_for_feed<B: FeedReadinessBackend>(
             Err(ReadinessFailure::Dropped(message)) => {
                 backend.disconnect(&mut session).await;
                 reconnects = register_reconnect(reconnects, policy.max_reconnects, &message)?;
+                bounded_sleep(policy.poll_interval, deadline).await;
+                continue;
+            }
+            Err(ReadinessFailure::Unavailable(message)) => {
+                backend.disconnect(&mut session).await;
+                log_readiness_unavailable("authenticate", &message);
                 bounded_sleep(policy.poll_interval, deadline).await;
                 continue;
             }
@@ -765,6 +772,12 @@ async fn wait_for_feed<B: FeedReadinessBackend>(
                     bounded_sleep(policy.poll_interval, deadline).await;
                     break;
                 }
+                Err(ReadinessFailure::Unavailable(message)) => {
+                    backend.disconnect(&mut session).await;
+                    log_readiness_unavailable("feed probe", &message);
+                    bounded_sleep(policy.poll_interval, deadline).await;
+                    break;
+                }
                 Err(ReadinessFailure::Fatal(error)) => {
                     backend.disconnect(&mut session).await;
                     return Err(error);
@@ -772,6 +785,12 @@ async fn wait_for_feed<B: FeedReadinessBackend>(
             }
         }
     }
+}
+
+fn log_readiness_unavailable(phase: &str, diagnostic: &str) {
+    log_line(&format!(
+        "feed readiness prerequisite unavailable during {phase}; opening a fresh session after the poll interval: {diagnostic}"
+    ));
 }
 
 fn readiness_label(ready: bool) -> &'static str {
@@ -797,7 +816,7 @@ fn register_reconnect(current: usize, maximum: usize, diagnostic: &str) -> Resul
 
 fn readiness_timeout(started: Instant, polls: usize, reconnects: usize) -> AppError {
     AppError::Assertion(format!(
-        "feed readiness timed out after {}s ({polls} feed poll(s), {reconnects} reconnect(s)); gvmd authenticated successfully but scan-config, SCAP, and CERT readiness was not reached",
+        "feed readiness timed out after {}s ({polls} feed poll(s), {reconnects} reconnect(s)); gvmd protocol responded but authenticated scan-config, SCAP, and CERT readiness was not reached",
         started.elapsed().as_secs()
     ))
 }
@@ -2348,6 +2367,7 @@ mod tests {
         plans: VecDeque<VecDeque<Result<FeedReadinessState, &'static str>>>,
         connects: usize,
         authentications: usize,
+        unavailable_authentications: usize,
         disconnects: usize,
     }
 
@@ -2365,6 +2385,12 @@ mod tests {
             _session: &mut Self::Session,
         ) -> Result<(), ReadinessFailure> {
             self.authentications += 1;
+            if self.unavailable_authentications > 0 {
+                self.unavailable_authentications -= 1;
+                return Err(ReadinessFailure::Unavailable(
+                    "server error (status 400): The SCAP database is required".to_string(),
+                ));
+            }
             Ok(())
         }
 
@@ -2471,6 +2497,27 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_authentication_opens_a_fresh_session_without_using_reconnect_budget() {
+        let mut fake = FakeReadiness {
+            unavailable_authentications: 1,
+            ..FakeReadiness::default()
+        };
+        let policy = ReadinessPolicy {
+            max_reconnects: 0,
+            ..test_policy()
+        };
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(wait_for_feed(&mut fake, policy))
+            .expect("expected database startup state is retryable");
+        assert_eq!(fake.connects, 2);
+        assert_eq!(fake.authentications, 2);
+        assert_eq!(fake.disconnects, 2);
+    }
+
+    #[test]
     fn database_required_server_errors_are_retryable_only_for_the_named_feed() {
         let scap = GvmError::Server {
             status: 400,
@@ -2484,6 +2531,14 @@ mod tests {
         assert!(feed_database_unavailable(&scap, "SCAP"));
         assert!(!feed_database_unavailable(&scap, "CERT"));
         assert!(!feed_database_unavailable(&other, "SCAP"));
+        assert!(matches!(
+            classify_gvm_readiness_error(scap),
+            ReadinessFailure::Unavailable(_)
+        ));
+        assert!(matches!(
+            classify_gvm_readiness_error(other),
+            ReadinessFailure::Fatal(_)
+        ));
     }
 
     #[test]
