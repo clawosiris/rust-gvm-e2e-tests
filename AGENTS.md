@@ -150,7 +150,7 @@ Readiness has two distinct gates:
 
 1. `docker/scripts/wait-ready.sh` probes gvmd over the Unix socket.
 2. `gvm-community-e2e --mode wait-ready` authenticates and waits for usable
-   feed-backed data such as scan configs.
+   scan configs plus available SCAP and CERT databases.
 
 Do not replace both with a container-health or socket-file check. A present
 socket does not mean gvmd is responsive, and a responsive gvmd does not mean

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Wait for gvmd readiness.
 # Phase 1 (bash): Wait for gvmd to accept connections on socket (inside container)
-# Phase 2 (rust): Poll feeds + scan configs via GMP (inside runner container)
+# Phase 2 (rust): Poll scan configs + SCAP/CERT databases via GMP (inside runner container)
 set -euo pipefail
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker/docker-compose.yml}"
@@ -52,7 +52,7 @@ if (( remaining <= 0 )); then
   exit 1
 fi
 
-echo "=== Running GMP readiness check via rust-gvm (polling for feed data) ==="
+echo "=== Running GMP readiness check via rust-gvm (polling for feed-backed data) ==="
 echo "Feed readiness budget: ${remaining}s (${elapsed}s already used for socket readiness)"
 docker compose -f "$COMPOSE_FILE" --profile runner run --rm -T \
   --entrypoint "" \
@@ -63,4 +63,4 @@ docker compose -f "$COMPOSE_FILE" --profile runner run --rm -T \
   rust-gvm-e2e \
   gvm-community-e2e --mode wait-ready
 
-echo "=== gvmd is ready (feeds loaded) ==="
+echo "=== gvmd is ready (scan configs, SCAP, and CERT available) ==="

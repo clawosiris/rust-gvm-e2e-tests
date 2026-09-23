@@ -518,6 +518,19 @@ struct ReadinessPolicy {
     max_reconnects: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct FeedReadinessState {
+    scan_config_count: usize,
+    scap_ready: bool,
+    cert_ready: bool,
+}
+
+impl FeedReadinessState {
+    fn is_ready(self) -> bool {
+        self.scan_config_count > 0 && self.scap_ready && self.cert_ready
+    }
+}
+
 #[derive(Debug, Error)]
 enum ReadinessFailure {
     #[error("connection dropped: {0}")]
@@ -532,10 +545,10 @@ trait FeedReadinessBackend {
 
     async fn connect(&mut self) -> Result<Self::Session, ReadinessFailure>;
     async fn authenticate(&mut self, session: &mut Self::Session) -> Result<(), ReadinessFailure>;
-    async fn scan_config_count(
+    async fn feed_state(
         &mut self,
         session: &mut Self::Session,
-    ) -> Result<usize, ReadinessFailure>;
+    ) -> Result<FeedReadinessState, ReadinessFailure>;
     async fn disconnect(&mut self, session: &mut Self::Session);
 }
 
@@ -564,10 +577,10 @@ impl FeedReadinessBackend for LiveReadinessBackend<'_> {
             .map_err(ReadinessFailure::Fatal)
     }
 
-    async fn scan_config_count(
+    async fn feed_state(
         &mut self,
         session: &mut Self::Session,
-    ) -> Result<usize, ReadinessFailure> {
+    ) -> Result<FeedReadinessState, ReadinessFailure> {
         let response = session
             .get_scan_configs(GetScanConfigsRequest::new())
             .await
@@ -579,7 +592,57 @@ impl FeedReadinessBackend for LiveReadinessBackend<'_> {
             "get_scan_configs readiness",
         )
         .map_err(ReadinessFailure::Fatal)?;
-        Ok(response.items.len())
+        let scan_config_count = response.items.len();
+        if scan_config_count == 0 {
+            return Ok(FeedReadinessState {
+                scan_config_count,
+                scap_ready: false,
+                cert_ready: false,
+            });
+        }
+
+        let cve_probe = GetCvesRequest {
+            filter_string: Some("rows=1".to_string()),
+            ..GetCvesRequest::default()
+        };
+        let scap_ready = match session.get_cves(cve_probe).await {
+            Ok(response) => {
+                assert_typed_status(
+                    response.status,
+                    &response.status_text,
+                    200,
+                    "get_cves readiness",
+                )
+                .map_err(ReadinessFailure::Fatal)?;
+                true
+            }
+            Err(error) if feed_database_unavailable(&error, "SCAP") => false,
+            Err(error) => return Err(classify_gvm_readiness_error(error)),
+        };
+        let cert_probe = GetCertBundAdvisoriesRequest {
+            filter_string: Some("rows=1".to_string()),
+            ..GetCertBundAdvisoriesRequest::default()
+        };
+        let cert_ready = match session.get_cert_bund_advisories(cert_probe).await {
+            Ok(response) => {
+                assert_typed_status(
+                    response.status,
+                    &response.status_text,
+                    200,
+                    "get_cert_bund_advisories readiness",
+                )
+                .map_err(ReadinessFailure::Fatal)?;
+                true
+            }
+            Err(error) if feed_database_unavailable(&error, "CERT") => false,
+            Err(error) => return Err(classify_gvm_readiness_error(error)),
+        };
+
+        Ok(FeedReadinessState {
+            scan_config_count,
+            scap_ready,
+            cert_ready,
+        })
     }
 
     async fn disconnect(&mut self, session: &mut Self::Session) {
@@ -601,6 +664,14 @@ fn classify_gvm_readiness_error(error: GvmError) -> ReadinessFailure {
         }
         other => ReadinessFailure::Fatal(AppError::Client(other)),
     }
+}
+
+fn feed_database_unavailable(error: &GvmError, database: &str) -> bool {
+    matches!(
+        error,
+        GvmError::Server { message, .. }
+            if message.eq_ignore_ascii_case(&format!("The {database} database is required"))
+    )
 }
 
 async fn wait_ready(config: &EnvConfig) -> Result<(), AppError> {
@@ -663,17 +734,21 @@ async fn wait_for_feed<B: FeedReadinessBackend>(
                 return Err(readiness_timeout(started, polls, reconnects));
             }
             polls += 1;
-            match backend.scan_config_count(&mut session).await {
-                Ok(count) if count > 0 => {
+            match backend.feed_state(&mut session).await {
+                Ok(state) if state.is_ready() => {
                     backend.disconnect(&mut session).await;
                     log_line(&format!(
-                        "feed ready after {polls} poll(s) and {reconnects} reconnect(s): {count} scan config(s)"
+                        "feed ready after {polls} poll(s) and {reconnects} reconnect(s): {} scan config(s), SCAP and CERT databases available",
+                        state.scan_config_count
                     ));
                     return Ok(());
                 }
-                Ok(_) => {
+                Ok(state) => {
                     log_line(&format!(
-                        "waiting for feed data: poll {polls} returned zero scan configs; authenticated session retained"
+                        "waiting for feed data: poll {polls}: {} scan config(s), SCAP {}, CERT {}; authenticated session retained",
+                        state.scan_config_count,
+                        readiness_label(state.scap_ready),
+                        readiness_label(state.cert_ready),
                     ));
                     bounded_sleep(policy.poll_interval, deadline).await;
                 }
@@ -692,6 +767,14 @@ async fn wait_for_feed<B: FeedReadinessBackend>(
     }
 }
 
+fn readiness_label(ready: bool) -> &'static str {
+    if ready {
+        "ready"
+    } else {
+        "not ready"
+    }
+}
+
 fn register_reconnect(current: usize, maximum: usize, diagnostic: &str) -> Result<usize, AppError> {
     let next = current + 1;
     if next > maximum {
@@ -707,7 +790,7 @@ fn register_reconnect(current: usize, maximum: usize, diagnostic: &str) -> Resul
 
 fn readiness_timeout(started: Instant, polls: usize, reconnects: usize) -> AppError {
     AppError::Assertion(format!(
-        "feed readiness timed out after {}s ({polls} feed poll(s), {reconnects} reconnect(s)); gvmd authenticated successfully but no usable scan config became available",
+        "feed readiness timed out after {}s ({polls} feed poll(s), {reconnects} reconnect(s)); gvmd authenticated successfully but scan-config, SCAP, and CERT readiness was not reached",
         started.elapsed().as_secs()
     ))
 }
@@ -2255,7 +2338,7 @@ mod tests {
 
     #[derive(Default)]
     struct FakeReadiness {
-        plans: VecDeque<VecDeque<Result<usize, &'static str>>>,
+        plans: VecDeque<VecDeque<Result<FeedReadinessState, &'static str>>>,
         connects: usize,
         authentications: usize,
         disconnects: usize,
@@ -2278,20 +2361,36 @@ mod tests {
             Ok(())
         }
 
-        async fn scan_config_count(
+        async fn feed_state(
             &mut self,
             session: &mut Self::Session,
-        ) -> Result<usize, ReadinessFailure> {
+        ) -> Result<FeedReadinessState, ReadinessFailure> {
             self.plans
                 .get_mut(session.0)
                 .and_then(VecDeque::pop_front)
-                .unwrap_or(Ok(1))
+                .unwrap_or(Ok(ready_feed(1)))
                 .map_err(|message| ReadinessFailure::Dropped(message.to_string()))
         }
 
         async fn disconnect(&mut self, _session: &mut Self::Session) {
             self.disconnects += 1;
         }
+    }
+
+    fn feed_state(
+        scan_config_count: usize,
+        scap_ready: bool,
+        cert_ready: bool,
+    ) -> FeedReadinessState {
+        FeedReadinessState {
+            scan_config_count,
+            scap_ready,
+            cert_ready,
+        }
+    }
+
+    fn ready_feed(scan_config_count: usize) -> FeedReadinessState {
+        feed_state(scan_config_count, true, true)
     }
 
     fn test_policy() -> ReadinessPolicy {
@@ -2305,7 +2404,11 @@ mod tests {
     #[test]
     fn empty_feed_polls_authenticate_only_once_for_one_session() {
         let mut fake = FakeReadiness {
-            plans: VecDeque::from([VecDeque::from([Ok(0), Ok(0), Ok(3)])]),
+            plans: VecDeque::from([VecDeque::from([
+                Ok(feed_state(0, false, false)),
+                Ok(feed_state(0, false, false)),
+                Ok(ready_feed(3)),
+            ])]),
             ..FakeReadiness::default()
         };
         Builder::new_current_thread()
@@ -2323,8 +2426,8 @@ mod tests {
     fn dropped_feed_connection_reconnects_and_reauthenticates() {
         let mut fake = FakeReadiness {
             plans: VecDeque::from([
-                VecDeque::from([Ok(0), Err("peer reset")]),
-                VecDeque::from([Ok(2)]),
+                VecDeque::from([Ok(feed_state(0, false, false)), Err("peer reset")]),
+                VecDeque::from([Ok(ready_feed(2))]),
             ]),
             ..FakeReadiness::default()
         };
@@ -2337,6 +2440,43 @@ mod tests {
         assert_eq!(fake.connects, 2);
         assert_eq!(fake.authentications, 2);
         assert_eq!(fake.disconnects, 2);
+    }
+
+    #[test]
+    fn feed_waits_for_scap_and_cert_databases_on_the_authenticated_session() {
+        let mut fake = FakeReadiness {
+            plans: VecDeque::from([VecDeque::from([
+                Ok(feed_state(3, false, true)),
+                Ok(feed_state(3, true, false)),
+                Ok(ready_feed(3)),
+            ])]),
+            ..FakeReadiness::default()
+        };
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(wait_for_feed(&mut fake, test_policy()))
+            .expect("feed databases become ready");
+        assert_eq!(fake.connects, 1);
+        assert_eq!(fake.authentications, 1);
+        assert_eq!(fake.disconnects, 1);
+    }
+
+    #[test]
+    fn database_required_server_errors_are_retryable_only_for_the_named_feed() {
+        let scap = GvmError::Server {
+            status: 400,
+            message: "The SCAP database is required".to_string(),
+        };
+        let other = GvmError::Server {
+            status: 400,
+            message: "The task database is required".to_string(),
+        };
+
+        assert!(feed_database_unavailable(&scap, "SCAP"));
+        assert!(!feed_database_unavailable(&scap, "CERT"));
+        assert!(!feed_database_unavailable(&other, "SCAP"));
     }
 
     #[test]

@@ -130,6 +130,9 @@ containers to start can leave that one-time import with an empty volume.
 The SCAP image copies roughly 10 GiB before its health marker appears, so its
 healthcheck receives a ten-minute start period instead of being declared
 unhealthy while that copy is still progressing.
+After gvmd starts, the GMP readiness gate also waits for scan configurations
+and successful SCAP and CERT queries. A gvmd upgrade can rebuild those
+databases after authentication and scan configurations are already available.
 
 During teardown the workflow first quiesces the GVM writers, checkpoints
 PostgreSQL, and then allows up to five minutes for PostgreSQL's clean stop.
