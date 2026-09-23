@@ -6,10 +6,10 @@ rust-version = "1.89"
 publish = false
 
 [dependencies]
-gvm-client = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "c27d234288c45537cec5d7cc326d4fc3fcd9a7c7" }
-gvm-connection = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "c27d234288c45537cec5d7cc326d4fc3fcd9a7c7" }
-gvm-gmp = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "c27d234288c45537cec5d7cc326d4fc3fcd9a7c7" }
-gvm-protocol = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "c27d234288c45537cec5d7cc326d4fc3fcd9a7c7" }
+gvm-client = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "b85443167a9fd642b2d91f6f347db048de5aba9c" }
+gvm-connection = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "b85443167a9fd642b2d91f6f347db048de5aba9c" }
+gvm-gmp = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "b85443167a9fd642b2d91f6f347db048de5aba9c" }
+gvm-protocol = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "b85443167a9fd642b2d91f6f347db048de5aba9c" }
 quick-xml = "0.41"
 serde_json = "1"
 thiserror = "2"

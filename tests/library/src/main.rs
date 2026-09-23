@@ -51,7 +51,7 @@ use gvm_gmp::commands::tasks::{
     CreateTaskRequest, DeleteTaskRequest, GetTaskRequest, StartTaskRequest, StopTaskRequest,
 };
 use gvm_gmp::commands::version::GetVersionRequest;
-use gvm_gmp::enums::{CredentialType, EntityType, FilterType};
+use gvm_gmp::enums::{CredentialType, EntityType, FilterType, PortRangeType};
 use gvm_gmp::responses::ActionResponse;
 use gvm_gmp::{
     EntityId, GmpRequest, GmpVersion, TargetHost, TargetHostError, TargetHosts, TargetHostsError,
@@ -1134,6 +1134,19 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
         &port_list_id,
         "port list",
     )?;
+    ensure(
+        matches!(
+            only_item(&detail.items, "created port list")?
+                .port_ranges
+                .as_slice(),
+            [range]
+                if range.start == 1
+                    && range.end == 100
+                    && range.range_type == PortRangeType::Tcp
+                    && range.comment.is_empty()
+        ),
+        "created port list did not decode the expected structured TCP range",
+    )?;
     let mut replace = ModifyPortListRequest::new(port_list_id.clone());
     replace.name = Some(format!("e2e-679-port-list-replaced-{suffix}"));
     replace.comment = Some("replacement preserves ranges".to_string());
@@ -1148,10 +1161,16 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
         .get_port_list(GetPortListRequest::new(port_list_id.clone()))
         .await?;
     ensure(
-        only_item(&replaced_detail.items, "replaced port list")?
-            .port_range
-            .as_deref()
-            .is_some_and(|ranges| ranges.contains("1-100")),
+        matches!(
+            only_item(&replaced_detail.items, "replaced port list")?
+                .port_ranges
+                .as_slice(),
+            [range]
+                if range.start == 1
+                    && range.end == 100
+                    && range.range_type == PortRangeType::Tcp
+                    && range.comment.is_empty()
+        ),
         "port-list metadata replacement unexpectedly discarded the port range",
     )?;
     delete_and_verify_port_list(&mut client, tracker, &port_list_id).await?;

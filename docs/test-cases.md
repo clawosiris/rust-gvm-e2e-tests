@@ -59,7 +59,7 @@ deadlines.
 | # | Test Case | What It Validates |
 |---|-----------|-------------------|
 | 01 | Create port list | Custom port range (T:1-100) |
-| 02 | Get port list | Retrieve by UUID |
+| 02 | Get port list | Retrieve by UUID, decode the structured range fields, and verify metadata replacement preserves the range |
 | 03 | Delete port list | Removal with ultimate flag |
 | 04 | Verify absent | 404 after deletion |
 
