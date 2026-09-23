@@ -127,9 +127,10 @@ The stack does not start `gvmd` until PostgreSQL and each mounted feed-data
 producer report healthy. This matters because the stock `gvmd` entrypoint
 imports scan configurations once at startup; merely waiting for the data
 containers to start can leave that one-time import with an empty volume.
-The SCAP image copies roughly 10 GiB before its health marker appears, so its
-healthcheck receives a ten-minute start period instead of being declared
-unhealthy while that copy is still progressing.
+The SCAP image copies roughly 10 GiB before its health marker appears, and the
+CERT producers can also outlive their image-default startup window after a feed
+refresh. Their healthchecks receive a ten-minute start period instead of being
+declared unhealthy while those copies are still progressing.
 After gvmd starts, the GMP readiness gate also waits for scan configurations
 and successful SCAP and CERT queries. A gvmd upgrade can rebuild those
 databases after authentication and scan configurations are already available.

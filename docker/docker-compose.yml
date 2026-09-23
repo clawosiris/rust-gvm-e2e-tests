@@ -33,6 +33,12 @@ services:
     image: registry.community.greenbone.net/community/cert-bund-data:latest
     environment:
       KEEP_ALIVE: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "test -e $$STATE_FILE"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 10m
     volumes:
       - cert-data:/mnt
 
@@ -40,6 +46,12 @@ services:
     image: registry.community.greenbone.net/community/dfn-cert-data:latest
     environment:
       KEEP_ALIVE: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "test -e $$STATE_FILE"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 10m
     volumes:
       - cert-data:/mnt
     depends_on:
