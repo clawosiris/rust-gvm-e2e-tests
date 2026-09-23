@@ -120,8 +120,21 @@ gh api repos/clawosiris/rust-gvm-e2e-tests/dispatches \
 
 ### Self-Hosted Runner
 Tests run on a permanent Hetzner VPS runner with Docker. Persistent volumes keep GVM feed data between runs:
-- **Clean run** (`clean=true`): Full feed sync and database rebuild (up to ~3h)
+- **Clean run** (`clean=true`): Full feed sync and database rebuild (can exceed 4h)
 - **Warm run** (`clean=false`): Reuses cached feed data (~13 min)
+
+Every workflow event uses the same Compose project and named volumes on the
+self-hosted runner. The workflow therefore has one repository-wide concurrency
+group and does not cancel an in-progress run. This prevents another pull
+request, dispatch, or newer commit from interrupting a multi-hour SCAP import
+and leaving the persistent database without a completed SCAP schema.
+
+Before starting `gvmd`, the workflow starts and waits for `pg-gvm`, then sets
+`max_wal_size=16GB` and `checkpoint_timeout=30min` with `ALTER SYSTEM` and
+reloads PostgreSQL. The image defaults caused roughly 0.8 GB checkpoints every
+one to two minutes during the initial SCAP import; the runner has sufficient
+disk and memory for these workflow-specific settings, which persist with the
+database volume and avoid that checkpoint churn.
 
 The stack does not start `gvmd` until PostgreSQL and each mounted feed-data
 producer report healthy. This matters because the stock `gvmd` entrypoint
@@ -134,6 +147,12 @@ declared unhealthy while those copies are still progressing.
 After gvmd starts, the GMP readiness gate also waits for scan configurations
 and successful SCAP and CERT queries. A gvmd upgrade can rebuild those
 databases after authentication and scan configurations are already available.
+An uninterrupted clean recovery has exceeded four hours, including more than
+90 minutes in final CPE aggregation. The shared Bash/Rust readiness budget is
+therefore 350 minutes (21,000 seconds), enclosed by GitHub's maximum 360-minute
+step timeout and a 420-minute E2E job so tests and teardown retain their own
+margin. These are hard safety ceilings only; none of the scan-config, SCAP, or
+CERT readiness assertions are relaxed.
 
 During teardown the workflow first quiesces the GVM writers, checkpoints
 PostgreSQL, and then allows up to five minutes for PostgreSQL's clean stop.

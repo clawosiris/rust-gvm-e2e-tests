@@ -1,8 +1,8 @@
 name: E2E Tests
 
 concurrency:
-  group: e2e-tests-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
+  group: rust-gvm-e2e-shared-compose-state
+  cancel-in-progress: false
 
 on:
   workflow_dispatch:
@@ -162,7 +162,7 @@ jobs:
     name: GVM Community E2E
     needs: build-runner
     runs-on: [self-hosted]
-    timeout-minutes: 240
+    timeout-minutes: 420
     env:
       GVM_VERSION: ${{ needs.build-runner.outputs['gvm-version'] }}
     steps:
@@ -188,11 +188,24 @@ jobs:
         run: docker compose -f ${{ env.COMPOSE_FILE }} down -v
       - name: Pull container images
         run: docker compose -f ${{ env.COMPOSE_FILE }} pull
+      - name: Start PostgreSQL
+        run: |
+          docker compose -f ${{ env.COMPOSE_FILE }} up -d --wait \
+            --wait-timeout 300 pg-gvm
+      - name: Tune PostgreSQL for SCAP bootstrap
+        run: |
+          docker compose -f ${{ env.COMPOSE_FILE }} exec -T --user postgres pg-gvm \
+            psql --host=/var/run/postgresql --dbname=postgres --no-psqlrc \
+            -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER SYSTEM SET max_wal_size = '16GB';
+          ALTER SYSTEM SET checkpoint_timeout = '30min';
+          SELECT pg_reload_conf();
+          SQL
       - name: Start GVM stack
         run: docker compose -f ${{ env.COMPOSE_FILE }} up -d
       - name: Wait for gvmd readiness
         run: bash docker/scripts/wait-ready.sh
-        timeout-minutes: 210
+        timeout-minutes: 360
       - name: Run smoke tests
         run: |
           docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run \
