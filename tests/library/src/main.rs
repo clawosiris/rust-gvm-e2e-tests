@@ -1184,11 +1184,12 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
         .collect::<BTreeSet<_>>();
     let mut invalid = CreateCredentialRequest::new(format!("e2e-679-invalid-{suffix}"));
     invalid.credential_type = Some(CredentialType::UsernamePassword);
-    invalid.login = Some("invalid-without-password".to_string());
+    invalid.login = Some(String::new());
+    invalid.password = Some(SECRET_SENTINEL.to_string());
     let validation_error = client
         .create_credential(invalid)
         .await
-        .expect_err("missing password must fail before transport");
+        .expect_err("empty login must fail before transport");
     ensure(
         matches!(validation_error, GvmError::Request(_)),
         "invalid credential did not fail as a request-validation error",
@@ -2359,5 +2360,16 @@ mod tests {
             .expect_err("empty credential login must be rejected");
         assert!(matches!(error, GmpRequestError::InvalidField { .. }));
         assert!(!format!("{request:?} {error}").contains(SECRET_SENTINEL));
+    }
+
+    #[test]
+    fn username_password_credential_may_omit_password_for_gvmd_autogeneration() {
+        let mut request = CreateCredentialRequest::new("generated-password");
+        request.credential_type = Some(CredentialType::UsernamePassword);
+        request.login = Some("generated-password-user".to_string());
+
+        request
+            .validate()
+            .expect("gvmd accepts an omitted password and generates one");
     }
 }
