@@ -581,10 +581,17 @@ impl FeedReadinessBackend for LiveReadinessBackend<'_> {
         &mut self,
         session: &mut Self::Session,
     ) -> Result<FeedReadinessState, ReadinessFailure> {
-        let response = session
-            .get_scan_configs(GetScanConfigsRequest::new())
-            .await
-            .map_err(classify_gvm_readiness_error)?;
+        let response = match session.get_scan_configs(GetScanConfigsRequest::new()).await {
+            Ok(response) => response,
+            Err(error) if feed_database_unavailable(&error, "SCAP") => {
+                return Ok(FeedReadinessState {
+                    scan_config_count: 0,
+                    scap_ready: false,
+                    cert_ready: false,
+                });
+            }
+            Err(error) => return Err(classify_gvm_readiness_error(error)),
+        };
         assert_typed_status(
             response.status,
             &response.status_text,
