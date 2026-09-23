@@ -162,7 +162,7 @@ jobs:
     name: GVM Community E2E
     needs: build-runner
     runs-on: [self-hosted]
-    timeout-minutes: 180
+    timeout-minutes: 240
     env:
       GVM_VERSION: ${{ needs.build-runner.outputs['gvm-version'] }}
     steps:
@@ -192,7 +192,7 @@ jobs:
         run: docker compose -f ${{ env.COMPOSE_FILE }} up -d
       - name: Wait for gvmd readiness
         run: bash docker/scripts/wait-ready.sh
-        timeout-minutes: 150
+        timeout-minutes: 210
       - name: Run smoke tests
         run: |
           docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run \

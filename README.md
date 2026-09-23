@@ -120,7 +120,7 @@ gh api repos/clawosiris/rust-gvm-e2e-tests/dispatches \
 
 ### Self-Hosted Runner
 Tests run on a permanent Hetzner VPS runner with Docker. Persistent volumes keep GVM feed data between runs:
-- **Clean run** (`clean=true`): Full feed sync (~60-90 min)
+- **Clean run** (`clean=true`): Full feed sync and database rebuild (up to ~3h)
 - **Warm run** (`clean=false`): Reuses cached feed data (~13 min)
 
 The stack does not start `gvmd` until PostgreSQL and each mounted feed-data

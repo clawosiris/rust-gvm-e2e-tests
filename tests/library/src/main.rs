@@ -156,7 +156,7 @@ impl EnvConfig {
     fn from_env() -> Self {
         Self {
             task_progress_timeout_secs: env_u64("E2E_TASK_PROGRESS_TIMEOUT_SECS", 90),
-            readiness_timeout_secs: env_u64("E2E_READINESS_TIMEOUT_SECS", 8400),
+            readiness_timeout_secs: env_u64("E2E_READINESS_TIMEOUT_SECS", 10_800),
             readiness_poll_interval_secs: env_u64("E2E_READINESS_POLL_INTERVAL_SECS", 30),
             readiness_max_reconnects: env_usize("E2E_READINESS_MAX_RECONNECTS", 12),
             username: env::var("GVM_ADMIN_USER").unwrap_or_else(|_| "admin".to_string()),
