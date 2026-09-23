@@ -2200,7 +2200,7 @@ async fn delete_and_verify_port_list(
         client
             .get_port_list(GetPortListRequest::new(id.clone()))
             .await,
-        "port list",
+        "port_list",
     )
 }
 
