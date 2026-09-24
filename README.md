@@ -154,6 +154,12 @@ step timeout and a 420-minute E2E job so tests and teardown retain their own
 margin. These are hard safety ceilings only; none of the scan-config, SCAP, or
 CERT readiness assertions are relaxed.
 
+Once the workflow has explicitly started the stack, every ephemeral runner
+invocation uses `docker compose run --no-deps`. The runner mounts the existing
+gvmd socket and must not ask Compose to recreate or traverse the live stack's
+one-shot dependency graph; stack lifecycle remains solely with the explicit
+`up -d` and teardown steps.
+
 During teardown the workflow first quiesces the GVM writers, checkpoints
 PostgreSQL, and then allows up to five minutes for PostgreSQL's clean stop.
 This keeps the persistent database warm without interrupting it while dirty
