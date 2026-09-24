@@ -66,6 +66,7 @@ const SMOKE_TARGET_PREFIX: &str = "e2e-679-smoke-target";
 const SCAN_TARGET_PREFIX: &str = "e2e-679-scan-target";
 const SCAN_TASK_PREFIX: &str = "e2e-679-scan-task";
 const SECRET_SENTINEL: &str = "e2e-679-secret-sentinel-do-not-log";
+const STOP_TASK_ACCEPTED_STATUS: u16 = 202;
 
 fn main() -> ExitCode {
     match Builder::new_multi_thread().enable_all().build() {
@@ -1124,7 +1125,12 @@ async fn run_scan_suite(
         let stopped = client
             .stop_task(StopTaskRequest::new(task_id.clone()))
             .await?;
-        assert_typed_status(stopped.status, &stopped.status_text, 200, "stop_task")?;
+        assert_typed_status(
+            stopped.status,
+            &stopped.status_text,
+            STOP_TASK_ACCEPTED_STATUS,
+            "stop_task",
+        )?;
     }
 
     let report = client
@@ -2573,5 +2579,18 @@ mod tests {
         request
             .validate()
             .expect("gvmd accepts an omitted password and generates one");
+    }
+
+    #[test]
+    fn stop_task_requires_exact_accepted_status() {
+        assert_eq!(STOP_TASK_ACCEPTED_STATUS, 202);
+        assert_typed_status(
+            STOP_TASK_ACCEPTED_STATUS,
+            "OK, request submitted",
+            STOP_TASK_ACCEPTED_STATUS,
+            "stop_task",
+        )
+        .expect("stop_task accepts GMP status 202");
+        assert!(assert_typed_status(200, "OK", STOP_TASK_ACCEPTED_STATUS, "stop_task",).is_err());
     }
 }
