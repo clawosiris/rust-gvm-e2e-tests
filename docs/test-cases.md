@@ -27,10 +27,12 @@ A comprehensive overview of all test cases covered by the rust-gvm E2E test suit
 | 12 | Secret redaction | Sentinel credential value is absent from captured wire diagnostics |
 | 13 | Reconnect | A fresh connection explicitly re-authenticates before reuse |
 
-Readiness separately proves that feed polling authenticates once per healthy
-connection and reconnects with a new authenticated session after a transport
-failure. Polling and reconnects are bounded by explicit environment-controlled
-deadlines.
+Readiness separately proves that scan configurations are present, no feed
+reports an active synchronization, and bounded SCAP CVE, SCAP CPE, and CERT
+queries succeed before any suite starts. Feed polling authenticates once per
+healthy connection and reconnects with a new authenticated session after a
+transport failure. Polling and reconnects are bounded by explicit
+environment-controlled deadlines.
 
 ### Extended Scan (opt-in)
 
