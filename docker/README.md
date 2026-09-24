@@ -23,11 +23,11 @@ cd tests/e2e/gvm-community
 cp .env.example .env
 
 docker compose up -d
-docker compose run --rm rust-gvm-e2e ./tests/e2e/gvm-community/scripts/wait-ready.sh
-docker compose run --rm rust-gvm-e2e ./tests/e2e/gvm-community/scripts/run-smoke.sh
+docker compose run --no-deps --rm rust-gvm-e2e ./tests/e2e/gvm-community/scripts/wait-ready.sh
+docker compose run --no-deps --rm rust-gvm-e2e ./tests/e2e/gvm-community/scripts/run-smoke.sh
 
 # Optional extended scan flow
-E2E_RUN_SCAN=1 docker compose run --rm rust-gvm-e2e ./tests/e2e/gvm-community/scripts/run-smoke.sh
+E2E_RUN_SCAN=1 docker compose run --no-deps --rm rust-gvm-e2e ./tests/e2e/gvm-community/scripts/run-smoke.sh
 ```
 
 To test a different published GVM runtime image tag, set `GVM_VERSION` before pulling or starting the stack:

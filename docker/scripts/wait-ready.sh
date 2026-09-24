@@ -54,7 +54,7 @@ fi
 
 echo "=== Running GMP readiness check via rust-gvm (polling for feed-backed data) ==="
 echo "Feed readiness budget: ${remaining}s (${elapsed}s already used for socket readiness)"
-docker compose -f "$COMPOSE_FILE" --profile runner run --rm -T \
+docker compose -f "$COMPOSE_FILE" --profile runner run --no-deps --rm -T \
   --entrypoint "" \
   -e GVM_ADMIN_USER="${GVM_ADMIN_USER:-admin}" \
   -e GVM_ADMIN_PASS="${GVM_ADMIN_PASS:-admin}" \
