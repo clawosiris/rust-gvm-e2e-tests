@@ -1,8 +1,8 @@
 name: E2E Tests
 
 concurrency:
-  group: e2e-tests-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
+  group: rust-gvm-e2e-shared-compose-state
+  cancel-in-progress: false
 
 on:
   workflow_dispatch:
@@ -18,10 +18,10 @@ on:
         type: boolean
         default: false
       rust-gvm-ref:
-        description: "rust-gvm branch/tag/SHA to test against"
+        description: "rust-gvm branch, tag, or full SHA to resolve and test"
         required: false
         type: string
-        default: "main"
+        default: "b85443167a9fd642b2d91f6f347db048de5aba9c"
       gvm-rools-ref:
         description: "gvm-rools branch/tag/SHA to test against"
         required: false
@@ -67,6 +67,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       rust-gvm-ref: ${{ steps.refs.outputs.rust-gvm-ref }}
+      rust-gvm-sha: ${{ steps.refs.outputs.rust-gvm-sha }}
       gvm-rools-ref: ${{ steps.refs.outputs.gvm-rools-ref }}
       gvm-version: ${{ steps.refs.outputs['gvm-version'] }}
     steps:
@@ -74,11 +75,11 @@ jobs:
       - name: Resolve component refs
         id: refs
         run: |
-          RUST_GVM_REF="main"
+          RUST_GVM_REF="b85443167a9fd642b2d91f6f347db048de5aba9c"
           GVM_ROOLS_REF="main"
           GVM_VERSION="stable"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            RUST_GVM_REF="${{ inputs.rust-gvm-ref || 'main' }}"
+            RUST_GVM_REF="${{ inputs.rust-gvm-ref || 'b85443167a9fd642b2d91f6f347db048de5aba9c' }}"
             GVM_ROOLS_REF="${{ inputs.gvm-rools-ref || 'main' }}"
             GVM_VERSION="${{ inputs['gvm-version'] || 'stable' }}"
           elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then
@@ -94,9 +95,38 @@ jobs:
               GVM_VERSION="$PAYLOAD_GVM_VERSION"
             fi
           fi
+          resolve_rust_gvm_sha() {
+            local ref="$1"
+            local repository="https://github.com/greenbone-hive/rust-gvm.git"
+            local sha=""
+            if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              sha="$ref"
+            else
+              sha=$(git ls-remote --exit-code "$repository" "refs/heads/$ref" | awk 'NR == 1 { print $1 }') || true
+              if [ -z "$sha" ]; then
+                sha=$(git ls-remote --exit-code "$repository" "refs/tags/$ref^{}" | awk 'NR == 1 { print $1 }') || true
+              fi
+              if [ -z "$sha" ]; then
+                sha=$(git ls-remote --exit-code "$repository" "refs/tags/$ref" | awk 'NR == 1 { print $1 }') || true
+              fi
+            fi
+            if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Unable to resolve rust-gvm ref '$ref' to one full commit SHA" >&2
+              return 1
+            fi
+            printf '%s\n' "$sha"
+          }
+          RUST_GVM_SHA=$(resolve_rust_gvm_sha "$RUST_GVM_REF")
+          echo "rust-gvm input ref: $RUST_GVM_REF"
+          echo "rust-gvm resolved SHA: $RUST_GVM_SHA"
           echo "rust-gvm-ref=$RUST_GVM_REF" >> "$GITHUB_OUTPUT"
+          echo "rust-gvm-sha=$RUST_GVM_SHA" >> "$GITHUB_OUTPUT"
           echo "gvm-rools-ref=$GVM_ROOLS_REF" >> "$GITHUB_OUTPUT"
           echo "gvm-version=$GVM_VERSION" >> "$GITHUB_OUTPUT"
+      - name: Verify runner MSRV contract
+        run: |
+          grep -Fx 'rust-version = "1.89"' tests/library/Cargo.toml
+          grep -Fx 'FROM rust:1.89' docker/Dockerfile.runner
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Build and export runner image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -106,45 +136,76 @@ jobs:
           tags: ${{ env.RUNNER_IMAGE_NAME }}:${{ env.RUNNER_IMAGE_TAG }}
           outputs: type=docker,dest=runner-image.tar
           build-args: |
-            RUST_GVM_REF=${{ steps.refs.outputs.rust-gvm-ref }}
+            RUST_GVM_SHA=${{ steps.refs.outputs.rust-gvm-sha }}
             GVM_ROOLS_REF=${{ steps.refs.outputs.gvm-rools-ref }}
           secrets: |
             github_token=${{ secrets.RELEASE_TOKEN }}
+      - name: Record runner provenance
+        run: |
+          {
+            echo "rust-gvm-input-ref=${{ steps.refs.outputs.rust-gvm-ref }}"
+            echo "rust-gvm-sha=${{ steps.refs.outputs.rust-gvm-sha }}"
+            echo "gvm-rools-ref=${{ steps.refs.outputs.gvm-rools-ref }}"
+            echo "gvm-version=${{ steps.refs.outputs['gvm-version'] }}"
+            echo "runner-rust=1.89"
+          } | tee runner-provenance.txt
+          cat runner-provenance.txt >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: e2e-runner-image
-          path: runner-image.tar
+          path: |
+            runner-image.tar
+            runner-provenance.txt
           retention-days: 1
 
   e2e:
     name: GVM Community E2E
     needs: build-runner
     runs-on: [self-hosted]
-    timeout-minutes: 180
+    timeout-minutes: 420
     env:
       GVM_VERSION: ${{ needs.build-runner.outputs['gvm-version'] }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
       - name: Log component refs under test
         run: |
-          echo "rust-gvm ref: ${{ needs.build-runner.outputs.rust-gvm-ref }}"
+          echo "rust-gvm input ref: ${{ needs.build-runner.outputs.rust-gvm-ref }}"
+          echo "rust-gvm resolved SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}"
           echo "gvm-rools ref: ${{ needs.build-runner.outputs.gvm-rools-ref }}"
           echo "GVM stack version: ${GVM_VERSION}"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: e2e-runner-image
       - name: Load runner image
-        run: docker load -i runner-image.tar && rm -f runner-image.tar
+        run: |
+          docker load -i runner-image.tar
+          rm -f runner-image.tar
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+            "${RUNNER_IMAGE_NAME}:${RUNNER_IMAGE_TAG}")" = "${{ needs.build-runner.outputs.rust-gvm-sha }}"
+          grep -Fx "rust-gvm-sha=${{ needs.build-runner.outputs.rust-gvm-sha }}" runner-provenance.txt
       - name: Clean volumes (if requested)
         if: ${{ inputs.clean == true }}
         run: docker compose -f ${{ env.COMPOSE_FILE }} down -v
       - name: Pull container images
         run: docker compose -f ${{ env.COMPOSE_FILE }} pull
+      - name: Start PostgreSQL
+        run: |
+          docker compose -f ${{ env.COMPOSE_FILE }} up -d --wait \
+            --wait-timeout 300 pg-gvm
+      - name: Tune PostgreSQL for SCAP bootstrap
+        run: |
+          docker compose -f ${{ env.COMPOSE_FILE }} exec -T --user postgres pg-gvm \
+            psql --host=/var/run/postgresql --dbname=postgres --no-psqlrc \
+            -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER SYSTEM SET max_wal_size = '16GB';
+          ALTER SYSTEM SET checkpoint_timeout = '30min';
+          SELECT pg_reload_conf();
+          SQL
       - name: Start GVM stack
         run: docker compose -f ${{ env.COMPOSE_FILE }} up -d
       - name: Wait for gvmd readiness
         run: bash docker/scripts/wait-ready.sh
-        timeout-minutes: 150
+        timeout-minutes: 360
       - name: Run smoke tests
         run: |
           docker compose -f ${{ env.COMPOSE_FILE }} --profile runner run \
@@ -182,11 +243,37 @@ jobs:
       - name: Collect logs on failure
         if: failure()
         run: |
+          docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=30 \
+            scap-data cert-bund-data dfn-cert-data data-objects report-formats
           docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=200 gvmd
           docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=50 ospd-openvas
           docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=50 openvasd
           docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=30 redis-server
           docker compose -f ${{ env.COMPOSE_FILE }} logs --tail=30 pg-gvm
+      - name: Quiesce GVM writers before checkpoint
+        if: always()
+        timeout-minutes: 10
+        run: |
+          if ! docker compose -f ${{ env.COMPOSE_FILE }} stop --timeout 120 \
+              gsad openvasd ospd-openvas gvmd; then
+            echo "Graceful writer shutdown failed; forcing only non-database services" >&2
+            docker compose -f ${{ env.COMPOSE_FILE }} kill \
+              gsad openvasd ospd-openvas gvmd || true
+          fi
+      - name: Checkpoint PostgreSQL after writers stop
+        if: always()
+        timeout-minutes: 10
+        run: |
+          if [ -n "$(docker compose -f ${{ env.COMPOSE_FILE }} ps --status running --quiet pg-gvm)" ]; then
+            docker compose -f ${{ env.COMPOSE_FILE }} exec -T --user postgres pg-gvm \
+              psql --host=/var/run/postgresql --dbname=postgres --no-psqlrc \
+              -v ON_ERROR_STOP=1 -c 'CHECKPOINT;'
+          else
+            echo "PostgreSQL is not running; skipping checkpoint"
+          fi
       - name: Stop containers (keep volumes)
         if: always()
-        run: docker compose -f ${{ env.COMPOSE_FILE }} down
+        timeout-minutes: 10
+        run: |
+          docker compose -f ${{ env.COMPOSE_FILE }} stop --timeout 300 pg-gvm
+          docker compose -f ${{ env.COMPOSE_FILE }} down --timeout 60

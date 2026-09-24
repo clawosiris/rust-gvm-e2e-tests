@@ -20,6 +20,12 @@ services:
     image: registry.community.greenbone.net/community/scap-data:latest
     environment:
       KEEP_ALIVE: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "test -e $$STATE_FILE"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 10m
     volumes:
       - scap-data:/mnt
 
@@ -27,6 +33,12 @@ services:
     image: registry.community.greenbone.net/community/cert-bund-data:latest
     environment:
       KEEP_ALIVE: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "test -e $$STATE_FILE"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 10m
     volumes:
       - cert-data:/mnt
 
@@ -34,6 +46,12 @@ services:
     image: registry.community.greenbone.net/community/dfn-cert-data:latest
     environment:
       KEEP_ALIVE: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "test -e $$STATE_FILE"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 10m
     volumes:
       - cert-data:/mnt
     depends_on:
@@ -82,6 +100,7 @@ services:
   pg-gvm:
     image: registry.community.greenbone.net/community/pg-gvm:${GVM_VERSION:-stable}
     restart: on-failure:10
+    stop_grace_period: 5m
     volumes:
       - psql-data:/var/lib/postgresql
       - psql-socket:/var/run/postgresql
@@ -181,17 +200,17 @@ services:
       - psql-socket:/var/run/postgresql
     depends_on:
       pg-gvm:
-        condition: service_started
+        condition: service_healthy
       scap-data:
-        condition: service_started
+        condition: service_healthy
       cert-bund-data:
-        condition: service_started
+        condition: service_healthy
       dfn-cert-data:
-        condition: service_started
+        condition: service_healthy
       data-objects:
-        condition: service_started
+        condition: service_healthy
       report-formats:
-        condition: service_started
+        condition: service_healthy
       ospd-openvas:
         condition: service_started
 

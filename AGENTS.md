@@ -116,6 +116,8 @@ No arguments currently means smoke mode. The main environment variables are:
 - `GVM_SOCKET_PATH` — defaults to `/run/gvmd/gvmd.sock`.
 - `E2E_RUN_SCAN` — `1`, `true`, or `yes` enables the extended scan from smoke.
 - `E2E_TASK_PROGRESS_TIMEOUT_SECS` — scan progress timeout; defaults to 90.
+- `E2E_READINESS_TIMEOUT_SECS` — combined socket and feed-readiness budget;
+  defaults to 21,000 (350 minutes).
 - `GVM_VERSION` — Compose runtime image tag; defaults to `stable`.
 
 Use `docker compose -f docker/docker-compose.yml ...` from the repository root.
@@ -150,7 +152,7 @@ Readiness has two distinct gates:
 
 1. `docker/scripts/wait-ready.sh` probes gvmd over the Unix socket.
 2. `gvm-community-e2e --mode wait-ready` authenticates and waits for usable
-   feed-backed data such as scan configs.
+   scan configs plus available SCAP and CERT databases.
 
 Do not replace both with a container-health or socket-file check. A present
 socket does not mean gvmd is responsive, and a responsive gvmd does not mean
@@ -164,6 +166,20 @@ The self-hosted runner normally preserves named volumes. Consequences:
   switching incompatible GVM versions.
 - Stale PostgreSQL recovery or leftover E2E resources can fail unchanged code.
   Inspect run provenance and service logs before blaming the tested revision.
+- All workflow events share the same Compose project and named volumes. Keep
+  their concurrency group repository-wide and keep `cancel-in-progress` false:
+  interrupting gvmd while it builds the shadow SCAP schema can leave no usable
+  SCAP database and force the next run to rebuild it from scratch.
+- Before the full stack starts, CI starts and waits for `pg-gvm`, applies
+  `max_wal_size=16GB` and `checkpoint_timeout=30min` with `ALTER SYSTEM`, and
+  reloads PostgreSQL. Keep this runner-capacity-specific tuning in the workflow
+  and ahead of `gvmd`; the image defaults cause excessive checkpoint churn
+  during the first SCAP import.
+- The default readiness budget is 21,000 seconds, the readiness step uses
+  GitHub's maximum 360-minute step timeout, and the E2E job is capped at 420
+  minutes. Keep these ceilings coordinated so clean SCAP/CPE aggregation can
+  finish while tests and teardown retain margin. Longer ceilings must never
+  replace or weaken the authenticated scan-config, SCAP, and CERT assertions.
 - The Compose project and volumes are shared by repository-root invocations.
   Avoid concurrent manual runs against the same host/project.
 - `docker compose down` preserves volumes. `docker/scripts/reset.sh` removes

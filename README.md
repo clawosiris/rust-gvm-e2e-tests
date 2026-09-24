@@ -94,7 +94,7 @@ Trigger via **workflow_dispatch** at [Actions → E2E Tests → Run workflow](..
 
 | Input | Default | Description |
 |-------|---------|-------------|
-| `rust-gvm-ref` | `main` | rust-gvm branch/tag/SHA to test |
+| `rust-gvm-ref` | audited SHA | rust-gvm branch/tag/full SHA, resolved and logged as an immutable commit |
 | `gvm-rools-ref` | `main` | gvm-rools branch/tag/SHA to test |
 | `gvm-version` | `stable` | GVM runtime image tag to test |
 | `run-scan` | `false` | Run extended scan test (~10min+) |
@@ -104,7 +104,11 @@ Trigger via **workflow_dispatch** at [Actions → E2E Tests → Run workflow](..
 `gvm-version` is applied to the runtime stack images (`gvmd`, `ospd-openvas`, `openvas-scanner`, `pg-gvm`, `redis-server`, `gpg-data`, and `gsad`). The default `stable` tag is the supported CI baseline. Other tags, such as `oldstable`, `edge`, or release-specific tags like `22.4`/`23.x`, are useful for compatibility checks when the Greenbone registry publishes the tag across all runtime images. Use `clean=true` when switching stack versions on a persistent runner to avoid reusing incompatible database or feed volumes.
 
 ### Cross-Repo Triggering
-Component repos can trigger E2E tests via `repository_dispatch`:
+Component repos can trigger E2E tests via `repository_dispatch`. The workflow
+resolves branch or tag inputs once, records the full commit in the build
+provenance, pins all four rust-gvm crates and `Cargo.lock` to that commit, and
+rejects an image whose revision label differs. rust-gvm's protected-main
+trigger passes its source `github.sha` directly.
 
 ```bash
 gh api repos/clawosiris/rust-gvm-e2e-tests/dispatches \
@@ -116,8 +120,44 @@ gh api repos/clawosiris/rust-gvm-e2e-tests/dispatches \
 
 ### Self-Hosted Runner
 Tests run on a permanent Hetzner VPS runner with Docker. Persistent volumes keep GVM feed data between runs:
-- **Clean run** (`clean=true`): Full feed sync (~60-90 min)
+- **Clean run** (`clean=true`): Full feed sync and database rebuild (can exceed 4h)
 - **Warm run** (`clean=false`): Reuses cached feed data (~13 min)
+
+Every workflow event uses the same Compose project and named volumes on the
+self-hosted runner. The workflow therefore has one repository-wide concurrency
+group and does not cancel an in-progress run. This prevents another pull
+request, dispatch, or newer commit from interrupting a multi-hour SCAP import
+and leaving the persistent database without a completed SCAP schema.
+
+Before starting `gvmd`, the workflow starts and waits for `pg-gvm`, then sets
+`max_wal_size=16GB` and `checkpoint_timeout=30min` with `ALTER SYSTEM` and
+reloads PostgreSQL. The image defaults caused roughly 0.8 GB checkpoints every
+one to two minutes during the initial SCAP import; the runner has sufficient
+disk and memory for these workflow-specific settings, which persist with the
+database volume and avoid that checkpoint churn.
+
+The stack does not start `gvmd` until PostgreSQL and each mounted feed-data
+producer report healthy. This matters because the stock `gvmd` entrypoint
+imports scan configurations once at startup; merely waiting for the data
+containers to start can leave that one-time import with an empty volume.
+The SCAP image copies roughly 10 GiB before its health marker appears, and the
+CERT producers can also outlive their image-default startup window after a feed
+refresh. Their healthchecks receive a ten-minute start period instead of being
+declared unhealthy while those copies are still progressing.
+After gvmd starts, the GMP readiness gate also waits for scan configurations
+and successful SCAP and CERT queries. A gvmd upgrade can rebuild those
+databases after authentication and scan configurations are already available.
+An uninterrupted clean recovery has exceeded four hours, including more than
+90 minutes in final CPE aggregation. The shared Bash/Rust readiness budget is
+therefore 350 minutes (21,000 seconds), enclosed by GitHub's maximum 360-minute
+step timeout and a 420-minute E2E job so tests and teardown retain their own
+margin. These are hard safety ceilings only; none of the scan-config, SCAP, or
+CERT readiness assertions are relaxed.
+
+During teardown the workflow first quiesces the GVM writers, checkpoints
+PostgreSQL, and then allows up to five minutes for PostgreSQL's clean stop.
+This keeps the persistent database warm without interrupting it while dirty
+pages are still being flushed.
 
 ### Runner Image
 A custom Docker image (`rust-gvm-e2e-runner`) is built in CI with:
