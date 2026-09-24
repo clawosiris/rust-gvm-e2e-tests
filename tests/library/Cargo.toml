@@ -10,7 +10,7 @@ gvm-client = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "b8
 gvm-connection = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "b85443167a9fd642b2d91f6f347db048de5aba9c" }
 gvm-gmp = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "b85443167a9fd642b2d91f6f347db048de5aba9c" }
 gvm-protocol = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "b85443167a9fd642b2d91f6f347db048de5aba9c" }
-quick-xml = "0.41"
+quick-xml = "0.42"
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "time"] }
