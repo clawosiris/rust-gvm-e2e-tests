@@ -52,6 +52,7 @@ use gvm_gmp::commands::tasks::{
 };
 use gvm_gmp::commands::version::GetVersionRequest;
 use gvm_gmp::enums::{CredentialType, EntityType, FilterType, PortRangeType};
+use gvm_gmp::responses::scanner::Scanner;
 use gvm_gmp::responses::ActionResponse;
 use gvm_gmp::{
     EntityId, GmpRequest, GmpVersion, TargetHost, TargetHostError, TargetHosts, TargetHostsError,
@@ -1072,6 +1073,7 @@ async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Re
     log_pass("12", "delete target and exact typed server error");
 
     if config.run_scan {
+        let scanner_id = openvas_scanner_id(&scanners.items)?;
         let xml_format = formats
             .items
             .iter()
@@ -1095,7 +1097,7 @@ async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Re
             &suffix,
             &port_lists.items[0].meta.id,
             &configs.items[0].meta.id,
-            &scanners.items[0].meta.id,
+            &scanner_id,
             &xml_format,
         )
         .await?;
@@ -1115,6 +1117,18 @@ async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Re
     reconnected.disconnect().await?;
     log_pass("13", "fresh reconnect with explicit re-authentication");
     Ok(())
+}
+
+fn openvas_scanner_id(scanners: &[Scanner]) -> Result<EntityId, AppError> {
+    scanners
+        .iter()
+        .find(|scanner| scanner.scanner_type.as_deref() == Some("OpenVAS"))
+        .map(|scanner| scanner.meta.id.clone())
+        .ok_or_else(|| {
+            AppError::Assertion(
+                "extended scan requires a scanner with exact GMP type OpenVAS".to_string(),
+            )
+        })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2413,7 +2427,9 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::*;
+    use gvm_gmp::responses::scanner::GetScannersResponse;
     use gvm_gmp::{GmpRequestCodec, GmpRequestError};
+    use gvm_protocol::Response;
 
     #[derive(Debug)]
     struct FakeSession(usize);
@@ -2609,6 +2625,26 @@ mod tests {
         assert_eq!(
             request.encode(GmpVersion(22, 7)).expect("valid request"),
             b"<create_target><name>e2e-target</name><hosts>127.0.0.1</hosts><exclude_hosts></exclude_hosts><port_list id=\"port-list\"/></create_target>"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn extended_scan_selects_openvas_instead_of_first_scanner() -> Result<(), AppError> {
+        let response = Response::from(
+            r#"<get_scanners_response status="200" status_text="OK">
+                <scanner id="cve-scanner"><name>CVE</name><type>CVE</type></scanner>
+                <scanner id="openvas-scanner">
+                    <name>OpenVAS Default</name><type>OpenVAS</type>
+                </scanner>
+                <scanner_count>2<filtered>2</filtered></scanner_count>
+            </get_scanners_response>"#,
+        );
+        let scanners = GetScannersResponse::from_response(&response).expect("scanners parse");
+
+        assert_eq!(
+            openvas_scanner_id(&scanners.items)?,
+            parse_entity_id("openvas-scanner")?
         );
         Ok(())
     }
