@@ -134,7 +134,11 @@ Before starting `gvmd`, the workflow starts and waits for `pg-gvm`, then sets
 reloads PostgreSQL. The image defaults caused roughly 0.8 GB checkpoints every
 one to two minutes during the initial SCAP import; the runner has sufficient
 disk and memory for these workflow-specific settings, which persist with the
-database volume and avoid that checkpoint churn.
+database volume and avoid that checkpoint churn. The tuning step retries for a
+bounded two-minute window because the Community PostgreSQL image can briefly
+report healthy immediately before a startup shutdown/restart transition on a
+warm volume. The idempotent settings must still be applied successfully before
+the workflow starts `gvmd`.
 
 The stack does not start `gvmd` until PostgreSQL and each mounted feed-data
 producer report healthy. This matters because the stock `gvmd` entrypoint

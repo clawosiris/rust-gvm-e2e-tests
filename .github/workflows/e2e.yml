@@ -194,13 +194,22 @@ jobs:
             --wait-timeout 300 pg-gvm
       - name: Tune PostgreSQL for SCAP bootstrap
         run: |
-          docker compose -f ${{ env.COMPOSE_FILE }} exec -T --user postgres pg-gvm \
-            psql --host=/var/run/postgresql --dbname=postgres --no-psqlrc \
-            -v ON_ERROR_STOP=1 <<'SQL'
+          for attempt in $(seq 1 60); do
+            if docker compose -f ${{ env.COMPOSE_FILE }} exec -T --user postgres pg-gvm \
+                psql --host=/var/run/postgresql --dbname=postgres --no-psqlrc \
+                -v ON_ERROR_STOP=1 <<'SQL'
           ALTER SYSTEM SET max_wal_size = '16GB';
           ALTER SYSTEM SET checkpoint_timeout = '30min';
           SELECT pg_reload_conf();
           SQL
+            then
+              exit 0
+            fi
+            echo "PostgreSQL tune attempt ${attempt}/60 failed during startup; retrying in 2 seconds" >&2
+            sleep 2
+          done
+          echo "PostgreSQL did not remain available for bootstrap tuning" >&2
+          exit 1
       - name: Start GVM stack
         run: docker compose -f ${{ env.COMPOSE_FILE }} up -d
       - name: Wait for gvmd readiness
