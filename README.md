@@ -144,15 +144,18 @@ The SCAP image copies roughly 10 GiB before its health marker appears, and the
 CERT producers can also outlive their image-default startup window after a feed
 refresh. Their healthchecks receive a ten-minute start period instead of being
 declared unhealthy while those copies are still progressing.
-After gvmd starts, the GMP readiness gate also waits for scan configurations
-and successful SCAP and CERT queries. A gvmd upgrade can rebuild those
-databases after authentication and scan configurations are already available.
+After gvmd starts, the GMP readiness gate also waits for scan configurations,
+no feed synchronization to remain active, and successful SCAP, CPE, and CERT
+queries. A gvmd upgrade can rebuild those databases after authentication and
+scan configurations are already available; in particular, a CPE query can
+block while the final SCAP aggregation is still running even after CVE queries
+already succeed.
 An uninterrupted clean recovery has exceeded four hours, including more than
 90 minutes in final CPE aggregation. The shared Bash/Rust readiness budget is
 therefore 350 minutes (21,000 seconds), enclosed by GitHub's maximum 360-minute
 step timeout and a 420-minute E2E job so tests and teardown retain their own
-margin. These are hard safety ceilings only; none of the scan-config, SCAP, or
-CERT readiness assertions are relaxed.
+margin. These are hard safety ceilings only; none of the scan-config, feed-sync,
+SCAP, CPE, or CERT readiness assertions are relaxed.
 
 Once the workflow has explicitly started the stack, every ephemeral runner
 invocation uses `docker compose run --no-deps`. The runner mounts the existing

@@ -522,13 +522,19 @@ struct ReadinessPolicy {
 #[derive(Clone, Copy, Debug)]
 struct FeedReadinessState {
     scan_config_count: usize,
+    syncing_feed_count: usize,
     scap_ready: bool,
+    cpe_ready: bool,
     cert_ready: bool,
 }
 
 impl FeedReadinessState {
     fn is_ready(self) -> bool {
-        self.scan_config_count > 0 && self.scap_ready && self.cert_ready
+        self.scan_config_count > 0
+            && self.syncing_feed_count == 0
+            && self.scap_ready
+            && self.cpe_ready
+            && self.cert_ready
     }
 }
 
@@ -599,7 +605,30 @@ impl FeedReadinessBackend for LiveReadinessBackend<'_> {
         if scan_config_count == 0 {
             return Ok(FeedReadinessState {
                 scan_config_count,
+                syncing_feed_count: 0,
                 scap_ready: false,
+                cpe_ready: false,
+                cert_ready: false,
+            });
+        }
+
+        let feeds = session
+            .get_feeds(GetFeedsRequest::new())
+            .await
+            .map_err(classify_gvm_readiness_error)?;
+        assert_typed_status(feeds.status, &feeds.status_text, 200, "get_feeds readiness")
+            .map_err(ReadinessFailure::Fatal)?;
+        let syncing_feed_count = feeds
+            .items
+            .iter()
+            .filter(|feed| feed.currently_syncing.is_some())
+            .count();
+        if syncing_feed_count > 0 {
+            return Ok(FeedReadinessState {
+                scan_config_count,
+                syncing_feed_count,
+                scap_ready: false,
+                cpe_ready: false,
                 cert_ready: false,
             });
         }
@@ -615,6 +644,23 @@ impl FeedReadinessBackend for LiveReadinessBackend<'_> {
                     &response.status_text,
                     200,
                     "get_cves readiness",
+                )
+                .map_err(ReadinessFailure::Fatal)?;
+                true
+            }
+            Err(error) => return Err(classify_gvm_readiness_error(error)),
+        };
+        let cpe_probe = GetCpesRequest {
+            filter_string: Some("rows=1".to_string()),
+            ..GetCpesRequest::default()
+        };
+        let cpe_ready = match session.get_cpes(cpe_probe).await {
+            Ok(response) => {
+                assert_typed_status(
+                    response.status,
+                    &response.status_text,
+                    200,
+                    "get_cpes readiness",
                 )
                 .map_err(ReadinessFailure::Fatal)?;
                 true
@@ -641,7 +687,9 @@ impl FeedReadinessBackend for LiveReadinessBackend<'_> {
 
         Ok(FeedReadinessState {
             scan_config_count,
+            syncing_feed_count,
             scap_ready,
+            cpe_ready,
             cert_ready,
         })
     }
@@ -753,16 +801,18 @@ async fn wait_for_feed<B: FeedReadinessBackend>(
                 Ok(state) if state.is_ready() => {
                     backend.disconnect(&mut session).await;
                     log_line(&format!(
-                        "feed ready after {polls} poll(s) and {reconnects} reconnect(s): {} scan config(s), SCAP and CERT databases available",
+                        "feed ready after {polls} poll(s) and {reconnects} reconnect(s): {} scan config(s), no feed synchronization active, and SCAP/CPE/CERT queries available",
                         state.scan_config_count
                     ));
                     return Ok(());
                 }
                 Ok(state) => {
                     log_line(&format!(
-                        "waiting for feed data: poll {polls}: {} scan config(s), SCAP {}, CERT {}; authenticated session retained",
+                        "waiting for feed data: poll {polls}: {} scan config(s), {} feed synchronization(s) active, SCAP {}, CPE {}, CERT {}; authenticated session retained",
                         state.scan_config_count,
+                        state.syncing_feed_count,
                         readiness_label(state.scap_ready),
+                        readiness_label(state.cpe_ready),
                         readiness_label(state.cert_ready),
                     ));
                     bounded_sleep(policy.poll_interval, deadline).await;
@@ -2418,18 +2468,22 @@ mod tests {
 
     fn feed_state(
         scan_config_count: usize,
+        syncing_feed_count: usize,
         scap_ready: bool,
+        cpe_ready: bool,
         cert_ready: bool,
     ) -> FeedReadinessState {
         FeedReadinessState {
             scan_config_count,
+            syncing_feed_count,
             scap_ready,
+            cpe_ready,
             cert_ready,
         }
     }
 
     fn ready_feed(scan_config_count: usize) -> FeedReadinessState {
-        feed_state(scan_config_count, true, true)
+        feed_state(scan_config_count, 0, true, true, true)
     }
 
     fn test_policy() -> ReadinessPolicy {
@@ -2444,8 +2498,8 @@ mod tests {
     fn empty_feed_polls_authenticate_only_once_for_one_session() {
         let mut fake = FakeReadiness {
             plans: VecDeque::from([VecDeque::from([
-                Ok(feed_state(0, false, false)),
-                Ok(feed_state(0, false, false)),
+                Ok(feed_state(0, 0, false, false, false)),
+                Ok(feed_state(0, 0, false, false, false)),
                 Ok(ready_feed(3)),
             ])]),
             ..FakeReadiness::default()
@@ -2465,7 +2519,7 @@ mod tests {
     fn dropped_feed_connection_reconnects_and_reauthenticates() {
         let mut fake = FakeReadiness {
             plans: VecDeque::from([
-                VecDeque::from([Ok(feed_state(0, false, false)), Err("peer reset")]),
+                VecDeque::from([Ok(feed_state(0, 0, false, false, false)), Err("peer reset")]),
                 VecDeque::from([Ok(ready_feed(2))]),
             ]),
             ..FakeReadiness::default()
@@ -2482,11 +2536,13 @@ mod tests {
     }
 
     #[test]
-    fn feed_waits_for_scap_and_cert_databases_on_the_authenticated_session() {
+    fn feed_waits_for_sync_and_scap_cpe_cert_queries_on_the_authenticated_session() {
         let mut fake = FakeReadiness {
             plans: VecDeque::from([VecDeque::from([
-                Ok(feed_state(3, false, true)),
-                Ok(feed_state(3, true, false)),
+                Ok(feed_state(3, 1, false, false, false)),
+                Ok(feed_state(3, 0, false, false, true)),
+                Ok(feed_state(3, 0, true, false, true)),
+                Ok(feed_state(3, 0, true, true, false)),
                 Ok(ready_feed(3)),
             ])]),
             ..FakeReadiness::default()
