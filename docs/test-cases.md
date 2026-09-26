@@ -42,9 +42,9 @@ environment-controlled deadlines.
 | # | Test Case | What It Validates |
 |---|-----------|-------------------|
 | 11 | Create scan task | Task creation with target + scan config + scanner |
-| 12 | Start scan | Scan initiation, status transitions |
+| 12 | Start scan | Scan initiation returns exact GMP `202`, then status transitions |
 | 13 | Poll scan status | Wait through `New`/`Requested`/`Queued` until the task is runnable or terminal |
-| 14 | Stop scan | Graceful termination only after the task reaches `Running` |
+| 14 | Stop scan | The selected OpenVAS/openvasd backend stops only from `Running` with exact synchronous GMP `200`; then bounded polling requires terminal `Stopped` before report retrieval. This contract is backend-specific, not a claim about every `stop_task` path. |
 | 15 | Get report/export | Report retrieval with results; synchronous format export on GMP >=22.8, exact version gate otherwise |
 | 16 | Cleanup | Task and target deletion |
 

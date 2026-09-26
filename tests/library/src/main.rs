@@ -61,13 +61,31 @@ use gvm_gmp::{
 use serde_json::Value;
 use thiserror::Error;
 use tokio::runtime::Builder;
-use tokio::time::{sleep, Instant};
+use tokio::time::{sleep, timeout_at, Instant};
 
 const SMOKE_TARGET_PREFIX: &str = "e2e-679-smoke-target";
 const SCAN_TARGET_PREFIX: &str = "e2e-679-scan-target";
 const SCAN_TASK_PREFIX: &str = "e2e-679-scan-task";
 const SECRET_SENTINEL: &str = "e2e-679-secret-sentinel-do-not-log";
-const STOP_TASK_ACCEPTED_STATUS: u16 = 202;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StopTaskContract {
+    Synchronous,
+}
+
+impl StopTaskContract {
+    const fn expected_status(self) -> u16 {
+        match self {
+            Self::Synchronous => 200,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SelectedScanner {
+    id: EntityId,
+    stop_contract: StopTaskContract,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum ReportExportDecision {
@@ -1091,7 +1109,7 @@ async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Re
     log_pass("12", "delete target and exact typed server error");
 
     if config.run_scan {
-        let scanner_id = scan_capable_scanner_id(&scanners.items)?;
+        let selected_scanner = scan_capable_scanner(&scanners.items)?;
         let xml_format = formats
             .items
             .iter()
@@ -1115,7 +1133,7 @@ async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Re
             &suffix,
             &port_lists.items[0].meta.id,
             &configs.items[0].meta.id,
-            &scanner_id,
+            &selected_scanner,
             &xml_format,
         )
         .await?;
@@ -1137,22 +1155,23 @@ async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Re
     Ok(())
 }
 
-fn scan_capable_scanner_id(scanners: &[Scanner]) -> Result<EntityId, AppError> {
+fn scan_capable_scanner(scanners: &[Scanner]) -> Result<SelectedScanner, AppError> {
     scanners
         .iter()
-        .find(|scanner| {
-            scanner
+        .find_map(|scanner| {
+            let scanner_type = scanner
                 .scanner_type
                 .as_deref()
-                .and_then(|scanner_type| ScannerType::from_str(scanner_type).ok())
-                .is_some_and(|scanner_type| {
-                    matches!(
-                        scanner_type,
-                        ScannerType::OpenVasScanner | ScannerType::OpenVasdScannerType
-                    )
-                })
+                .and_then(|scanner_type| ScannerType::from_str(scanner_type).ok())?;
+            matches!(
+                scanner_type,
+                ScannerType::OpenVasScanner | ScannerType::OpenVasdScannerType
+            )
+            .then(|| SelectedScanner {
+                id: scanner.meta.id.clone(),
+                stop_contract: StopTaskContract::Synchronous,
+            })
         })
-        .map(|scanner| scanner.meta.id.clone())
         .ok_or_else(|| {
             let observed_types = scanners
                 .iter()
@@ -1173,7 +1192,7 @@ async fn run_scan_suite(
     suffix: &str,
     port_list_id: &EntityId,
     scan_config_id: &EntityId,
-    scanner_id: &EntityId,
+    selected_scanner: &SelectedScanner,
     xml_format_id: &EntityId,
 ) -> Result<(), AppError> {
     log_line("Running extended typed scan flow because E2E_RUN_SCAN=1");
@@ -1197,7 +1216,7 @@ async fn run_scan_suite(
             &task_name,
             scan_config_id.clone(),
             target_id.clone(),
-            scanner_id.clone(),
+            selected_scanner.id.clone(),
         ))
         .await?;
     assert_typed_status(task.status, &task.status_text, 201, "create_task")?;
@@ -1223,12 +1242,17 @@ async fn run_scan_suite(
         let stopped = client
             .stop_task(StopTaskRequest::new(task_id.clone()))
             .await?;
-        assert_typed_status(
+        assert_stop_task_contract(
             stopped.status,
             &stopped.status_text,
-            STOP_TASK_ACCEPTED_STATUS,
-            "stop_task",
+            selected_scanner.stop_contract,
         )?;
+        poll_task_stopped(
+            client,
+            &task_id,
+            Duration::from_secs(config.task_progress_timeout_secs),
+        )
+        .await?;
     }
 
     let report = client
@@ -2267,12 +2291,18 @@ async fn poll_task_status(
     task_id: &EntityId,
     timeout: Duration,
 ) -> Result<String, AppError> {
-    let started = Instant::now();
+    let deadline = Instant::now() + timeout;
     let mut last = "unknown".to_string();
-    while started.elapsed() <= timeout {
-        let response = client
-            .get_task(GetTaskRequest::new(task_id.clone()))
-            .await?;
+    loop {
+        let response = match timeout_at(
+            deadline,
+            client.get_task(GetTaskRequest::new(task_id.clone())),
+        )
+        .await
+        {
+            Ok(response) => response?,
+            Err(_) => break,
+        };
         let task = only_item(&response.items, "get_task while polling")?;
         if let Some(status) = &task.status {
             last.clone_from(status);
@@ -2280,12 +2310,63 @@ async fn poll_task_status(
                 return Ok(last);
             }
         }
-        sleep(Duration::from_secs(1)).await;
+        let Some(delay) = next_task_poll_delay(deadline.saturating_duration_since(Instant::now()))
+        else {
+            break;
+        };
+        sleep(delay).await;
     }
     Err(AppError::Assertion(format!(
         "task {task_id} did not become runnable or terminal within {} seconds; last status: {last}",
         timeout.as_secs()
     )))
+}
+
+async fn poll_task_stopped(
+    client: &mut GmpClient<UnixSocketConnection>,
+    task_id: &EntityId,
+    timeout: Duration,
+) -> Result<(), AppError> {
+    let deadline = Instant::now() + timeout;
+    let mut last = "unknown".to_string();
+    loop {
+        let response = match timeout_at(
+            deadline,
+            client.get_task(GetTaskRequest::new(task_id.clone())),
+        )
+        .await
+        {
+            Ok(response) => response?,
+            Err(_) => break,
+        };
+        assert_typed_status(
+            response.status,
+            &response.status_text,
+            200,
+            "get_task after synchronous stop",
+        )?;
+        let task = only_item(&response.items, "get_task after synchronous stop")?;
+        if let Some(status) = &task.status {
+            last.clone_from(status);
+            if status == "Stopped" {
+                return Ok(());
+            }
+        }
+
+        let Some(delay) = next_task_poll_delay(deadline.saturating_duration_since(Instant::now()))
+        else {
+            break;
+        };
+        sleep(delay).await;
+    }
+    Err(AppError::Assertion(format!(
+        "task {task_id} did not reach terminal Stopped after synchronous stop within {} seconds; last status: {last}",
+        timeout.as_secs()
+    )))
+}
+
+fn next_task_poll_delay(remaining: Duration) -> Option<Duration> {
+    (!remaining.is_zero()).then(|| remaining.min(Duration::from_secs(1)))
 }
 
 fn task_is_waiting_to_start(status: &str) -> bool {
@@ -2294,6 +2375,19 @@ fn task_is_waiting_to_start(status: &str) -> bool {
 
 fn should_request_stop(status: &str) -> bool {
     status == "Running"
+}
+
+fn assert_stop_task_contract(
+    actual: u16,
+    status_text: &str,
+    contract: StopTaskContract,
+) -> Result<(), AppError> {
+    assert_typed_status(
+        actual,
+        status_text,
+        contract.expected_status(),
+        "stop_task for selected scanner backend",
+    )
 }
 
 async fn connect_client(config: &EnvConfig) -> Result<GmpClient<UnixSocketConnection>, AppError> {
@@ -2695,8 +2789,11 @@ mod tests {
         let scanners = GetScannersResponse::from_response(&response).expect("scanners parse");
 
         assert_eq!(
-            scan_capable_scanner_id(&scanners.items)?,
-            parse_entity_id("openvas-scanner")?
+            scan_capable_scanner(&scanners.items)?,
+            SelectedScanner {
+                id: parse_entity_id("openvas-scanner")?,
+                stop_contract: StopTaskContract::Synchronous,
+            }
         );
         Ok(())
     }
@@ -2715,8 +2812,11 @@ mod tests {
         let scanners = GetScannersResponse::from_response(&response).expect("scanners parse");
 
         assert_eq!(
-            scan_capable_scanner_id(&scanners.items)?,
-            parse_entity_id("openvas-scanner")?
+            scan_capable_scanner(&scanners.items)?,
+            SelectedScanner {
+                id: parse_entity_id("openvas-scanner")?,
+                stop_contract: StopTaskContract::Synchronous,
+            }
         );
         Ok(())
     }
@@ -2735,8 +2835,11 @@ mod tests {
         let scanners = GetScannersResponse::from_response(&response).expect("scanners parse");
 
         assert_eq!(
-            scan_capable_scanner_id(&scanners.items)?,
-            parse_entity_id("openvasd-scanner")?
+            scan_capable_scanner(&scanners.items)?,
+            SelectedScanner {
+                id: parse_entity_id("openvasd-scanner")?,
+                stop_contract: StopTaskContract::Synchronous,
+            }
         );
         Ok(())
     }
@@ -2766,16 +2869,15 @@ mod tests {
     }
 
     #[test]
-    fn stop_task_requires_exact_accepted_status() {
-        assert_eq!(STOP_TASK_ACCEPTED_STATUS, 202);
-        assert_typed_status(
-            STOP_TASK_ACCEPTED_STATUS,
+    fn selected_synchronous_scanner_requires_exact_200_stop_status() {
+        assert_stop_task_contract(200, "OK", StopTaskContract::Synchronous)
+            .expect("synchronous OpenVAS/openvasd stop accepts exact GMP status 200");
+        assert!(assert_stop_task_contract(
+            202,
             "OK, request submitted",
-            STOP_TASK_ACCEPTED_STATUS,
-            "stop_task",
+            StopTaskContract::Synchronous
         )
-        .expect("stop_task accepts GMP status 202");
-        assert!(assert_typed_status(200, "OK", STOP_TASK_ACCEPTED_STATUS, "stop_task",).is_err());
+        .is_err());
     }
 
     #[test]
@@ -2810,5 +2912,18 @@ mod tests {
         assert!(should_request_stop("Running"));
         assert!(!should_request_stop("Stop Requested"));
         assert!(!should_request_stop("Done"));
+    }
+
+    #[test]
+    fn task_poll_delay_does_not_exceed_its_remaining_deadline() {
+        assert_eq!(next_task_poll_delay(Duration::ZERO), None);
+        assert_eq!(
+            next_task_poll_delay(Duration::from_millis(250)),
+            Some(Duration::from_millis(250))
+        );
+        assert_eq!(
+            next_task_poll_delay(Duration::from_secs(2)),
+            Some(Duration::from_secs(1))
+        );
     }
 }
