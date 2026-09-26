@@ -131,13 +131,19 @@ Must complete within ~60 seconds once gvmd is ready.
 
 | # | Test | GMP Commands | Assertion |
 |---|------|-------------|-----------|
-| 1 | Create target | `create_target` | 201 |
-| 2 | Create task | `create_task(target, config, scanner)` | 201 |
-| 3 | Start task | `start_task` | 202, returns report_id |
-| 4 | Poll task status | `get_tasks(task_id)` (bounded loop) | Wait through `New`/`Requested` until runnable or terminal |
-| 5 | Stop running task | `stop_task` | Only from `Running`; 202, request submitted |
-| 6 | Get report | `get_reports(report_id)` | 200, contains results XML |
-| 7 | Cleanup | Delete task, target | 200 |
+| 1 | Select scanner backend | `get_scanners` | Select a semantic OpenVAS (type 2) or openvasd (type 6) backend and bind its synchronous stop contract; never select CVE merely because it is listed first |
+| 2 | Create target | `create_target` | 201 |
+| 3 | Create task | `create_task(target, config, selected_scanner)` | 201 |
+| 4 | Start task | `start_task` | Exact 202, returns report_id |
+| 5 | Poll task status | `get_tasks(task_id)` (bounded loop) | Wait through `New`/`Requested`/`Queued` until runnable or terminal |
+| 6 | Stop running task | `stop_task` | Issue only from `Running`; the selected OpenVAS/openvasd backend returns exact synchronous 200 |
+| 7 | Confirm stopped | `get_tasks(task_id)` (bounded loop) | Require terminal `Stopped` after the successful synchronous stop and before report retrieval |
+| 8 | Get report | `get_reports(report_id)` | 200, contains results XML |
+| 9 | Cleanup | Delete task, target | 200 |
+
+The exact synchronous 200 stop response and terminal `Stopped` postcondition are
+specific to the scan-capable OpenVAS/openvasd backends selected by this flow;
+they are not a global contract for every `stop_task` backend path.
 
 ### 5.3 Failure Handling
 
