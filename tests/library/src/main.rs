@@ -69,6 +69,24 @@ const SCAN_TASK_PREFIX: &str = "e2e-679-scan-task";
 const SECRET_SENTINEL: &str = "e2e-679-secret-sentinel-do-not-log";
 const STOP_TASK_ACCEPTED_STATUS: u16 = 202;
 
+#[derive(Debug, PartialEq, Eq)]
+enum ReportExportDecision {
+    Export,
+    ReportOnly,
+}
+
+fn report_export_decision(support: CommandSupport) -> Result<ReportExportDecision, AppError> {
+    match support {
+        CommandSupport::Supported => Ok(ReportExportDecision::Export),
+        CommandSupport::UnsupportedVersion {
+            required: GmpVersion(22, 8),
+        } => Ok(ReportExportDecision::ReportOnly),
+        support => Err(AppError::Assertion(format!(
+            "unexpected get_report_export support state: {support:?}"
+        ))),
+    }
+}
+
 fn main() -> ExitCode {
     match Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => match runtime.block_on(async_main()) {
@@ -1222,23 +1240,33 @@ async fn run_scan_suite(
         "typed get_report response omitted the requested report",
     )?;
 
-    let export = client
-        .get_report_export(GetReportExportRequest::new(
-            report_id.clone(),
-            xml_format_id.clone(),
-        ))
-        .await?;
-    ensure(
-        !export.bytes.is_empty(),
-        "decoded XML report export was empty",
-    )?;
-    log_pass(
-        "scan 01",
-        &format!(
-            "typed report/export decoding ({} bytes)",
-            export.bytes.len()
-        ),
-    );
+    match report_export_decision(client.command_support("get_report_export"))? {
+        ReportExportDecision::Export => {
+            let export = client
+                .get_report_export(GetReportExportRequest::new(
+                    report_id.clone(),
+                    xml_format_id.clone(),
+                ))
+                .await?;
+            ensure(
+                !export.bytes.is_empty(),
+                "decoded XML report export was empty",
+            )?;
+            log_pass(
+                "scan 01",
+                &format!(
+                    "typed report/export decoding ({} bytes)",
+                    export.bytes.len()
+                ),
+            );
+        }
+        ReportExportDecision::ReportOnly => {
+            log_pass(
+                "scan 01",
+                "typed report decoding; synchronous export correctly gated below GMP 22.8",
+            );
+        }
+    }
 
     let deleted_report = client
         .delete_report(DeleteReportRequest::new(report_id.clone()))
@@ -2748,6 +2776,27 @@ mod tests {
         )
         .expect("stop_task accepts GMP status 202");
         assert!(assert_typed_status(200, "OK", STOP_TASK_ACCEPTED_STATUS, "stop_task",).is_err());
+    }
+
+    #[test]
+    fn report_export_decision_respects_exact_capability_state() {
+        assert_eq!(
+            report_export_decision(CommandSupport::UnsupportedVersion {
+                required: GmpVersion(22, 8),
+            })
+            .expect("GMP 22.7 reports the exact 22.8 requirement"),
+            ReportExportDecision::ReportOnly
+        );
+        assert_eq!(
+            report_export_decision(CommandSupport::Supported).expect("supported export capability"),
+            ReportExportDecision::Export
+        );
+        assert!(report_export_decision(CommandSupport::NotAdvertised).is_err());
+        assert!(report_export_decision(CommandSupport::RequiresDiscovery).is_err());
+        assert!(report_export_decision(CommandSupport::UnsupportedVersion {
+            required: GmpVersion(22, 9),
+        })
+        .is_err());
     }
 
     #[test]
