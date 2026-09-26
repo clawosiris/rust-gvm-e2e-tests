@@ -1201,7 +1201,7 @@ async fn run_scan_suite(
         Duration::from_secs(config.task_progress_timeout_secs),
     )
     .await?;
-    if matches!(status.as_str(), "Running" | "Requested" | "Stop Requested") {
+    if should_request_stop(&status) {
         let stopped = client
             .stop_task(StopTaskRequest::new(task_id.clone()))
             .await?;
@@ -2248,16 +2248,24 @@ async fn poll_task_status(
         let task = only_item(&response.items, "get_task while polling")?;
         if let Some(status) = &task.status {
             last.clone_from(status);
-            if status != "New" {
+            if !task_is_waiting_to_start(status) {
                 return Ok(last);
             }
         }
         sleep(Duration::from_secs(1)).await;
     }
     Err(AppError::Assertion(format!(
-        "task {task_id} did not progress within {} seconds; last status: {last}",
+        "task {task_id} did not become runnable or terminal within {} seconds; last status: {last}",
         timeout.as_secs()
     )))
+}
+
+fn task_is_waiting_to_start(status: &str) -> bool {
+    matches!(status, "New" | "Requested")
+}
+
+fn should_request_stop(status: &str) -> bool {
+    status == "Running"
 }
 
 async fn connect_client(config: &EnvConfig) -> Result<GmpClient<UnixSocketConnection>, AppError> {
@@ -2740,5 +2748,16 @@ mod tests {
         )
         .expect("stop_task accepts GMP status 202");
         assert!(assert_typed_status(200, "OK", STOP_TASK_ACCEPTED_STATUS, "stop_task",).is_err());
+    }
+
+    #[test]
+    fn extended_scan_waits_for_requested_task_before_stopping() {
+        assert!(task_is_waiting_to_start("New"));
+        assert!(task_is_waiting_to_start("Requested"));
+        assert!(!task_is_waiting_to_start("Running"));
+        assert!(!should_request_stop("Requested"));
+        assert!(should_request_stop("Running"));
+        assert!(!should_request_stop("Stop Requested"));
+        assert!(!should_request_stop("Done"));
     }
 }

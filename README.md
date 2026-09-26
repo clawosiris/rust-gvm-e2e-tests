@@ -55,7 +55,7 @@ Core protocol validation via Unix socket connection to gvmd.
 | 10 | Verify deletion |
 
 Extended (opt-in with `run-scan: true`):
-- Create task with real scan config → start → poll → stop → get report
+- Create task with real scan config → start → wait through `New`/`Requested` → stop only once `Running` → get report
 
 ### Suite 2: CRUD Tests
 Full create → get → delete → verify-absent lifecycle for:

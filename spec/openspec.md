@@ -134,8 +134,8 @@ Must complete within ~60 seconds once gvmd is ready.
 | 1 | Create target | `create_target` | 201 |
 | 2 | Create task | `create_task(target, config, scanner)` | 201 |
 | 3 | Start task | `start_task` | 202, returns report_id |
-| 4 | Poll task status | `get_tasks(task_id)` (loop, max 30s) | Status transitions |
-| 5 | Stop task | `stop_task` | 202, request submitted |
+| 4 | Poll task status | `get_tasks(task_id)` (bounded loop) | Wait through `New`/`Requested` until runnable or terminal |
+| 5 | Stop running task | `stop_task` | Only from `Running`; 202, request submitted |
 | 6 | Get report | `get_reports(report_id)` | 200, contains results XML |
 | 7 | Cleanup | Delete task, target | 200 |
 
