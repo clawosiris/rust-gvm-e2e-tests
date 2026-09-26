@@ -2289,7 +2289,7 @@ async fn poll_task_status(
 }
 
 fn task_is_waiting_to_start(status: &str) -> bool {
-    matches!(status, "New" | "Requested")
+    matches!(status, "New" | "Requested" | "Queued")
 }
 
 fn should_request_stop(status: &str) -> bool {
@@ -2800,11 +2800,13 @@ mod tests {
     }
 
     #[test]
-    fn extended_scan_waits_for_requested_task_before_stopping() {
+    fn extended_scan_waits_for_queued_task_before_stopping() {
         assert!(task_is_waiting_to_start("New"));
         assert!(task_is_waiting_to_start("Requested"));
+        assert!(task_is_waiting_to_start("Queued"));
         assert!(!task_is_waiting_to_start("Running"));
         assert!(!should_request_stop("Requested"));
+        assert!(!should_request_stop("Queued"));
         assert!(should_request_stop("Running"));
         assert!(!should_request_stop("Stop Requested"));
         assert!(!should_request_stop("Done"));
