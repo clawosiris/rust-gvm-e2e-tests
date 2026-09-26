@@ -45,7 +45,7 @@ environment-controlled deadlines.
 | 12 | Start scan | Scan initiation, status transitions |
 | 13 | Poll scan status | Wait through `New`/`Requested` until the task is runnable or terminal |
 | 14 | Stop scan | Graceful termination only after the task reaches `Running` |
-| 15 | Get report | Report retrieval with results |
+| 15 | Get report/export | Report retrieval with results; synchronous format export on GMP >=22.8, exact version gate otherwise |
 | 16 | Cleanup | Task and target deletion |
 
 ---
