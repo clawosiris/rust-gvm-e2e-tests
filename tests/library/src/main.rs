@@ -51,7 +51,7 @@ use gvm_gmp::commands::tasks::{
     CreateTaskRequest, DeleteTaskRequest, GetTaskRequest, StartTaskRequest, StopTaskRequest,
 };
 use gvm_gmp::commands::version::GetVersionRequest;
-use gvm_gmp::enums::{CredentialType, EntityType, FilterType, PortRangeType};
+use gvm_gmp::enums::{CredentialType, EntityType, FilterType, PortRangeType, ScannerType};
 use gvm_gmp::responses::scanner::Scanner;
 use gvm_gmp::responses::ActionResponse;
 use gvm_gmp::{
@@ -1123,10 +1123,16 @@ fn scan_capable_scanner_id(scanners: &[Scanner]) -> Result<EntityId, AppError> {
     scanners
         .iter()
         .find(|scanner| {
-            matches!(
-                scanner.scanner_type.as_deref(),
-                Some("OpenVAS" | "openvasd")
-            )
+            scanner
+                .scanner_type
+                .as_deref()
+                .and_then(|scanner_type| ScannerType::from_str(scanner_type).ok())
+                .is_some_and(|scanner_type| {
+                    matches!(
+                        scanner_type,
+                        ScannerType::OpenVasScanner | ScannerType::OpenVasdScannerType
+                    )
+                })
         })
         .map(|scanner| scanner.meta.id.clone())
         .ok_or_else(|| {
@@ -1136,7 +1142,7 @@ fn scan_capable_scanner_id(scanners: &[Scanner]) -> Result<EntityId, AppError> {
                 .collect::<Vec<_>>()
                 .join(", ");
             AppError::Assertion(format!(
-                "extended scan requires an exact GMP scan-capable type (OpenVAS or openvasd); observed: [{observed_types}]"
+                "extended scan requires an exact GMP scan-capable type (OpenVAS/2 or 6); observed: [{observed_types}]"
             ))
         })
 }
@@ -2660,12 +2666,32 @@ mod tests {
     }
 
     #[test]
-    fn extended_scan_selects_openvasd_instead_of_cve_scanner() -> Result<(), AppError> {
+    fn extended_scan_selects_numeric_openvas_instead_of_numeric_cve() -> Result<(), AppError> {
         let response = Response::from(
             r#"<get_scanners_response status="200" status_text="OK">
-                <scanner id="cve-scanner"><name>CVE</name><type>CVE</type></scanner>
+                <scanner id="cve-scanner"><name>CVE</name><type>3</type></scanner>
+                <scanner id="openvas-scanner">
+                    <name>OpenVAS Default</name><type>2</type>
+                </scanner>
+                <scanner_count>2<filtered>2</filtered></scanner_count>
+            </get_scanners_response>"#,
+        );
+        let scanners = GetScannersResponse::from_response(&response).expect("scanners parse");
+
+        assert_eq!(
+            scan_capable_scanner_id(&scanners.items)?,
+            parse_entity_id("openvas-scanner")?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn extended_scan_selects_numeric_openvasd_instead_of_numeric_cve() -> Result<(), AppError> {
+        let response = Response::from(
+            r#"<get_scanners_response status="200" status_text="OK">
+                <scanner id="cve-scanner"><name>CVE</name><type>3</type></scanner>
                 <scanner id="openvasd-scanner">
-                    <name>OpenVAS Default</name><type>openvasd</type>
+                    <name>OpenVASD Default</name><type>6</type>
                 </scanner>
                 <scanner_count>2<filtered>2</filtered></scanner_count>
             </get_scanners_response>"#,
