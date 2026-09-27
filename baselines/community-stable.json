@@ -197,6 +197,7 @@
     "modify_integration_config": false,
     "modify_license": false,
     "modify_web_application_target": false,
+    "sync_config": true,
     "verify_credential_store": false
   },
   "registry_version_gates": {

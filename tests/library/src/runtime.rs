@@ -427,6 +427,7 @@ mod tests {
             parsed.conditional_commands.get("get_report_hosts"),
             Some(&true)
         );
+        assert_eq!(parsed.conditional_commands.get("sync_config"), Some(&true));
         assert_eq!(
             parsed.registry_version_gates.get("get_report_hosts"),
             Some(&false)
