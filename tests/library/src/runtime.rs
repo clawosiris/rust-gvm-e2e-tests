@@ -402,12 +402,27 @@ mod tests {
             "pending-live-revalidation-for-issue-148"
         );
         assert_eq!(parsed.gvm_image_tag, "stable");
-        assert_eq!(parsed.help_commands.len(), 127);
+        assert_eq!(parsed.help_commands.len(), 135);
         assert!(parsed
             .help_commands
             .iter()
             .any(|name| name == "get_audit_report"));
         assert!(parsed.help_commands.iter().any(|name| name == "get_tasks"));
+        for command in [
+            "cancel_report_export",
+            "download_report_export",
+            "export_audit_report",
+            "export_delta_audit_report",
+            "export_delta_scan_report",
+            "export_scan_report",
+            "get_audit_report_hosts",
+            "get_report_exports",
+        ] {
+            assert!(
+                parsed.help_commands.iter().any(|name| name == command),
+                "stable baseline is missing {command}"
+            );
+        }
         assert_eq!(
             parsed.conditional_commands.get("get_report_hosts"),
             Some(&true)
