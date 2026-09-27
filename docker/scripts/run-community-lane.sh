@@ -81,18 +81,18 @@ python3 tools/runtime_images.py \
   --compose-file "${compose_file}" \
   --output "artifacts/runtime-images-${lane}.json"
 
-docker compose -f "${compose_file}" --profile runner run --rm -T \
+docker compose -f "${compose_file}" --profile runner run --rm -T --no-deps \
   --entrypoint "" rust-gvm-e2e \
   gvm-community-e2e --lane "${lane}"
 
 if [[ "${lane}" == "devel-fast" ]]; then
-  docker compose -f "${compose_file}" --profile runner run --rm -T \
+  docker compose -f "${compose_file}" --profile runner run --rm -T --no-deps \
     --entrypoint "" rust-gvm-e2e \
     bash /workspace/tests/cli/smoke.sh
 fi
 
 if [[ "${lane}" == "differential" ]]; then
-  docker compose -f "${compose_file}" --profile runner run --rm -T \
+  docker compose -f "${compose_file}" --profile runner run --rm -T --no-deps \
     --entrypoint "" rust-gvm-e2e \
     python3 /workspace/docker/scripts/validate-against-gvm-tools.py --check all
 fi
