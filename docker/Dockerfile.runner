@@ -3,7 +3,7 @@ FROM rust:1.89
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 ENV PATH="/usr/local/cargo/bin:${PATH}"
 
-ARG RUST_GVM_SHA
+ARG RUST_GVM_SHA=b85443167a9fd642b2d91f6f347db048de5aba9c
 ARG GVM_ROOLS_REF=main
 
 LABEL org.opencontainers.image.source="https://github.com/clawosiris/rust-gvm-e2e-tests" \
@@ -22,6 +22,8 @@ COPY Cargo.toml /tmp/rust-gvm-e2e-tests/Cargo.toml
 COPY tests/library/Cargo.toml /tmp/rust-gvm-e2e-tests/tests/library/Cargo.toml
 COPY Cargo.lock /tmp/rust-gvm-e2e-tests/Cargo.lock
 COPY tests/library/src /tmp/rust-gvm-e2e-tests/tests/library/src
+COPY baselines /tmp/rust-gvm-e2e-tests/baselines
+COPY fixtures /tmp/rust-gvm-e2e-tests/fixtures
 
 RUN --mount=type=secret,id=github_token \
     GIT_CONFIG_GLOBAL=/tmp/github-auth.gitconfig; \
@@ -30,14 +32,11 @@ RUN --mount=type=secret,id=github_token \
       TOKEN=$(cat /run/secrets/github_token); \
       git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"; \
     fi \
-    && echo "Resolved rust-gvm SHA: ${RUST_GVM_SHA}" \
+    && echo "Pinned rust-gvm SHA: ${RUST_GVM_SHA}" \
     && echo "${RUST_GVM_SHA}" | grep -qE '^[0-9a-f]{40}$' \
     && MANIFEST=/tmp/rust-gvm-e2e-tests/tests/library/Cargo.toml \
     && LOCKFILE=/tmp/rust-gvm-e2e-tests/Cargo.lock \
-    && sed -E -i "s|rev = \"[0-9a-f]{40}\"|rev = \"${RUST_GVM_SHA}\"|g" "${MANIFEST}" \
     && test "$(grep -Fc "rev = \"${RUST_GVM_SHA}\"" "${MANIFEST}")" -eq 4 \
-    && cargo update --manifest-path /tmp/rust-gvm-e2e-tests/Cargo.toml \
-      -p gvm-client --precise "${RUST_GVM_SHA}" \
     && LOCK_SOURCE="source = \"git+https://github.com/greenbone-hive/rust-gvm.git?rev=${RUST_GVM_SHA}#${RUST_GVM_SHA}\"" \
     && test "$(grep -Fxc "${LOCK_SOURCE}" "${LOCKFILE}")" -eq 4 \
     && cargo install --locked --path /tmp/rust-gvm-e2e-tests/tests/library --bin gvm-community-e2e \

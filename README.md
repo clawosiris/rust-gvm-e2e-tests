@@ -1,227 +1,119 @@
 # rust-gvm-e2e-tests
 
-End-to-end integration tests for the [rust-gvm](https://github.com/greenbone-hive/rust-gvm) ecosystem — validating Rust GVM/OpenVAS tooling against a real Greenbone Community Edition container stack.
+Real-stack conformance tests for
+[rust-gvm](https://github.com/greenbone-hive/rust-gvm) against Greenbone
+Community Edition.
+The harness talks directly to `gvmd`, validates public typed response models,
+and cross-checks deterministic behavior with gvm-tools/python-gvm.
 
-## Architecture
+## Community coverage architecture
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                   rust-gvm-e2e-tests                     │
-│                                                          │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │ Layer 1       │  │ Layer 2       │  │ Validation    │  │
-│  │ rust-gvm lib  │  │ gvm-rools CLI │  │ gvm-tools     │  │
-│  │ (GMP socket)  │  │ (gvm-cli)     │  │ (cross-check) │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬────────┘  │
-│         └────────┬────────┘                  │           │
-│                  ▼                           ▼           │
-│  ┌─────────────────────────────────────────────────────┐ │
-│  │           GVM Community Stack (Docker Compose)       │ │
-│  │  gvmd · ospd-openvas · openvasd · PostgreSQL · Redis │ │
-│  │  + feed containers (VTs, SCAP, CERT, data-objects)   │ │
-│  └─────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────┘
-```
+Coverage policy has one source of truth:
 
-## What This Tests
+- [coverage/manifest.json](coverage/manifest.json) is the machine inventory;
+- [docs/community-coverage.md](docs/community-coverage.md) is generated from it;
+- `tests/library/src/generated_manifest.rs` compile-references every typed
+  helper and compares all registered wire commands with
+  `COMMAND_CAPABILITIES`;
+- [baselines/community-stable.json](baselines/community-stable.json) pins the
+  Community tag, GMP version, rust-gvm SHA, features, and conditional
+  availability discovered from version/features/help.
 
-This repo validates the **full stack** — from Rust client code through CLI tools down to a real gvmd instance with real feed data. It catches issues that unit tests and mock servers cannot:
-
-- Feed-dependent behavior (scan configs only exist after feed sync)
-- Server-side validation quirks (e.g., `PORT_LIST` required for `create_target`)
-- Real PostgreSQL state management
-- Scanner registration and scan execution
-- Protocol compatibility with actual gvmd versions
-
-## Test Suites
-
-See [docs/test-cases.md](docs/test-cases.md) for a detailed breakdown of all 60+ test points.
-
-
-### Suite 1: Smoke Tests (rust-gvm library)
-Core protocol validation via Unix socket connection to gvmd.
-
-| Test | Description |
-|------|-------------|
-| 01 | Version negotiation (GMP 22.7+) |
-| 02 | Authentication |
-| 03 | List scan configs (feed-dependent) |
-| 04 | List scanners |
-| 05 | List report formats |
-| 06 | List port lists |
-| 07 | Create target (with port list) |
-| 08 | Get target by UUID |
-| 09 | Delete target |
-| 10 | Verify deletion |
-
-Extended (opt-in with `run-scan: true`):
-- Create task with a semantic OpenVAS/openvasd scanner → start (exact `202`) → wait through `New`/`Requested`/`Queued` → stop only once `Running` (exact synchronous `200`) → poll for terminal `Stopped`, or exact terminal `Done` when completion wins the stop race → get report
-
-### Suite 2: CRUD Tests
-Full create → get → delete → verify-absent lifecycle for:
-- Port lists, Credentials, Schedules, Filters
-- Tasks, Notes, Overrides, Tags, Alerts
-
-### Suite 3: SecInfo Tests
-Read-only queries against feed data:
-- `get_feeds` — feed status
-- `get_cves`, `get_cpes` — vulnerability data
-- `get_cert_bund_advisories`, `get_dfn_cert_advisories` — CERT data
-- `get_nvts` — vulnerability tests
-
-### Suite 4: CLI Tests (gvm-rools)
-Tests `gvm-cli` command-line tool end-to-end.
-
-| Test | Description |
-|------|-------------|
-| 01 | `get_version` (unauthenticated) |
-| 02 | Authenticated `get_scanners` |
-| 03 | Pretty-print `get_scan_configs` |
-| 04 | Create target via XML |
-| 05 | Delete target |
-| 06 | `--duration` timing output |
-| 07 | Wrong password non-zero exit |
-| 08 | `--raw` XML passthrough |
-| 09 | Non-existent socket error |
-
-### Validation: gvm-tools Cross-Check
-By default, all test results are validated against python `gvm-tools` to ensure consistency between implementations. This runs on success (configurable) and always on failure for fault isolation.
-
-## Running
-
-### Manual (GitHub Actions)
-Trigger via **workflow_dispatch** at [Actions → E2E Tests → Run workflow](../../actions/workflows/e2e.yml):
-
-| Input | Default | Description |
-|-------|---------|-------------|
-| `rust-gvm-ref` | audited SHA | rust-gvm branch/tag/full SHA, resolved and logged as an immutable commit |
-| `gvm-rools-ref` | `main` | gvm-rools branch/tag/SHA to test |
-| `gvm-version` | `stable` | GVM runtime image tag to test |
-| `run-scan` | `false` | Run extended scan test (~10min+) |
-| `clean` | `false` | Destroy volumes for fresh environment |
-| `validate-gvm-tools` | `true` | Cross-validate results with gvm-tools |
-
-`gvm-version` is applied to the runtime stack images (`gvmd`, `ospd-openvas`, `openvas-scanner`, `pg-gvm`, `redis-server`, `gpg-data`, and `gsad`). The default `stable` tag is the supported CI baseline. Other tags, such as `oldstable`, `edge`, or release-specific tags like `22.4`/`23.x`, are useful for compatibility checks when the Greenbone registry publishes the tag across all runtime images. Use `clean=true` when switching stack versions on a persistent runner to avoid reusing incompatible database or feed volumes.
-
-### Cross-Repo Triggering
-Component repos can trigger E2E tests via `repository_dispatch`. The workflow
-resolves branch or tag inputs once, records the full commit in the build
-provenance, pins all four rust-gvm crates and `Cargo.lock` to that commit, and
-rejects an image whose revision label differs. rust-gvm's protected-main
-trigger passes its source `github.sha` directly.
+Regenerate or check against the supported rust-gvm checkout at
+`b85443167a9fd642b2d91f6f347db048de5aba9c`:
 
 ```bash
-gh api repos/clawosiris/rust-gvm-e2e-tests/dispatches \
-  -f event_type=component-updated \
-  -f client_payload='{"component":"rust-gvm","ref":"my-branch","gvm-version":"stable"}'
+python3 tools/coverage_manifest.py --rust-gvm-source ../rust-gvm
+python3 tools/coverage_manifest.py --check --rust-gvm-source ../rust-gvm
 ```
 
-## Infrastructure
+Adding/removing a registry command or public typed helper without updating the
+policy fails generation, compilation, or inventory tests. Removed helper
+surfaces and helpers replaced by canonical request values are recorded
+separately; generated files are never edited by hand.
 
-### Self-Hosted Runner
-Tests run on a permanent Hetzner VPS runner with Docker. Persistent volumes keep GVM feed data between runs:
-- **Clean run** (`clean=true`): Full feed sync and database rebuild (can exceed 4h)
-- **Warm run** (`clean=false`): Reuses cached feed data (~13 min)
+## Executable lanes
 
-Every workflow event uses the same Compose project and named volumes on the
-self-hosted runner. The workflow therefore has one repository-wide concurrency
-group and does not cancel an in-progress run. This prevents another pull
-request, dispatch, or newer commit from interrupting a multi-hour SCAP import
-and leaving the persistent database without a completed SCAP schema.
+| Lane | Role | Volumes |
+|---|---|---|
+| `devel-fast` | Blocking typed discovery, safe reads, reversible CRUD, CLI | Warm shared |
+| `devel-scan` | Deterministic TCP fixture scan, task state, report/result/export | Warm shared |
+| `devel-isolated` | Admin, global setting restore, trashcan operations | Separate project |
+| `devel-transport` | Explicit TLS, mTLS, SSH endpoints | Opt-in |
+| `differential` | Blocking semantic parity with python-gvm | Opt-in |
 
-Before starting `gvmd`, the workflow starts and waits for `pg-gvm`, then sets
-`max_wal_size=16GB` and `checkpoint_timeout=30min` with `ALTER SYSTEM` and
-reloads PostgreSQL. The image defaults caused roughly 0.8 GB checkpoints every
-one to two minutes during the initial SCAP import; the runner has sufficient
-disk and memory for these workflow-specific settings, which persist with the
-database volume and avoid that checkpoint churn. The tuning step retries for a
-bounded two-minute window because the Community PostgreSQL image can briefly
-report healthy immediately before a startup shutdown/restart transition on a
-warm volume. The idempotent settings must still be applied successfully before
-the workflow starts `gvmd`.
+Ordinary fast and scan jobs intentionally reuse warm feed volumes. Initializing
+a fresh feed can consume most of the shared 21,000-second readiness budget. Volume
+deletion happens only with the explicit `clean` workflow input.
 
-The stack does not start `gvmd` until PostgreSQL and each mounted feed-data
-producer report healthy. This matters because the stock `gvmd` entrypoint
-imports scan configurations once at startup; merely waiting for the data
-containers to start can leave that one-time import with an empty volume.
-The SCAP image copies roughly 10 GiB before its health marker appears, and the
-CERT producers can also outlive their image-default startup window after a feed
-refresh. Their healthchecks receive a ten-minute start period instead of being
-declared unhealthy while those copies are still progressing.
-After gvmd starts, the GMP readiness gate also waits for scan configurations,
-no feed synchronization to remain active, and successful SCAP, CPE, and CERT
-queries. A gvmd upgrade can rebuild those databases after authentication and
-scan configurations are already available; in particular, a CPE query can
-block while the final SCAP aggregation is still running even after CVE queries
-already succeed.
-An uninterrupted clean recovery has exceeded four hours, including more than
-90 minutes in final CPE aggregation. The shared Bash/Rust readiness budget is
-therefore 350 minutes (21,000 seconds), enclosed by GitHub's maximum 360-minute
-step timeout and a 420-minute E2E job so tests and teardown retain their own
-margin. These are hard safety ceilings only; none of the scan-config, feed-sync,
-SCAP, CPE, or CERT readiness assertions are relaxed.
+Before checkout, each self-hosted lane loads the run's already-built runner
+image from runner-temporary storage and uses that exact image as root to restore
+host ownership of an existing, non-symlink `artifacts` directory itself.
+Checkout then runs with `clean: false`; the lane script retains responsibility
+for deleting only the selected lane's known artifact files.
 
-Once the workflow has explicitly started the stack, every ephemeral runner
-invocation uses `docker compose run --no-deps`. The runner mounts the existing
-gvmd socket and must not ask Compose to recreate or traverse the live stack's
-one-shot dependency graph; stack lifecycle remains solely with the explicit
-`up -d` and teardown steps.
+The test details are in [docs/test-cases.md](docs/test-cases.md). Each lane
+publishes structured JSON with pass/fail/known-upstream-bug/conditional/excluded
+counts, exact rust-gvm SHA, GMP version, runtime tags/digests, feature/help
+evidence, and all observations.
 
-During teardown the workflow first quiesces the GVM writers, checkpoints
-PostgreSQL, and then allows up to five minutes for PostgreSQL's clean stop.
-This keeps the persistent database warm without interrupting it while dirty
-pages are still being flushed.
+## Run locally on a Docker host
 
-### Runner Image
-A custom Docker image (`rust-gvm-e2e-runner`) is built in CI with:
-- Pre-compiled `gvm-community-e2e` binary (Rust test harness)
-- Pre-compiled `gvm-cli` from gvm-rools (CLI tests)
-- `python-gvm` / `gvm-tools` for validation cross-checks
+Build the runner, start the warm stack, and execute a lane:
 
-### GVM Community Stack
-Standard Greenbone Community Edition containers:
-- `gvmd` — vulnerability manager (core)
-- `ospd-openvas` — scanner daemon
-- `openvasd` — notus service
-- `pg-gvm` — PostgreSQL backend
-- `redis-server` — scanner KV store
-- Feed containers — VTs, SCAP, CERT, data-objects, report-formats
-
-## Repository Structure
-
-```
-rust-gvm-e2e-tests/
-├── .github/workflows/
-│   └── e2e.yml                 # CI workflow
-├── docker/
-│   ├── docker-compose.yml      # GVM Community stack
-│   ├── Dockerfile.runner       # Test runner image
-│   └── scripts/
-│       ├── wait-ready.sh       # Stack readiness check
-│       ├── run-smoke.sh        # Test orchestrator
-│       └── validate-against-gvm-tools.py  # Cross-validation
-├── tests/
-│   ├── library/                # Rust test harness
-│   │   ├── Cargo.toml
-│   │   └── src/main.rs
-│   └── cli/                    # CLI bash tests
-│       └── smoke.sh
-├── spec/
-│   └── e2e-test-spec.md        # Design specification
-├── journal/
-│   └── *.md                    # Development journal
-├── Cargo.toml                  # Workspace root
-└── README.md
+```bash
+docker build -f docker/Dockerfile.runner \
+  --build-arg RUST_GVM_SHA=b85443167a9fd642b2d91f6f347db048de5aba9c \
+  -t rust-gvm-e2e-runner:ci .
+bash docker/scripts/run-community-lane.sh devel-fast
 ```
 
-## Roadmap
+The lane script uses a unique `E2E_RUN_ID`, records exact images, and always
+stops containers while preserving volumes. Override `E2E_RUN_ID` for
+reproduction. Set `E2E_RECORD_BASELINE=1` only to produce a reviewed candidate
+artifact; normal runs enforce the checked-in baseline.
 
-| Phase | Status | Description |
-|-------|--------|-------------|
-| **1** | ✅ Done | Library + CLI tests via Unix socket |
-| **2** | 🔜 Planned | Multi-version GVM stack testing ([#16](../../issues/16)) |
-| **3** | Planned | REST/gRPC API tests ([rust-gvm-api](https://github.com/greenbone-hive/rust-gvm-api)) |
-| **4** | Planned | MCP server tests (openvas-mcp-server) |
+## Cleanup safety
+
+Every created entity begins with `rust-gvm-e2e-<run-id>-`. Preflight cleanup
+only selects that namespace (plus the historical fixed names from issue #7).
+Deletion is dependency ordered: tickets/reports/tasks before targets/configs/scanners,
+then access/report resources and supporting entities. Final cleanup
+authenticates independently, accepts only explicit success/already-absent
+statuses, and also runs during unwind.
+
+## Community boundary
+
+Agent management and OCI/container-image target management/scanning are never
+required. Those exact issue #118 capabilities are visible as
+`excluded-community`; all other uncertain Community functionality is probed
+and recorded conditionally. The `scan-fixture` Nginx container is an ordinary
+network service target, not an OCI image target.
+
+## Validation
+
+```bash
+cargo fmt --all --check
+cargo check --workspace --all-targets --locked
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+python3 -m unittest discover -s tools -p 'test_*.py'
+bash -n docker/scripts/*.sh tests/cli/*.sh
+bash docker/scripts/test-community-lane-artifacts.sh
+docker compose -f docker/docker-compose.yml config --quiet
+```
+
+The authoritative live validation runs on the repository’s self-hosted Docker
+runner through [Community E2E](.github/workflows/e2e.yml).
+
+## Convergence qualification
+
+This branch statically converges the rich harness onto repaired `main`. The
+checked-in Community observation was carried forward and is marked pending
+issue #148 live revalidation; it is not evidence that the converged scan,
+isolated, or `lane=all` workflows have run. Those targeted runs remain the
+publication gate. Mainline promotion and archival of `devel` are separate
+repository decisions.
 
 ## License
 
