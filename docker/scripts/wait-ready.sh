@@ -8,7 +8,7 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker/docker-compose.yml}"
 SOCKET_PATH="/run/gvmd/gvmd.sock"
 READINESS_TIMEOUT_SECS="${E2E_READINESS_TIMEOUT_SECS:-21000}"
 
-if ! [[ "$READINESS_TIMEOUT_SECS" =~ ^[1-9][0-9]*$ ]]; then
+if ! [[ "${READINESS_TIMEOUT_SECS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "ERROR: E2E_READINESS_TIMEOUT_SECS must be a positive integer" >&2
   exit 2
 fi

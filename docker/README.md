@@ -12,29 +12,32 @@ The compose file is based on the current Greenbone Community container docs at `
 
 ## First run expectations
 
-The first `docker compose up -d` is slow. The feed containers download and unpack vulnerability tests, SCAP data, CERT data, and report formats before `gvmd` becomes responsive. Expect several minutes on a warm network and potentially 10+ minutes on a cold start.
+The first `docker compose up -d` is slow. The feed containers download and unpack vulnerability tests, SCAP data, CERT data, and report formats before `gvmd` becomes responsive. A clean SCAP/CPE aggregation can take hours; the coordinated readiness budget is 21,000 seconds.
 
-Named volumes keep feed and database state between runs. Use `docker compose down` to preserve those caches, or `./scripts/reset.sh` to remove everything and force a clean bootstrap.
+Named volumes keep feed and database state between runs. Use
+`docker compose -f docker/docker-compose.yml down` to preserve those caches.
+`docker/scripts/reset.sh` removes everything and forces a clean bootstrap; do
+not use it as a casual retry.
 
 ## Quick start
 
+From the repository root, build the pinned runner and use the lane wrapper:
+
 ```bash
-cd tests/e2e/gvm-community
-cp .env.example .env
-
-docker compose up -d
-docker compose run --no-deps --rm rust-gvm-e2e ./tests/e2e/gvm-community/scripts/wait-ready.sh
-docker compose run --no-deps --rm rust-gvm-e2e ./tests/e2e/gvm-community/scripts/run-smoke.sh
-
-# Optional extended scan flow
-E2E_RUN_SCAN=1 docker compose run --no-deps --rm rust-gvm-e2e ./tests/e2e/gvm-community/scripts/run-smoke.sh
+docker build -f docker/Dockerfile.runner \
+  --build-arg RUST_GVM_SHA=b85443167a9fd642b2d91f6f347db048de5aba9c \
+  -t rust-gvm-e2e-runner:ci .
+bash docker/scripts/run-community-lane.sh devel-fast
 ```
+
+The wrapper starts and tunes PostgreSQL before gvmd, applies both socket and
+authenticated feed readiness gates, and checkpoints before stopping the stack.
 
 To test a different published GVM runtime image tag, set `GVM_VERSION` before pulling or starting the stack:
 
 ```bash
-GVM_VERSION=edge docker compose pull
-GVM_VERSION=edge docker compose up -d
+GVM_VERSION=edge docker compose -f docker/docker-compose.yml pull
+GVM_VERSION=edge docker compose -f docker/docker-compose.yml up -d
 ```
 
 The default is `stable`, which is the regular CI baseline. Non-default tags are compatibility targets and must be present for all runtime images (`gvmd`, `ospd-openvas`, `openvas-scanner`, `pg-gvm`, `redis-server`, `gpg-data`, and `gsad`). When switching between stack versions on the same host, remove the existing volumes first with `./scripts/reset.sh` or use a separate compose project to avoid mixing database/feed state across versions.
@@ -42,13 +45,13 @@ The default is `stable`, which is the regular CI baseline. Non-default tags are 
 To stop the stack but keep cached feed data:
 
 ```bash
-docker compose down
+docker compose -f docker/docker-compose.yml down
 ```
 
 To stop the stack and drop all named volumes:
 
 ```bash
-./scripts/reset.sh
+docker/scripts/reset.sh
 ```
 
 ## Environment variables
@@ -56,17 +59,23 @@ To stop the stack and drop all named volumes:
 - `GVM_ADMIN_USER`: GMP username. Default `admin`.
 - `GVM_ADMIN_PASS`: GMP password. Default `admin`.
 - `GVM_SOCKET_PATH`: Socket path inside the runner container. Default `/run/gvmd/gvmd.sock`.
+- `E2E_READINESS_TIMEOUT_SECS`: Combined socket, scan-config, SCAP/CPE, and
+  CERT readiness budget. Default `21000`.
+- `E2E_READINESS_POLL_INTERVAL_SECS`: Authenticated feed poll interval.
+  Default `30`.
+- `E2E_READINESS_MAX_RECONNECTS`: Bounded connection-loss retries. Default
+  `12`.
 - `GVM_VERSION`: GVM runtime image tag. Default `stable`.
 - `E2E_RUN_SCAN`: Set to `1` to run the slower scan lifecycle test in addition to the smoke checks.
 
 ## Rust binary
 
-The harness uses the workspace-level example target:
+The harness is the `gvm-community-e2e` workspace binary:
 
 ```bash
-cargo build --example e2e_gvm_community
-cargo run --example e2e_gvm_community -- --mode smoke
-cargo run --example e2e_gvm_community -- --mode wait-ready
+cargo build --locked --bin gvm-community-e2e
+cargo run --locked --bin gvm-community-e2e -- --mode smoke
+cargo run --locked --bin gvm-community-e2e -- --mode wait-ready
 ```
 
 ## Troubleshooting
