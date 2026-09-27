@@ -1948,12 +1948,7 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
         ))
         .await;
     ensure(
-        matches!(
-            rejected,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { .. }
-            ))
-        ),
+        matches!(rejected, Err(GvmError::Server { .. })),
         "typed authentication failure did not preserve the server error",
     )?;
     rejected_client.disconnect().await?;
@@ -2462,12 +2457,7 @@ async fn run_config_scanner_lifecycles(
     invalid_request.usage_type = Some(ConfigUsageType::Scan);
     let invalid_config = client.create_config(invalid_request).await;
     ensure(
-        matches!(
-            invalid_config,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { .. }
-            ))
-        ),
+        matches!(invalid_config, Err(GvmError::Server { .. })),
         "invalid config base reference did not return a typed server error",
     )?;
 
@@ -2566,12 +2556,7 @@ async fn run_config_scanner_lifecycles(
         )?))
         .await;
     ensure(
-        matches!(
-            invalid,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { .. }
-            ))
-        ),
+        matches!(invalid, Err(GvmError::Server { .. })),
         "invalid scanner reference did not return a typed server error",
     )?;
     let trashed = client
@@ -2694,12 +2679,7 @@ async fn run_isolated_suite(
     duplicate_request.password = Some("not-used".to_string());
     let duplicate = client.create_user(duplicate_request).await;
     ensure(
-        matches!(
-            duplicate,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { .. }
-            ))
-        ),
+        matches!(duplicate, Err(GvmError::Server { .. })),
         "duplicate user creation did not produce a typed server error",
     )?;
     log_pass("isolated user duplicate", "typed conflict error");
@@ -2859,12 +2839,7 @@ async fn run_isolated_suite(
         .create_user(CreateUserRequest::new("rust-gvm-e2e-permission-denied"))
         .await;
     ensure(
-        matches!(
-            denied,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { .. }
-            ))
-        ),
+        matches!(denied, Err(GvmError::Server { .. })),
         "restricted user unexpectedly created an administrative user",
     )?;
     restricted.disconnect().await?;
@@ -2945,12 +2920,7 @@ async fn run_isolated_suite(
         .create_host(CreateHostRequest::new("not-an-ip"))
         .await;
     ensure(
-        matches!(
-            invalid_host,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { .. }
-            ))
-        ),
+        matches!(invalid_host, Err(GvmError::Server { .. })),
         "invalid host asset did not produce a typed server error",
     )?;
     let mut create_asset = CreateAssetRequest::new("192.0.2.119");
@@ -3087,10 +3057,10 @@ async fn run_isolated_suite(
             .await
         {
             Ok(response) => response,
-            Err(GvmError::Parse(gvm_gmp::responses::ParseError::ServerError {
+            Err(GvmError::Server {
                 status: 400,
                 message,
-            })) if message.contains("Failed to find setting") => continue,
+            }) if message.contains("Failed to find setting") => continue,
             Err(error) => return Err(error.into()),
         };
         assert_typed_status(
@@ -3463,9 +3433,7 @@ async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Re
     ensure(
         matches!(
             verify_delete_response,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { status: 404, .. }
-            ))
+            Err(GvmError::Server { status: 404, .. })
         ),
         "verify target deletion did not return typed 404",
     )?;
@@ -3683,7 +3651,7 @@ async fn run_scan_suite(
                 response.status, response.status_text, response.report_id
             )));
         }
-        Err(GvmError::Parse(gvm_gmp::responses::ParseError::ServerError { .. })) => {
+        Err(GvmError::Server { .. }) => {
             log_pass("typed duplicate start_task", "typed server rejection")
         }
         Err(error) => return Err(error.into()),
@@ -3793,12 +3761,7 @@ async fn run_scan_suite(
         .get_report(GetReportRequest::new(report_id.clone()))
         .await;
     ensure(
-        matches!(
-            absent_report,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { status: 404, .. }
-            ))
-        ),
+        matches!(absent_report, Err(GvmError::Server { status: 404, .. })),
         "verify report cleanup did not return typed 404",
     )?;
     let delete_task_response = client
@@ -4027,12 +3990,7 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
         .get_port_list(GetPortListRequest::new(pl_id.clone()))
         .await;
     ensure(
-        matches!(
-            verify_pl_resp,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { status: 404, .. }
-            ))
-        ),
+        matches!(verify_pl_resp, Err(GvmError::Server { status: 404, .. })),
         "verify port_list absent did not return typed 404",
     )?;
     log_pass("crud 04", "verify port_list absent");
@@ -4084,12 +4042,7 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
         .execute(GetCredentialRequest::new(cred_id.clone()))
         .await;
     ensure(
-        matches!(
-            verify_cred_resp,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { status: 404, .. }
-            ))
-        ),
+        matches!(verify_cred_resp, Err(GvmError::Server { status: 404, .. })),
         "verify credential absent did not return typed 404",
     )?;
     log_pass("crud 08", "verify credential absent");
@@ -4146,12 +4099,7 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
         .get_schedule(GetScheduleRequest::new(sched_id.clone()))
         .await;
     ensure(
-        matches!(
-            verify_sched_resp,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { status: 404, .. }
-            ))
-        ),
+        matches!(verify_sched_resp, Err(GvmError::Server { status: 404, .. })),
         "verify schedule absent did not return typed 404",
     )?;
     log_pass("crud 12", "verify schedule absent");
@@ -4201,9 +4149,7 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     ensure(
         matches!(
             verify_filter_resp,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { status: 404, .. }
-            ))
+            Err(GvmError::Server { status: 404, .. })
         ),
         "verify filter absent did not return typed 404",
     )?;
@@ -4352,12 +4298,7 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
 
     let verify_note_resp = client.get_note(GetNoteRequest::new(note_id.clone())).await;
     ensure(
-        matches!(
-            verify_note_resp,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { status: 404, .. }
-            ))
-        ),
+        matches!(verify_note_resp, Err(GvmError::Server { status: 404, .. })),
         "verify note absent did not return typed 404",
     )?;
     log_pass("crud 24", "verify note absent");
@@ -4417,9 +4358,7 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     ensure(
         matches!(
             verify_override_resp,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { status: 404, .. }
-            ))
+            Err(GvmError::Server { status: 404, .. })
         ),
         "verify override absent did not return typed 404",
     )?;
@@ -4461,12 +4400,7 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
 
     let verify_tag_resp = client.get_tag(GetTagRequest::new(tag_id.clone())).await;
     ensure(
-        matches!(
-            verify_tag_resp,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { status: 404, .. }
-            ))
-        ),
+        matches!(verify_tag_resp, Err(GvmError::Server { status: 404, .. })),
         "verify tag absent did not return typed 404",
     )?;
     log_pass("crud 32", "verify tag absent");
@@ -4510,12 +4444,7 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
         .get_alert(GetAlertRequest::new(alert.id.clone()))
         .await;
     ensure(
-        matches!(
-            absent,
-            Err(GvmError::Parse(
-                gvm_gmp::responses::ParseError::ServerError { status: 404, .. }
-            ))
-        ),
+        matches!(absent, Err(GvmError::Server { status: 404, .. })),
         "verify alert absent did not return typed 404",
     )?;
     log_pass(
@@ -5567,10 +5496,10 @@ async fn modify_role_permission_reconciled(
             )?;
             PermissionModifyDelivery::Confirmed
         }
-        Err(GvmError::Parse(gvm_gmp::responses::ParseError::ServerError {
+        Err(GvmError::Server {
             status: 400,
             message,
-        })) if message == "Error in SUBJECT" => PermissionModifyDelivery::KnownSubjectRejection,
+        }) if message == "Error in SUBJECT" => PermissionModifyDelivery::KnownSubjectRejection,
         Err(GvmError::Connection(error)) => {
             PermissionModifyDelivery::ConnectionLost(error.to_string())
         }
