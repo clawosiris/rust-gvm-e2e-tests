@@ -1247,7 +1247,7 @@ async fn run_scan_suite(
             &stopped.status_text,
             selected_scanner.stop_contract,
         )?;
-        poll_task_stopped(
+        poll_task_terminal_after_stop(
             client,
             &task_id,
             Duration::from_secs(config.task_progress_timeout_secs),
@@ -2322,7 +2322,7 @@ async fn poll_task_status(
     )))
 }
 
-async fn poll_task_stopped(
+async fn poll_task_terminal_after_stop(
     client: &mut GmpClient<UnixSocketConnection>,
     task_id: &EntityId,
     timeout: Duration,
@@ -2348,7 +2348,7 @@ async fn poll_task_stopped(
         let task = only_item(&response.items, "get_task after synchronous stop")?;
         if let Some(status) = &task.status {
             last.clone_from(status);
-            if status == "Stopped" {
+            if task_is_terminal_after_stop(status) {
                 return Ok(());
             }
         }
@@ -2360,7 +2360,7 @@ async fn poll_task_stopped(
         sleep(delay).await;
     }
     Err(AppError::Assertion(format!(
-        "task {task_id} did not reach terminal Stopped after synchronous stop within {} seconds; last status: {last}",
+        "task {task_id} did not reach terminal Stopped or raced terminal Done after synchronous stop within {} seconds; last status: {last}",
         timeout.as_secs()
     )))
 }
@@ -2375,6 +2375,10 @@ fn task_is_waiting_to_start(status: &str) -> bool {
 
 fn should_request_stop(status: &str) -> bool {
     status == "Running"
+}
+
+fn task_is_terminal_after_stop(status: &str) -> bool {
+    matches!(status, "Stopped" | "Done")
 }
 
 fn assert_stop_task_contract(
@@ -2878,6 +2882,14 @@ mod tests {
             StopTaskContract::Synchronous
         )
         .is_err());
+    }
+
+    #[test]
+    fn post_stop_poll_accepts_only_stopped_or_raced_done() {
+        assert!(task_is_terminal_after_stop("Stopped"));
+        assert!(task_is_terminal_after_stop("Done"));
+        assert!(!task_is_terminal_after_stop("Running"));
+        assert!(!task_is_terminal_after_stop("Interrupted"));
     }
 
     #[test]

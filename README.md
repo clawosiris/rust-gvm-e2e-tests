@@ -55,7 +55,7 @@ Core protocol validation via Unix socket connection to gvmd.
 | 10 | Verify deletion |
 
 Extended (opt-in with `run-scan: true`):
-- Create task with a semantic OpenVAS/openvasd scanner → start (exact `202`) → wait through `New`/`Requested`/`Queued` → stop only once `Running` (exact synchronous `200`) → poll for terminal `Stopped` → get report
+- Create task with a semantic OpenVAS/openvasd scanner → start (exact `202`) → wait through `New`/`Requested`/`Queued` → stop only once `Running` (exact synchronous `200`) → poll for terminal `Stopped`, or exact terminal `Done` when completion wins the stop race → get report
 
 ### Suite 2: CRUD Tests
 Full create → get → delete → verify-absent lifecycle for:
