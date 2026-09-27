@@ -404,6 +404,24 @@ struct CleanupTracker {
     armed: bool,
 }
 
+#[derive(Debug, Default)]
+struct ScanMutationGuard {
+    started_task_ids: BTreeSet<String>,
+}
+
+impl ScanMutationGuard {
+    fn claim_task_start(&mut self, task_id: &EntityId) -> Result<(), AppError> {
+        if self.started_task_ids.insert(task_id.to_string()) {
+            Ok(())
+        } else {
+            Err(AppError::DuplicateMutation {
+                operation: "start_task",
+                resource_id: task_id.to_string(),
+            })
+        }
+    }
+}
+
 impl CleanupTracker {
     fn new(config: EnvConfig) -> Self {
         Self {
@@ -468,7 +486,9 @@ impl CleanupTracker {
     }
 
     fn track_report(&mut self, id: &EntityId) {
-        self.report_ids.push(id.to_string());
+        if id.as_str() != "0" && !self.report_ids.iter().any(|value| value == id.as_str()) {
+            self.report_ids.push(id.to_string());
+        }
     }
 
     fn track_config(&mut self, id: &EntityId) {
@@ -855,6 +875,11 @@ enum AppError {
     Usage(String),
     #[error("invalid entity id `{0}`")]
     InvalidEntityId(String),
+    #[error("duplicate {operation} mutation blocked locally for {resource_id}")]
+    DuplicateMutation {
+        operation: &'static str,
+        resource_id: String,
+    },
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -3528,6 +3553,24 @@ async fn resolve_scan_report_id(
     )))
 }
 
+async fn start_scan_task_once(
+    client: &mut GmpClient<UnixSocketConnection>,
+    tracker: &mut CleanupTracker,
+    mutations: &mut ScanMutationGuard,
+    task_id: &EntityId,
+) -> Result<EntityId, AppError> {
+    mutations.claim_task_start(task_id)?;
+    let started = client
+        .start_task(StartTaskRequest::new(task_id.clone()))
+        .await?;
+    ensure(started.status == 202, "typed start_task did not return 202")?;
+    let report_id = started.report_id.ok_or_else(|| {
+        AppError::Assertion("typed start_task response omitted report_id".to_string())
+    })?;
+    tracker.track_report(&report_id);
+    Ok(report_id)
+}
+
 async fn run_scan_suite(
     client: &mut GmpClient<UnixSocketConnection>,
     config: &EnvConfig,
@@ -3618,52 +3661,26 @@ async fn run_scan_suite(
         "typed no-match get_results unexpectedly returned a result",
     )?;
 
-    let started = client
-        .start_task(StartTaskRequest::new(task.id.clone()))
-        .await?;
-    ensure(started.status == 202, "typed start_task did not return 202")?;
-    let started_report_id = started.report_id.ok_or_else(|| {
-        AppError::Assertion("typed start_task response omitted report_id".to_string())
-    })?;
-    match client
-        .start_task(StartTaskRequest::new(task.id.clone()))
-        .await
-    {
-        Ok(response) if response.status >= 400 => log_pass(
-            "typed duplicate start_task",
-            &format!(
-                "rejected with status {} ({})",
-                response.status, response.status_text
-            ),
-        ),
-        Ok(response)
-            if response.status == 202
-                && response.report_id.as_ref() == Some(&started_report_id) =>
-        {
+    let mut mutations = ScanMutationGuard::default();
+    let started_report_id = start_scan_task_once(client, tracker, &mut mutations, &task.id).await?;
+    match start_scan_task_once(client, tracker, &mut mutations, &task.id).await {
+        Err(AppError::DuplicateMutation {
+            operation: "start_task",
+            resource_id,
+        }) if resource_id == task.id.as_str() => {
             log_pass(
-                "typed duplicate start_task",
-                "idempotent response preserved the active report",
+                "local duplicate start_task",
+                "exactly-once guard suppressed a second wire mutation",
             );
         }
-        Ok(response) => {
+        Ok(second_report_id) => {
             return Err(AppError::Assertion(format!(
-                "duplicate start_task returned status {} ({}) with report {:?}, expected a rejection or the existing report {started_report_id}",
-                response.status, response.status_text, response.report_id
+                "local exactly-once guard allowed a second start_task for task {} and report {second_report_id}",
+                task.id
             )));
         }
-        Err(GvmError::Server { .. }) => {
-            log_pass("typed duplicate start_task", "typed server rejection")
-        }
-        Err(error) => return Err(error.into()),
+        Err(error) => return Err(error),
     }
-
-    renew_authenticated_after_response(
-        client,
-        config,
-        Duration::from_secs(config.task_progress_timeout_secs),
-        "duplicate start_task",
-    )
-    .await?;
 
     wait_task_state(
         client,
@@ -6145,6 +6162,78 @@ mod tests {
     }
 
     #[test]
+    fn scan_start_guard_sends_once_and_tracks_the_owned_report() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("scan-start-once");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![vec![
+                        ("get_version", Some(VERSION_RESPONSE)),
+                        ("authenticate", Some(AUTH_RESPONSE)),
+                        ("start_task", Some(START_TASK_RESPONSE)),
+                    ]],
+                ));
+                let config = socket_test_config(&path);
+                let mut client = connect_and_authenticate(&config).await;
+                let task_id = EntityId::new("task-id").expect("valid task ID");
+                let mut tracker = CleanupTracker::new(config);
+                let mut mutations = ScanMutationGuard::default();
+
+                let report_id =
+                    start_scan_task_once(&mut client, &mut tracker, &mut mutations, &task_id)
+                        .await
+                        .expect("first start_task should be delivered");
+                let duplicate =
+                    start_scan_task_once(&mut client, &mut tracker, &mut mutations, &task_id)
+                        .await
+                        .expect_err("second start_task should be blocked locally");
+
+                assert_eq!(report_id.as_str(), "report-id");
+                assert!(matches!(
+                    duplicate,
+                    AppError::DuplicateMutation {
+                        operation: "start_task",
+                        resource_id,
+                    } if resource_id == "task-id"
+                ));
+                assert_eq!(tracker.report_ids, ["report-id"]);
+                tracker.armed = false;
+
+                let commands = server.await.expect("scripted server");
+                assert_eq!(commands, ["get_version", "authenticate", "start_task"]);
+                assert_eq!(
+                    commands
+                        .iter()
+                        .filter(|command| command.as_str() == "start_task")
+                        .count(),
+                    1,
+                    "the scan flow must never deliver start_task twice"
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
+    }
+
+    #[test]
+    fn provisional_report_ids_are_not_cleanup_ownership() {
+        let config = socket_test_config(Path::new("/tmp/not-used.sock"));
+        let mut tracker = CleanupTracker::new(config);
+        let provisional = EntityId::new("0").expect("valid provisional report ID");
+        let concrete = EntityId::new("report-id").expect("valid concrete report ID");
+
+        tracker.track_report(&provisional);
+        tracker.track_report(&concrete);
+        tracker.track_report(&concrete);
+
+        assert_eq!(tracker.report_ids, ["report-id"]);
+        tracker.armed = false;
+    }
+
+    #[test]
     fn known_closing_response_renews_before_the_next_command() {
         Builder::new_current_thread()
             .enable_all()
@@ -6181,7 +6270,7 @@ mod tests {
                     &mut client,
                     &config,
                     Duration::from_secs(2),
-                    "duplicate start_task",
+                    "known closing response",
                 )
                 .await
                 .expect("renew after known closing response");

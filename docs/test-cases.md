@@ -29,10 +29,12 @@ dependency-ordered cleanup on success or unwind.
 
 The nightly/manual warm-volume lane scans the Compose `scan-fixture` HTTP
 service as a network host. It creates a `T:80` port list, target and task; checks
-typed task identity and illegal double-start behavior; observes start and
-synchronous stop or terminal completion; resolves task/report linkage; imports
-a sanitized report fixture; and removes reports before tasks, targets, and
-supporting resources.
+typed task identity, delivers `start_task` exactly once, and verifies that a
+second local attempt is blocked before another wire mutation; observes start
+and synchronous stop or terminal completion; resolves task/report linkage;
+imports a sanitized report fixture; and removes reports before tasks, targets,
+and supporting resources. A concrete report returned by `start_task` becomes
+cleanup-owned immediately.
 
 Issue #118's scan-linked typed report/result and export gap remains open. The
 pinned stable gvmd baseline aborts those expansion paths because
