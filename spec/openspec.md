@@ -137,13 +137,15 @@ Must complete within ~60 seconds once gvmd is ready.
 | 4 | Start task | `start_task` | Exact 202, returns report_id |
 | 5 | Poll task status | `get_tasks(task_id)` (bounded loop) | Wait through `New`/`Requested`/`Queued` until runnable or terminal |
 | 6 | Stop running task | `stop_task` | Issue only from `Running`; the selected OpenVAS/openvasd backend returns exact synchronous 200 |
-| 7 | Confirm stopped | `get_tasks(task_id)` (bounded loop) | Require terminal `Stopped` after the successful synchronous stop and before report retrieval |
+| 7 | Confirm post-stop terminal state | `get_tasks(task_id)` (bounded loop) | Require terminal `Stopped`, or exact terminal `Done` if completion wins the race after `Running` was observed and before the synchronous stop is processed; reject every other state before report retrieval |
 | 8 | Get report | `get_reports(report_id)` | 200, contains results XML |
 | 9 | Cleanup | Delete task, target | 200 |
 
-The exact synchronous 200 stop response and terminal `Stopped` postcondition are
-specific to the scan-capable OpenVAS/openvasd backends selected by this flow;
-they are not a global contract for every `stop_task` backend path.
+The exact synchronous 200 stop response and post-stop terminal-state contract
+are specific to the scan-capable OpenVAS/openvasd backends selected by this
+flow; they are not a global contract for every `stop_task` backend path. `Done`
+is accepted only as the terminal completion race after the flow observed
+`Running`; it does not broaden acceptance to non-terminal or failed states.
 
 ### 5.3 Failure Handling
 
