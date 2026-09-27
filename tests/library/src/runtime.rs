@@ -432,6 +432,10 @@ mod tests {
             parsed.registry_version_gates.get("get_report_hosts"),
             Some(&false)
         );
+        assert_eq!(
+            parsed.registry_version_gates.get("sync_config"),
+            Some(&true)
+        );
     }
 
     #[test]

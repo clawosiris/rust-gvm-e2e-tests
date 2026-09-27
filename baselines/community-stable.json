@@ -222,6 +222,7 @@
     "modify_integration_config": false,
     "modify_license": true,
     "modify_web_application_target": false,
+    "sync_config": true,
     "verify_credential_store": false
   }
 }
