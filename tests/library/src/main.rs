@@ -590,8 +590,12 @@ impl CleanupTracker {
 
         while let Some(report_id) = self.report_ids.last().cloned() {
             let entity_id = parse_entity_id(&report_id)?;
-            let response = client.execute(DeleteReportRequest::new(entity_id)).await?;
-            log_cleanup_result("delete_report", &report_id, Some(response.status))?;
+            let status = match client.execute(DeleteReportRequest::new(entity_id)).await {
+                Ok(response) => response.status,
+                Err(GvmError::Server { status: 404, .. }) => 404,
+                Err(error) => return Err(error.into()),
+            };
+            log_cleanup_result("delete_report", &report_id, Some(status))?;
             self.report_ids.pop();
         }
 
@@ -5957,6 +5961,8 @@ mod tests {
         r#"<start_task_response status="202" status_text="OK, request submitted">"#,
         "<report_id>report-id</report_id></start_task_response>"
     );
+    const MISSING_REPORT_RESPONSE: &str =
+        r#"<delete_report_response status="404" status_text="Failed to find report"/>"#;
     const MODIFIED_PERMISSION_RESPONSE: &str = concat!(
         r#"<get_permissions_response status="200" status_text="OK">"#,
         r#"<permission id="permission-id"><name>get_tasks</name>"#,
@@ -6234,6 +6240,43 @@ mod tests {
 
         assert_eq!(tracker.report_ids, ["report-id"]);
         tracker.armed = false;
+    }
+
+    #[test]
+    fn cleanup_treats_an_already_absent_report_as_complete() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("missing-report-cleanup");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![vec![
+                        ("get_version", Some(VERSION_RESPONSE)),
+                        ("authenticate", Some(AUTH_RESPONSE)),
+                        ("delete_report", Some(MISSING_REPORT_RESPONSE)),
+                    ]],
+                ));
+                let config = socket_test_config(&path);
+                let mut tracker = CleanupTracker::new(config);
+                let report_id = EntityId::new("report-id").expect("valid report ID");
+                tracker.track_report(&report_id);
+
+                tracker
+                    .cleanup_now()
+                    .await
+                    .expect("an already-absent report is cleaned up");
+
+                assert!(tracker.report_ids.is_empty());
+                assert!(!tracker.armed);
+                assert_eq!(
+                    server.await.expect("scripted server"),
+                    ["get_version", "authenticate", "delete_report"]
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
     }
 
     #[test]
