@@ -2945,8 +2945,8 @@ async fn run_isolated_suite(
         .create_host(CreateHostRequest::new("not-an-ip"))
         .await;
     ensure(
-        matches!(invalid_host, Err(GvmError::Server { .. })),
-        "invalid host asset did not produce a typed server error",
+        matches!(invalid_host, Err(GvmError::Request(_))),
+        "invalid host asset did not produce a typed request error",
     )?;
     let mut create_asset = CreateAssetRequest::new("192.0.2.119");
     create_asset.comment = Some(config.name("generic-asset"));
@@ -2969,7 +2969,10 @@ async fn run_isolated_suite(
     tracker
         .asset_ids
         .retain(|id| id != generic_asset_id.as_str());
-    log_pass("isolated host asset", "typed create/get/modify/failure");
+    log_pass(
+        "isolated host asset",
+        "typed create/get/modify/local-validation failure",
+    );
 
     let report_formats = client
         .get_report_formats(get_report_formats_with_params_request())

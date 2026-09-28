@@ -54,7 +54,8 @@ namespace. It covers:
 
 - user/group/role/permission create, typed reads, modify, duplicate and
   permission-denied failures, trash/restore/ultimate delete;
-- host asset and operating-system asset parsing plus modify/failure behavior;
+- host asset and operating-system asset parsing plus modify and local request-validation
+  failure behavior;
 - cloned report-format and TLS-certificate lifecycles;
 - global setting snapshot/write/restore;
 - dedicated `empty_trashcan` execution.
