@@ -34,7 +34,7 @@ on:
           - differential
           - all
       rust-gvm-ref:
-        description: Supported immutable rust-gvm revision (overrides are rejected)
+        description: Exact canonical rust-gvm commit SHA (defaults to the reviewed pin)
         required: true
         type: string
         default: b85443167a9fd642b2d91f6f347db048de5aba9c
@@ -74,22 +74,68 @@ env:
   RUST_GVM_SHA: b85443167a9fd642b2d91f6f347db048de5aba9c
 
 jobs:
-  inventory:
-    name: Community coverage inventory
+  resolve-refs:
+    name: Resolve exact component revisions
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
+    outputs:
+      rust-gvm-ref: ${{ steps.refs.outputs.rust-gvm-ref }}
+      rust-gvm-sha: ${{ steps.refs.outputs.rust-gvm-sha }}
+      gvm-rools-ref: ${{ steps.refs.outputs.gvm-rools-ref }}
+      gvm-version: ${{ steps.refs.outputs.gvm-version }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
-      - name: Fetch authoritative pinned rust-gvm source
+      - name: Resolve immutable rust-gvm candidate
+        id: refs
+        env:
+          DISPATCH_RUST_GVM_REF: ${{ inputs.rust-gvm-ref }}
+          DISPATCH_GVM_ROOLS_REF: ${{ inputs.gvm-rools-ref }}
+          DISPATCH_GVM_VERSION: ${{ inputs.gvm-version }}
+          PAYLOAD_COMPONENT: ${{ github.event.client_payload.component }}
+          PAYLOAD_REF: ${{ github.event.client_payload.ref }}
+          PAYLOAD_GVM_VERSION: ${{ github.event.client_payload['gvm-version'] }}
+        run: |
+          python3 tools/resolve_component_refs.py \
+            --event-name "${{ github.event_name }}" \
+            --default-rust-gvm-sha "${RUST_GVM_SHA}" \
+            --dispatch-rust-gvm-ref "${DISPATCH_RUST_GVM_REF}" \
+            --dispatch-gvm-rools-ref "${DISPATCH_GVM_ROOLS_REF}" \
+            --dispatch-gvm-version "${DISPATCH_GVM_VERSION}" \
+            --payload-component "${PAYLOAD_COMPONENT}" \
+            --payload-ref "${PAYLOAD_REF}" \
+            --payload-gvm-version "${PAYLOAD_GVM_VERSION}" \
+            >> "${GITHUB_OUTPUT}"
+      - name: Verify candidate exists in canonical rust-gvm
+        env:
+          RESOLVED_RUST_GVM_SHA: ${{ steps.refs.outputs.rust-gvm-sha }}
         run: |
           git init -q /tmp/rust-gvm
           git -C /tmp/rust-gvm remote add origin https://github.com/greenbone-hive/rust-gvm.git
-          git -C /tmp/rust-gvm fetch --depth 1 origin "${RUST_GVM_SHA}"
+          git -C /tmp/rust-gvm fetch --depth 1 origin "${RESOLVED_RUST_GVM_SHA}"
           git -C /tmp/rust-gvm checkout --detach FETCH_HEAD
-          test "$(git -C /tmp/rust-gvm rev-parse HEAD)" = "${RUST_GVM_SHA}"
+          test "$(git -C /tmp/rust-gvm rev-parse HEAD)" = "${RESOLVED_RUST_GVM_SHA}"
+
+  inventory:
+    name: Community coverage inventory
+    needs: resolve-refs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RESOLVED_RUST_GVM_SHA: ${{ needs.resolve-refs.outputs.rust-gvm-sha }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+      - name: Fetch exact rust-gvm source under test
+        run: |
+          git init -q /tmp/rust-gvm
+          git -C /tmp/rust-gvm remote add origin https://github.com/greenbone-hive/rust-gvm.git
+          git -C /tmp/rust-gvm fetch --depth 1 origin "${RESOLVED_RUST_GVM_SHA}"
+          git -C /tmp/rust-gvm checkout --detach FETCH_HEAD
+          test "$(git -C /tmp/rust-gvm rev-parse HEAD)" = "${RESOLVED_RUST_GVM_SHA}"
       - name: Verify generated inventory and source tests
         run: |
-          python3 tools/coverage_manifest.py --check --rust-gvm-source /tmp/rust-gvm
+          python3 tools/coverage_manifest.py --check \
+            --rust-gvm-source /tmp/rust-gvm \
+            --policy-rust-gvm-sha "${RUST_GVM_SHA}"
           python3 -m unittest discover -s tools -p 'test_*.py'
           cargo fmt --all --check
           cargo check --workspace --all-targets --locked
@@ -101,7 +147,7 @@ jobs:
 
   build-runner:
     name: Build Community runner
-    needs: inventory
+    needs: [resolve-refs, inventory]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
@@ -111,37 +157,19 @@ jobs:
       gvm-version: ${{ steps.refs.outputs.gvm-version }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
-      - name: Resolve component refs to immutable revisions
+      - name: Export resolved component revisions
         id: refs
         env:
-          DISPATCH_RUST_GVM_REF: ${{ inputs.rust-gvm-ref }}
-          DISPATCH_GVM_ROOLS_REF: ${{ inputs.gvm-rools-ref }}
-          DISPATCH_GVM_VERSION: ${{ inputs.gvm-version }}
-          PAYLOAD_COMPONENT: ${{ github.event.client_payload.component }}
-          PAYLOAD_REF: ${{ github.event.client_payload.ref }}
-          PAYLOAD_GVM_VERSION: ${{ github.event.client_payload['gvm-version'] }}
+          RESOLVED_RUST_GVM_REF: ${{ needs.resolve-refs.outputs.rust-gvm-ref }}
+          RESOLVED_RUST_GVM_SHA: ${{ needs.resolve-refs.outputs.rust-gvm-sha }}
+          RESOLVED_GVM_ROOLS_REF: ${{ needs.resolve-refs.outputs.gvm-rools-ref }}
+          RESOLVED_GVM_VERSION: ${{ needs.resolve-refs.outputs.gvm-version }}
         run: |
-          rust_ref="${DISPATCH_RUST_GVM_REF:-${RUST_GVM_SHA}}"
-          rools_ref="${DISPATCH_GVM_ROOLS_REF:-main}"
-          gvm_version="${DISPATCH_GVM_VERSION:-stable}"
-          if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
-            if [[ "${PAYLOAD_COMPONENT}" == "rust-gvm" && -n "${PAYLOAD_REF}" ]]; then
-              rust_ref="${PAYLOAD_REF}"
-            elif [[ "${PAYLOAD_COMPONENT}" == "gvm-rools" && -n "${PAYLOAD_REF}" ]]; then
-              rools_ref="${PAYLOAD_REF}"
-            fi
-            gvm_version="${PAYLOAD_GVM_VERSION:-${gvm_version}}"
-          fi
-          if [[ "${rust_ref}" != "${RUST_GVM_SHA}" ]]; then
-            echo "rust-gvm ref must remain pinned to ${RUST_GVM_SHA}; got ${rust_ref}" >&2
-            exit 1
-          fi
-          rust_sha="${RUST_GVM_SHA}"
           {
-            echo "rust-gvm-ref=${rust_ref}"
-            echo "rust-gvm-sha=${rust_sha}"
-            echo "gvm-rools-ref=${rools_ref}"
-            echo "gvm-version=${gvm_version}"
+            echo "rust-gvm-ref=${RESOLVED_RUST_GVM_REF}"
+            echo "rust-gvm-sha=${RESOLVED_RUST_GVM_SHA}"
+            echo "gvm-rools-ref=${RESOLVED_GVM_ROOLS_REF}"
+            echo "gvm-version=${RESOLVED_GVM_VERSION}"
           } >> "${GITHUB_OUTPUT}"
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Build runner at exact rust-gvm revision

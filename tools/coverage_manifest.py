@@ -700,6 +700,17 @@ def outputs(manifest: dict[str, object]) -> dict[Path, str]:
     }
 
 
+def apply_policy_sha(manifest: dict[str, object], policy_sha: str | None) -> None:
+    """Anchor generated policy metadata while checking another exact source SHA."""
+    if policy_sha is None:
+        return
+    if re.fullmatch(r"[0-9a-f]{40}", policy_sha) is None:
+        raise ValueError(
+            "coverage policy rust-gvm SHA must be 40 lowercase hexadecimal characters"
+        )
+    manifest["rust_gvm_sha"] = policy_sha
+
+
 def check_or_write(rendered: dict[Path, str], check: bool) -> int:
     failures = []
     for path, content in rendered.items():
@@ -732,6 +743,13 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="checkout of the exact rust-gvm revision under test",
     )
+    parser.add_argument(
+        "--policy-rust-gvm-sha",
+        help=(
+            "render the checked-in policy SHA while auditing command/helper coverage "
+            "from the supplied exact source checkout"
+        ),
+    )
     parser.add_argument("--check", action="store_true")
     return parser.parse_args()
 
@@ -740,6 +758,7 @@ def main() -> int:
     args = parse_args()
     previous = previous_helper_entries(ROOT / "coverage/manifest.json")
     manifest = build_manifest(args.rust_gvm_source.resolve(), previous)
+    apply_policy_sha(manifest, args.policy_rust_gvm_sha)
     return check_or_write(outputs(manifest), args.check)
 
 

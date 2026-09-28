@@ -110,7 +110,7 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
                 self.assertNotIn(forbidden, bootstrap)
 
     def test_hosted_jobs_do_not_use_checkout_recovery(self):
-        for job in ("inventory", "build-runner"):
+        for job in ("resolve-refs", "inventory", "build-runner"):
             body = self.jobs()[job]
             self.assertNotIn("Restore artifacts directory ownership", body)
             self.assertNotIn("${{ runner.temp }}", body)
@@ -122,7 +122,7 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
         for action in actions:
             self.assertRegex(action, r"^[^@]+@[0-9a-f]{40}$")
 
-    def test_workflow_and_runner_use_only_the_supported_rust_gvm_pin(self):
+    def test_workflow_keeps_reviewed_default_and_supports_exact_candidates(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         dockerfile = DOCKERFILE.read_text(encoding="utf-8")
 
@@ -131,9 +131,22 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
         self.assertIn(
             "RUST_GVM_SHA=${{ steps.refs.outputs.rust-gvm-sha }}", workflow
         )
+        self.assertIn("resolve-refs:", workflow)
+        self.assertIn("needs: resolve-refs", workflow)
+        self.assertIn("needs: [resolve-refs, inventory]", workflow)
+        self.assertIn("python3 tools/resolve_component_refs.py", workflow)
+        self.assertIn(
+            'git -C /tmp/rust-gvm fetch --depth 1 origin "${RESOLVED_RUST_GVM_SHA}"',
+            workflow,
+        )
+        self.assertIn(
+            '--policy-rust-gvm-sha "${RUST_GVM_SHA}"',
+            workflow,
+        )
         self.assertIn(
             f"ARG RUST_GVM_SHA={SUPPORTED_RUST_GVM_SHA}", dockerfile
         )
+        self.assertIn("prepare_rust_gvm_candidate.py", dockerfile)
         self.assertIn("FROM rust:1.89", dockerfile)
         self.assertNotIn("RUST_GVM_REF", dockerfile)
         self.assertNotIn("default: devel\n", workflow)

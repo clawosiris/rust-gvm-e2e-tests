@@ -27,6 +27,14 @@ python3 tools/coverage_manifest.py --rust-gvm-source ../rust-gvm
 python3 tools/coverage_manifest.py --check --rust-gvm-source ../rust-gvm
 ```
 
+Cross-repository qualification may supply a different exact 40-character
+commit SHA from the canonical `greenbone-hive/rust-gvm` repository. The
+workflow verifies that commit on a GitHub-hosted runner, checks its complete
+command/helper surface against the reviewed coverage policy, and builds all
+four client crates from that same SHA. Pull requests, schedules, and manual
+runs without an override continue to use the reviewed pin. Branch and tag
+names are rejected for rust-gvm so a moving ref cannot weaken provenance.
+
 Adding/removing a registry command or public typed helper without updating the
 policy fails generation, compilation, or inventory tests. Removed helper
 surfaces and helpers replaced by canonical request values are recorded
@@ -68,6 +76,9 @@ docker build -f docker/Dockerfile.runner \
 bash docker/scripts/run-community-lane.sh devel-fast
 ```
 
+The build prepares an ephemeral Cargo manifest and lockfile for the selected
+exact SHA. It never rewrites the checked-in reviewed dependency pin.
+
 The lane script uses a unique `E2E_RUN_ID`, records exact images, and always
 stops containers while preserving volumes. Override `E2E_RUN_ID` for
 reproduction. Set `E2E_RECORD_BASELINE=1` only to produce a reviewed candidate
@@ -108,12 +119,10 @@ runner through [Community E2E](.github/workflows/e2e.yml).
 
 ## Convergence qualification
 
-This branch statically converges the rich harness onto repaired `main`. The
-checked-in Community observation was carried forward and is marked pending
-issue #148 live revalidation; it is not evidence that the converged scan,
-isolated, or `lane=all` workflows have run. Those targeted runs remain the
-publication gate. Mainline promotion and archival of `devel` are separate
-repository decisions.
+The coverage-rich harness is qualified on `main`; issue #148 records the
+authoritative all-lane evidence. The checked-in pin remains the reviewed
+baseline for ordinary runs, while exact-source candidate dispatches provide
+ongoing compatibility evidence for new canonical rust-gvm commits.
 
 ## License
 

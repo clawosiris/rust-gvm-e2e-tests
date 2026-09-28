@@ -17,6 +17,21 @@ SPEC.loader.exec_module(MANIFEST)
 
 
 class CoveragePolicyTests(unittest.TestCase):
+    def test_policy_sha_override_changes_only_manifest_metadata(self):
+        manifest = {
+            "rust_gvm_sha": "a" * 40,
+            "commands": [{"name": "get_version"}],
+        }
+        MANIFEST.apply_policy_sha(manifest, "b" * 40)
+        self.assertEqual(manifest["rust_gvm_sha"], "b" * 40)
+        self.assertEqual(manifest["commands"], [{"name": "get_version"}])
+
+    def test_policy_sha_override_rejects_moving_or_malformed_refs(self):
+        for invalid in ("main", "A" * 40, "abc123"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    MANIFEST.apply_policy_sha({"rust_gvm_sha": "a" * 40}, invalid)
+
     def test_only_issue_118_hard_commands_are_excluded(self):
         actual = {
             name

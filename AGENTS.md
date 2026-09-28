@@ -63,10 +63,12 @@ REST E2E suite in `rust-gvm-api`.
 - `Cargo.lock` is part of the reproducible runner input. Update and review it
   whenever dependency declarations change.
 
-`docker/Dockerfile.runner` rewrites every `branch = "main"` rust-gvm dependency
-to the workflow-selected revision. Hex strings of 7–40 characters become Cargo
-`rev` pins; other non-`main` values become Cargo branch pins. If the manifest
-shape or ref rules change, update the Dockerfile and workflow together.
+`docker/Dockerfile.runner` prepares an ephemeral copy of all four rust-gvm
+dependencies and its lockfile at the workflow-selected exact 40-character
+commit SHA. The checked-in manifest and lockfile retain the reviewed default
+pin. Moving rust-gvm branch/tag refs are rejected. If the manifest shape or ref
+rules change, update the preparation tool, Dockerfile, workflow, and policy
+tests together.
 
 ## Source map and ownership
 
