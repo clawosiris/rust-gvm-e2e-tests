@@ -34,7 +34,8 @@ second local attempt is blocked before another wire mutation; observes start
 and synchronous stop or terminal completion; resolves task/report linkage;
 imports a sanitized report fixture; and removes reports before tasks, targets,
 and supporting resources. A concrete report returned by `start_task` becomes
-cleanup-owned immediately.
+cleanup-owned immediately. Final report cleanup treats a typed 404 as
+idempotent success when task/report lifecycle processing already removed it.
 
 Issue #118's scan-linked typed report/result and export gap remains open. The
 pinned stable gvmd baseline aborts those expansion paths because
