@@ -6,7 +6,7 @@ rust-version = "1.89"
 publish = false
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 gvm-client = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "b85443167a9fd642b2d91f6f347db048de5aba9c" }
 gvm-connection = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "b85443167a9fd642b2d91f6f347db048de5aba9c", features = ["ssh", "tls"] }
 gvm-gmp = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "b85443167a9fd642b2d91f6f347db048de5aba9c" }
