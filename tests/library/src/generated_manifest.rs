@@ -349,8 +349,8 @@ pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "export_scan_report",
         wire_command: "export_scan_report",
-        disposition: Disposition::BlockingLive,
-        lane: "devel-fast",
+        disposition: Disposition::ConditionalCommunity,
+        lane: "discovery-selected",
     },
     CoverageEntry {
         name: "get_agent_groups",
@@ -1504,8 +1504,8 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "export_scan_report",
         wire_command: "export_scan_report",
-        disposition: Disposition::BlockingLive,
-        lane: "devel-fast",
+        disposition: Disposition::ConditionalCommunity,
+        lane: "discovery-selected",
     },
     CoverageEntry {
         name: "get_agent",

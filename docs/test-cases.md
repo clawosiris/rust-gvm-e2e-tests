@@ -32,18 +32,36 @@ service as a network host. It creates a `T:80` port list, target and task; check
 typed task identity, delivers `start_task` exactly once, and verifies that a
 second local attempt is blocked before another wire mutation; observes start
 and synchronous stop or terminal completion; resolves task/report linkage;
-imports a sanitized report fixture; and removes reports before tasks, targets,
-and supporting resources. A concrete report returned by `start_task` becomes
-cleanup-owned immediately. Final report cleanup treats a typed 404 as
-idempotent success when task/report lifecycle processing already removed it.
+retrieves exactly that report through the canonical typed request; proves the
+report and task identities link in both directions; lists results with the
+canonical `report_id` filter; and, when the report contains a result, retrieves
+the lowest result UUID deterministically and verifies its identity and report
+relationship. A zero-result deterministic scan remains a valid list outcome,
+but is recorded as `conditional-unavailable` for the singular result read
+rather than being reported as successful drill-down execution. The lane also
+asserts typed 404 behavior for a missing report.
 
-Issue #118's scan-linked typed report/result and export gap remains open. The
-pinned stable gvmd baseline aborts those expansion paths because
-`SEVERITY_ERROR` is undefined (greenbone/gvmd#3069), so the converged harness
-records `conditional-unavailable` rather than claiming a pass. The ticket
-lifecycle also remains open: its prerequisite no-match result query is
-deliberately empty, so no eligible result exists. Neither gap is counted as
-completed live coverage.
+The lane selects the lowest-ID active typed report format that exposes both a
+content type and extension, then proves the same format identity through the
+singular typed read. On the enforced GMP 22.7 baseline, canonical structured
+report drill-downs and synchronous `GetReportExportRequest` are advertised by
+live help but rejected locally by rust-gvm's exact documented GMP 22.8
+capability floor. Each surface must produce that exact typed
+`UnsupportedCommand` result and is recorded with explicit no-wire evidence; on
+GMP 22.8 or newer the same code executes the request and requires a successful
+typed response, including nonempty decoded bytes for synchronous export.
+
+The advertised asynchronous `ExportScanReportRequest` is intentionally not
+mutated: the pinned typed API can create or reuse an export ID but exposes no
+typed cancel/delete/reconciliation lifecycle, so cleanup ownership cannot be
+guaranteed after success or an ambiguous response. Ticket coverage is outside
+this PR's gating contract and is not emitted as a scan observation.
+
+The lane additionally imports a sanitized report fixture and removes reports
+before tasks, targets, and supporting resources. A concrete report returned by
+`start_task` becomes cleanup-owned immediately. Final report cleanup treats a
+typed 404 as idempotent success when task/report lifecycle processing already
+removed it.
 
 The fixture being a container does not make this container-image scanning.
 No OCI target is created or required.
@@ -57,7 +75,7 @@ namespace. It covers:
   permission-denied failures, trash/restore/ultimate delete;
 - host asset and operating-system asset parsing plus modify and local request-validation
   failure behavior;
-- cloned report-format and TLS-certificate lifecycles;
+- cloned report-format, report-config, and TLS-certificate lifecycles;
 - global setting snapshot/write/restore;
 - dedicated `empty_trashcan` execution.
 
@@ -66,13 +84,33 @@ The access-control lifecycle uses the canonical nested permission subject and
 complete request values throughout; response-loss reconciliation reads the
 permission back and never replays an ambiguous mutation.
 
-Issue #118's report-config gap also remains open. The pinned projection does
-not expose the export envelope/parameter metadata needed to build a safe,
-deterministic report-config fixture, so report-format import and report-config
-lifecycle coverage is explicitly `conditional-unavailable`. The obsolete
-`sync_scan_config` facade is recorded as removed because this rust-gvm revision
-provides no supported canonical request for the registry-only `sync_config`
-name.
+Report-config coverage uses only the pinned typed API. Because the typed
+report-format projection omits parameter metadata, the lane sorts every active
+format by ID and tries one unique run-owned `CreateReportConfigRequest` per
+candidate with zero overrides. Only status 400 plus a normalized exact match
+for gvmd's authoritative text `Given report format does not have any
+configurable parameters.` advances to the next candidate; every attempted
+ID/name/status/text is retained. A generic 400 is blocking. If all candidates
+return the definitive result, the lane emits `conditional-unavailable` and
+does not claim a lifecycle pass. The checked-in stable help baseline continues
+to advertise the report-config commands; help advertisement alone cannot
+identify which active report format, if any, accepts configuration.
+
+The first successful create is cleanup-owned immediately and exercises typed
+list and singular identity/linkage reads, name/comment modification with
+read-after-write verification, clone with immediate cleanup ownership,
+singular clone verification, ultimate clone deletion, and exact typed 404
+proof. Create and clone response loss is reconciled by a fresh authenticated
+typed name query; the mutation is never replayed, and zero or multiple exact
+matches fail while retaining the unique name for cleanup/preflight. Ambiguous
+modify and delete responses likewise use typed read reconciliation without
+mutation replay. The original remains tracked for dependency-ordered cleanup.
+
+Report-format import remains separately `conditional-unavailable`: the pinned
+typed projection does not expose the export envelope needed to construct a
+canonical import request. The obsolete `sync_scan_config` facade is recorded
+as removed because this rust-gvm revision provides no supported canonical
+request for the registry-only `sync_config` name.
 
 ## `devel-transport`
 
@@ -108,8 +146,9 @@ and must name their tracked issue and exact reproduced response.
 Authenticated live help/features are authoritative for Community capability
 selection. The rust-gvm minimum-version gate is recorded separately as
 diagnostic evidence. Advertised report drill-downs remain planned capabilities,
-but the issue #118 scan/report blocker above prevents the converged harness from
-claiming that they executed successfully.
+and the scan lane now checks their exact typed capability outcome. A GMP 22.7
+result records the local 22.8 rejection and does not claim positive wire
+execution.
 
 Only issue #118’s 15 agent/OCI wire commands, four helper-only task variants,
 and six OCI typed target methods are hard Community exclusions. A network

@@ -15,8 +15,8 @@
 
 | Disposition | Count |
 |---|---:|
-| `blocking-live` | 71 |
-| `conditional-community` | 23 |
+| `blocking-live` | 70 |
+| `conditional-community` | 24 |
 | `excluded-community` | 15 |
 | `isolated-live` | 42 |
 | `nightly-live` | 7 |
@@ -81,7 +81,7 @@
 | `delete_web_application_target` | `conditional-community` | `discovery-selected` |
 | `describe_auth` | `blocking-live` | `devel-fast` |
 | `empty_trashcan` | `isolated-live` | `devel-isolated` |
-| `export_scan_report` | `blocking-live` | `devel-fast` |
+| `export_scan_report` | `conditional-community` | `discovery-selected` |
 | `get_agent_groups` | `excluded-community` | `none` |
 | `get_agent_installer_instruction` | `excluded-community` | `none` |
 | `get_agent_support_bundle` | `excluded-community` | `none` |
@@ -278,7 +278,7 @@
 | `delete_web_application_target` | `delete_web_application_target` | `conditional-community` | `discovery-selected` |
 | `describe_auth` | `describe_auth` | `blocking-live` | `devel-fast` |
 | `empty_trashcan` | `empty_trashcan` | `isolated-live` | `devel-isolated` |
-| `export_scan_report` | `export_scan_report` | `blocking-live` | `devel-fast` |
+| `export_scan_report` | `export_scan_report` | `conditional-community` | `discovery-selected` |
 | `get_agent` | `get_agents` | `excluded-community` | `none` |
 | `get_agent_group` | `get_agent_groups` | `excluded-community` | `none` |
 | `get_agent_groups` | `get_agent_groups` | `excluded-community` | `none` |

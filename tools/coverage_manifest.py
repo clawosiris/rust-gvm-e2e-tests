@@ -47,6 +47,11 @@ EXCLUDED_COMMANDS = {
 CONDITIONAL_COMMANDS = {
     "create_web_application_target",
     "delete_web_application_target",
+    # The command is advertised and version-eligible on the Community baseline,
+    # but the pinned typed API has no cancel/delete/reconciliation lifecycle for
+    # the export ID it creates or reuses. Keep it discovery-visible without
+    # claiming a cleanup-safe live mutation.
+    "export_scan_report",
     "get_credential_stores",
     "get_integration_configs",
     "get_license",
@@ -390,7 +395,12 @@ def lane_for(disposition: str) -> str:
     }[disposition]
 
 
-def rationale_for(disposition: str) -> str:
+def rationale_for(name: str, disposition: str) -> str:
+    if name == "export_scan_report":
+        return (
+            "Advertised typed mutation is discovery-visible but not executed until "
+            "the pinned API provides cleanup-safe export reconciliation."
+        )
     return {
         "blocking-live": "Expected Community capability exercised by the warm-volume blocking lane.",
         "nightly-live": "Expected Community scan/report capability exercised by the bounded nightly/manual lane.",
@@ -479,7 +489,7 @@ def build_manifest(
                 wire_command=name,
                 disposition=disposition,
                 lane=lane_for(disposition),
-                rationale=rationale_for(disposition),
+                rationale=rationale_for(name, disposition),
             )
         )
 
@@ -493,7 +503,7 @@ def build_manifest(
                 wire_command=wire,
                 disposition=disposition,
                 lane=lane_for(disposition),
-                rationale=rationale_for(disposition),
+                rationale=rationale_for(name, disposition),
             )
         )
     helper_entries.sort(key=lambda entry: entry.name)
