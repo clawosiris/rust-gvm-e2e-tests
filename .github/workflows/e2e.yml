@@ -137,6 +137,11 @@ jobs:
             --rust-gvm-source /tmp/rust-gvm \
             --policy-rust-gvm-sha "${RUST_GVM_SHA}"
           python3 -m unittest discover -s tools -p 'test_*.py'
+          python3 tools/prepare_rust_gvm_candidate.py \
+            --workspace-manifest Cargo.toml \
+            --library-manifest tests/library/Cargo.toml \
+            --lockfile Cargo.lock \
+            --sha "${RESOLVED_RUST_GVM_SHA}"
           cargo fmt --all --check
           cargo check --workspace --all-targets --locked
           cargo test --workspace --locked
