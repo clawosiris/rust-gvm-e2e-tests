@@ -84,7 +84,7 @@ jobs:
       gvm-rools-ref: ${{ steps.refs.outputs.gvm-rools-ref }}
       gvm-version: ${{ steps.refs.outputs.gvm-version }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - name: Resolve immutable rust-gvm candidate
         id: refs
         env:
@@ -123,7 +123,7 @@ jobs:
     env:
       RESOLVED_RUST_GVM_SHA: ${{ needs.resolve-refs.outputs.rust-gvm-sha }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - name: Fetch exact rust-gvm source under test
         run: |
           git init -q /tmp/rust-gvm
@@ -156,7 +156,7 @@ jobs:
       gvm-rools-ref: ${{ steps.refs.outputs.gvm-rools-ref }}
       gvm-version: ${{ steps.refs.outputs.gvm-version }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - name: Export resolved component revisions
         id: refs
         env:
@@ -171,9 +171,9 @@ jobs:
             echo "gvm-rools-ref=${RESOLVED_GVM_ROOLS_REF}"
             echo "gvm-version=${RESOLVED_GVM_VERSION}"
           } >> "${GITHUB_OUTPUT}"
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build runner at exact rust-gvm revision
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: docker/Dockerfile.runner
@@ -232,7 +232,7 @@ jobs:
               --entrypoint /bin/chown \
               "${RUNNER_IMAGE_ID}" "${host_uid}:${host_gid}" /workspace/artifacts
           fi
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           clean: false
       - run: bash docker/scripts/run-community-lane.sh devel-fast
@@ -288,7 +288,7 @@ jobs:
               --entrypoint /bin/chown \
               "${RUNNER_IMAGE_ID}" "${host_uid}:${host_gid}" /workspace/artifacts
           fi
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           clean: false
       - run: bash docker/scripts/run-community-lane.sh devel-scan
@@ -344,7 +344,7 @@ jobs:
               --entrypoint /bin/chown \
               "${RUNNER_IMAGE_ID}" "${host_uid}:${host_gid}" /workspace/artifacts
           fi
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           clean: false
       - run: bash docker/scripts/run-community-lane.sh devel-isolated
@@ -413,7 +413,7 @@ jobs:
               --entrypoint /bin/chown \
               "${RUNNER_IMAGE_ID}" "${host_uid}:${host_gid}" /workspace/artifacts
           fi
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           clean: false
       - run: bash docker/scripts/run-community-lane.sh devel-transport
@@ -463,7 +463,7 @@ jobs:
               --entrypoint /bin/chown \
               "${RUNNER_IMAGE_ID}" "${host_uid}:${host_gid}" /workspace/artifacts
           fi
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           clean: false
       - run: bash docker/scripts/run-community-lane.sh differential
