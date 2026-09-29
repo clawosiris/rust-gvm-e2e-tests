@@ -402,9 +402,9 @@
     {
       "name": "export_scan_report",
       "wire_command": "export_scan_report",
-      "disposition": "blocking-live",
-      "lane": "devel-fast",
-      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Advertised typed mutation is discovery-visible but not executed until the pinned API provides cleanup-safe export reconciliation."
     },
     {
       "name": "get_agent_groups",
@@ -1748,9 +1748,9 @@
     {
       "name": "export_scan_report",
       "wire_command": "export_scan_report",
-      "disposition": "blocking-live",
-      "lane": "devel-fast",
-      "rationale": "Expected Community capability exercised by the warm-volume blocking lane."
+      "disposition": "conditional-community",
+      "lane": "discovery-selected",
+      "rationale": "Advertised typed mutation is discovery-visible but not executed until the pinned API provides cleanup-safe export reconciliation."
     },
     {
       "name": "get_agent",

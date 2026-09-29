@@ -105,6 +105,17 @@ class CoveragePolicyTests(unittest.TestCase):
             )
         )
 
+    def test_async_report_export_is_conditional_until_cleanup_is_typed(self):
+        self.assertIn("export_scan_report", MANIFEST.CONDITIONAL_COMMANDS)
+        self.assertEqual(
+            MANIFEST.command_disposition("export_scan_report"),
+            "conditional-community",
+        )
+        self.assertIn(
+            "cleanup-safe export reconciliation",
+            MANIFEST.rationale_for("export_scan_report", "conditional-community"),
+        )
+
     def test_disappeared_facade_is_replaced_when_wire_command_remains(self):
         migrations = MANIFEST.classify_helper_migrations(
             [{"name": "get_targets", "wire_command": "get_targets"}],

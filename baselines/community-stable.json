@@ -178,6 +178,7 @@
   "conditional_commands": {
     "create_web_application_target": false,
     "delete_web_application_target": false,
+    "export_scan_report": true,
     "get_credential_stores": false,
     "get_integration_configs": false,
     "get_license": false,
@@ -203,6 +204,7 @@
   "registry_version_gates": {
     "create_web_application_target": false,
     "delete_web_application_target": false,
+    "export_scan_report": false,
     "get_credential_stores": false,
     "get_integration_configs": false,
     "get_license": true,

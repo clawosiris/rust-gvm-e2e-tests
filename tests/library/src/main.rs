@@ -61,8 +61,10 @@ use gvm_gmp::enums::{
     ScannerType,
 };
 use gvm_gmp::responses::permission::GetPermissionsResponse;
+use gvm_gmp::responses::report_format::{GetReportFormatsResponse, ReportFormat};
+use gvm_gmp::responses::result::{GetResultsResponse, ScanResult};
 use gvm_gmp::responses::scanner::GetScannersResponse;
-use gvm_gmp::responses::task::GetTasksResponse;
+use gvm_gmp::responses::task::{GetTasksResponse, Task};
 use gvm_gmp::responses::ActionResponse;
 use gvm_gmp::types::{CollectionUpdate, EntityId, GmpVersion};
 #[cfg(test)]
@@ -3507,6 +3509,88 @@ fn select_scan_report_id(
         .cloned()
 }
 
+fn task_links_report(task: &Task, report_id: &EntityId) -> bool {
+    task.current_report
+        .as_ref()
+        .is_some_and(|report| report.id == *report_id)
+        || task
+            .last_report
+            .as_ref()
+            .is_some_and(|report| report.id == *report_id)
+}
+
+fn scan_report_results_request(report_id: &EntityId) -> GetResultsRequest {
+    GetResultsRequest {
+        filter_string: Some(format!("report_id={report_id} rows=-1")),
+        details: Some(false),
+        get_counts: Some(true),
+        ..Default::default()
+    }
+}
+
+fn select_deterministic_scan_result(results: &GetResultsResponse) -> Option<&ScanResult> {
+    results
+        .items
+        .iter()
+        .min_by(|left, right| left.meta.id.as_str().cmp(right.meta.id.as_str()))
+}
+
+fn select_usable_report_format(
+    response: &GetReportFormatsResponse,
+) -> Result<&ReportFormat, AppError> {
+    response
+        .items
+        .iter()
+        .filter(|format| {
+            format.active
+                && format
+                    .content_type
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+                && format
+                    .extension
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+        })
+        .min_by(|left, right| left.meta.id.as_str().cmp(right.meta.id.as_str()))
+        .ok_or_else(|| {
+            AppError::Assertion(
+                "typed report-format selection requires an active format with content type and extension"
+                    .to_string(),
+            )
+        })
+}
+
+fn assert_gmp_22_8_rejection<T>(
+    result: Result<T, GvmError>,
+    command: &str,
+    negotiated_version: GmpVersion,
+) -> Result<(), AppError> {
+    ensure(
+        matches!(
+            result,
+            Err(GvmError::UnsupportedCommand {
+                command: rejected_command,
+                version,
+                required: "22.8",
+            }) if rejected_command == command && version == negotiated_version
+        ),
+        &format!(
+            "{command} on GMP {negotiated_version} did not return the exact typed GMP 22.8 capability rejection"
+        ),
+    )
+}
+
+fn gmp_22_8_rejection_evidence(
+    surface: &str,
+    advertised_wire_command: &str,
+    negotiated_version: GmpVersion,
+) -> String {
+    format!(
+        "live help advertised {advertised_wire_command}; canonical typed {surface} was rejected locally because GMP {negotiated_version} is below required 22.8; no wire request was sent"
+    )
+}
+
 async fn resolve_scan_report_id(
     client: &mut GmpClient<UnixSocketConnection>,
     config: &EnvConfig,
@@ -3586,6 +3670,18 @@ async fn run_scan_suite(
     client
         .authenticate(AuthenticateRequest::new(&config.username, &config.password))
         .await?;
+    let help = client.discover_commands().await?;
+    let advertised_commands = help
+        .schema
+        .ok_or_else(|| {
+            AppError::Assertion(
+                "scan-lane XML help discovery did not contain a command schema".to_string(),
+            )
+        })?
+        .commands
+        .into_iter()
+        .map(|command| canonical_help_command(&command.name))
+        .collect::<BTreeSet<_>>();
     log_line("Running deterministic host/network scan flow");
     let scan_target_name = config.name("scan-target");
     let scan_task_name = config.name("scan-task");
@@ -3652,7 +3748,7 @@ async fn run_scan_suite(
         "typed task list/filter did not return the scan task",
     )?;
 
-    let results = client
+    let no_match_results = client
         .get_results(GetResultsRequest {
             filter_string: Some("uuid=00000000-0000-0000-0000-000000000000 rows=1".to_string()),
             details: Some(false),
@@ -3660,11 +3756,11 @@ async fn run_scan_suite(
         })
         .await?;
     ensure(
-        results.status == 200,
+        no_match_results.status == 200,
         "typed get_results did not return 200",
     )?;
     ensure(
-        results.items.is_empty(),
+        no_match_results.items.is_empty(),
         "typed no-match get_results unexpectedly returned a result",
     )?;
 
@@ -3711,7 +3807,7 @@ async fn run_scan_suite(
         Duration::from_secs(5),
     )
     .await?;
-    if task_state_is_stoppable(&task_status) {
+    let final_task_status = if task_state_is_stoppable(&task_status) {
         let stop_response = client
             .stop_task(StopTaskRequest::new(task.id.clone()))
             .await?;
@@ -3733,13 +3829,323 @@ async fn run_scan_suite(
             task_state_is_terminal_after_stop(&stopped),
             "synchronous stop did not settle in Stopped or raced terminal Done",
         )?;
+        stopped
+    } else {
+        task_status
+    };
+    ensure(
+        task_state_is_terminal_after_stop(&final_task_status),
+        &format!(
+            "scan task {} reached unsupported terminal state {final_task_status}; report assertions require Stopped or Done",
+            task.id
+        ),
+    )?;
+
+    let linked_tasks = get_tasks_with_reconnect(
+        client,
+        config,
+        GetTasksRequest {
+            filter_string: Some(format!("uuid={}", task.id)),
+            details: Some(true),
+            ..Default::default()
+        },
+        Duration::from_secs(config.task_progress_timeout_secs),
+        "verify scan task/report linkage",
+    )
+    .await?;
+    ensure(
+        linked_tasks.items.len() == 1 && linked_tasks.items[0].meta.id == task.id,
+        &format!(
+            "typed get_tasks did not return exactly scan task {} while verifying report linkage",
+            task.id
+        ),
+    )?;
+    ensure(
+        task_links_report(&linked_tasks.items[0], &report_id),
+        &format!(
+            "typed scan task {} did not expose resolved report {report_id} as current or last report",
+            task.id
+        ),
+    )?;
+
+    let report = client
+        .get_report(GetReportRequest::new(report_id.clone()))
+        .await?;
+    assert_typed_status(
+        report.status,
+        &report.status_text,
+        200,
+        "get scan-linked report",
+    )?;
+    ensure(
+        report.items.len() == 1,
+        &format!(
+            "typed get_report for {report_id} returned {} reports instead of exactly one",
+            report.items.len()
+        ),
+    )?;
+    let report_item = &report.items[0];
+    ensure(
+        report_item.meta.id == report_id,
+        &format!(
+            "typed get_report returned report {} for requested report {report_id}",
+            report_item.meta.id
+        ),
+    )?;
+    ensure(
+        report_item
+            .task
+            .as_ref()
+            .is_some_and(|linked_task| linked_task.id == task.id),
+        &format!(
+            "typed report {report_id} did not link back to scan task {}",
+            task.id
+        ),
+    )?;
+    log_pass(
+        "scan report read/linkage",
+        &format!("typed report {report_id} links to task {}", task.id),
+    );
+
+    let missing_report_id = parse_entity_id(&fixture_uuid(&config.run_id, "missing-report"))?;
+    let missing_report = client
+        .get_report(GetReportRequest::new(missing_report_id))
+        .await;
+    ensure(
+        matches!(missing_report, Err(GvmError::Server { status: 404, .. })),
+        "typed missing report lookup did not preserve the exact 404 server error",
+    )?;
+    log_pass("scan report missing", "typed 404 server error");
+
+    let scan_results = client
+        .get_results(scan_report_results_request(&report_id))
+        .await?;
+    assert_typed_status(
+        scan_results.status,
+        &scan_results.status_text,
+        200,
+        "get scan-linked results",
+    )?;
+    for result in &scan_results.items {
+        ensure(
+            result
+                .report
+                .as_ref()
+                .is_none_or(|linked_report| linked_report.id == report_id),
+            &format!(
+                "result {} from report-scoped listing linked to a different report",
+                result.meta.id
+            ),
+        )?;
+    }
+    let scan_result_count = scan_results.items.len();
+    log_pass(
+        "scan report results",
+        &format!("typed report_id filter returned {scan_result_count} scan-linked result(s)"),
+    );
+
+    if let Some(selected_result) = select_deterministic_scan_result(&scan_results) {
+        let selected_result_id = selected_result.meta.id.clone();
+        let mut request = GetResultRequest::new(selected_result_id.clone());
+        request.task_id = Some(task.id.clone());
+        let result_detail = client.get_result(request).await?;
+        assert_typed_status(
+            result_detail.status,
+            &result_detail.status_text,
+            200,
+            "get deterministic scan result",
+        )?;
+        ensure(
+            result_detail.items.len() == 1 && result_detail.items[0].meta.id == selected_result_id,
+            &format!(
+                "typed get_result did not return exactly selected result {selected_result_id}"
+            ),
+        )?;
+        let detailed_result = &result_detail.items[0];
+        ensure(
+            detailed_result
+                .report
+                .as_ref()
+                .is_none_or(|linked_report| linked_report.id == report_id),
+            &format!("typed result detail {selected_result_id} linked to a different report"),
+        )?;
+        log_pass(
+            "scan result detail",
+            &format!("typed deterministic result {selected_result_id}"),
+        );
+    } else {
+        runtime::observe(
+            "scan result detail",
+            Outcome::ConditionalUnavailable,
+            &format!(
+                "typed report-scoped get_results for report {report_id} returned zero results; no result ID existed for canonical get_result"
+            ),
+        );
     }
 
-    runtime::observe(
-        "scan-report-read-lifecycle",
-        Outcome::ConditionalUnavailable,
-        "stable gvmd report/result expansion and export paths execute invalid SEVERITY_ERROR SQL",
+    let negotiated_version = client.version();
+    macro_rules! report_drilldown {
+        ($command:literal, $future:expr) => {{
+            ensure(
+                advertised_commands.contains($command),
+                concat!(
+                    "live XML help did not advertise expected report drill-down ",
+                    $command
+                ),
+            )?;
+            let result = $future.await;
+            if negotiated_version >= GmpVersion(22, 8) {
+                let response = result?;
+                assert_typed_status(
+                    response.status,
+                    &response.status_text,
+                    200,
+                    concat!("scan report drill-down ", $command),
+                )?;
+                log_pass(
+                    concat!("scan report drill-down ", $command),
+                    "canonical typed response",
+                );
+            } else {
+                assert_gmp_22_8_rejection(result, $command, negotiated_version)?;
+                runtime::observe(
+                    concat!("scan report drill-down ", $command),
+                    Outcome::ConditionalUnavailable,
+                    &gmp_22_8_rejection_evidence($command, $command, negotiated_version),
+                );
+            }
+        }};
+    }
+
+    report_drilldown!(
+        "get_scan_report",
+        client.get_scan_report(GetScanReportRequest::new(report_id.clone()))
     );
+    report_drilldown!(
+        "get_report_vulns",
+        client.get_report_vulns(GetReportVulnsRequest::new(report_id.clone()))
+    );
+    report_drilldown!(
+        "get_report_tls_certificates",
+        client.get_report_tls_certificates(GetReportTlsCertificatesRequest::new(report_id.clone()))
+    );
+    report_drilldown!(
+        "get_report_hosts",
+        client.get_report_hosts(GetReportHostsRequest::new(report_id.clone()))
+    );
+    report_drilldown!(
+        "get_report_ports",
+        client.get_report_ports(GetReportPortsRequest::new(report_id.clone()))
+    );
+    report_drilldown!(
+        "get_report_applications",
+        client.get_report_applications(GetReportApplicationsRequest::new(report_id.clone()))
+    );
+    report_drilldown!(
+        "get_report_operating_systems",
+        client.get_report_operating_systems(GetReportOperatingSystemsRequest::new(
+            report_id.clone(),
+        ))
+    );
+    report_drilldown!(
+        "get_report_cves",
+        client.get_report_cves(GetReportCvesRequest::new(report_id.clone()))
+    );
+    report_drilldown!(
+        "get_report_errors",
+        client.get_report_errors(GetReportErrorsRequest::new(report_id.clone()))
+    );
+    report_drilldown!(
+        "get_report_closed_cves",
+        client.get_report_closed_cves(GetReportClosedCvesRequest::new(report_id.clone()))
+    );
+
+    let report_formats = client
+        .get_report_formats(GetReportFormatsRequest::default())
+        .await?;
+    assert_typed_status(
+        report_formats.status,
+        &report_formats.status_text,
+        200,
+        "get report formats for scan export",
+    )?;
+    let selected_format = select_usable_report_format(&report_formats)?;
+    let selected_format_id = selected_format.meta.id.clone();
+    let selected_content_type = selected_format.content_type.clone();
+    let selected_extension = selected_format.extension.clone();
+    let selected_format_read = client
+        .get_report_format(GetReportFormatRequest::new(selected_format_id.clone()))
+        .await?;
+    assert_typed_status(
+        selected_format_read.status,
+        &selected_format_read.status_text,
+        200,
+        "get selected report format",
+    )?;
+    ensure(
+        selected_format_read.items.len() == 1
+            && selected_format_read.items[0].meta.id == selected_format_id,
+        &format!(
+            "typed singular report-format lookup did not preserve selected identity {selected_format_id}"
+        ),
+    )?;
+    log_pass(
+        "scan report format selection",
+        &format!(
+            "active format {selected_format_id} ({}/{}) round-tripped by identity",
+            selected_content_type.as_deref().unwrap_or("<missing>"),
+            selected_extension.as_deref().unwrap_or("<missing>")
+        ),
+    );
+
+    ensure(
+        advertised_commands.contains("export_scan_report"),
+        "live XML help did not advertise export_scan_report",
+    )?;
+    ensure(
+        matches!(
+            client.command_support("export_scan_report"),
+            gvm_client::CommandSupport::Supported
+        ),
+        "typed client did not classify advertised export_scan_report as supported",
+    )?;
+    runtime::observe(
+        "scan report asynchronous export",
+        Outcome::NotSelected,
+        "advertised typed export_scan_report was not invoked because the pinned API exposes creation/reuse but no typed cancel/delete/reconciliation lifecycle; an export ID could not be cleanup-owned safely",
+    );
+
+    ensure(
+        advertised_commands.contains("get_reports"),
+        "live XML help did not advertise get_reports for synchronous report export",
+    )?;
+    let synchronous_export = client
+        .get_report_export(GetReportExportRequest::new(
+            report_id.clone(),
+            selected_format_id,
+        ))
+        .await;
+    if negotiated_version >= GmpVersion(22, 8) {
+        let export = synchronous_export?;
+        ensure(
+            !export.bytes.is_empty(),
+            "typed synchronous report export returned an empty payload",
+        )?;
+        log_pass(
+            "scan report synchronous export",
+            &format!(
+                "canonical typed export decoded {} byte(s)",
+                export.bytes.len()
+            ),
+        );
+    } else {
+        assert_gmp_22_8_rejection(synchronous_export, "get_report_export", negotiated_version)?;
+        runtime::observe(
+            "scan report synchronous export",
+            Outcome::ConditionalUnavailable,
+            &gmp_22_8_rejection_evidence("get_report_export", "get_reports", negotiated_version),
+        );
+    }
 
     let mut import_task_request = CreateImportTaskRequest::new(config.name("import-task"));
     import_task_request.comment = Some(config.name("sanitized-report-import"));
@@ -3761,12 +4167,6 @@ async fn run_scan_suite(
     log_pass(
         "report import",
         "sanitized fixture create_import_task/import_report; report and parent-task cleanup tracked",
-    );
-
-    runtime::observe(
-        "scan-ticket-lifecycle",
-        Outcome::ConditionalUnavailable,
-        "the no-match result probe intentionally supplies no result eligible for a ticket",
     );
 
     let delete_report = client
@@ -3828,8 +4228,7 @@ async fn run_scan_suite(
         "scan",
         &format!(
             "task states, report {}, {} typed result(s), report coverage, cleanup",
-            report_id,
-            results.items.len()
+            report_id, scan_result_count
         ),
     );
     Ok(())
@@ -6762,6 +7161,130 @@ mod tests {
     }
 
     #[test]
+    fn scan_result_listing_uses_the_canonical_report_filter_without_pagination() {
+        let report_id = EntityId::new("scan-report-id").expect("valid report id");
+        let request = scan_report_results_request(&report_id);
+        let xml = request_xml(&request);
+
+        assert_eq!(
+            xml,
+            r#"<get_results details="0" filter="report_id=scan-report-id rows=-1" get_counts="1"/>"#
+        );
+    }
+
+    #[test]
+    fn scan_result_detail_selection_is_stable_by_result_id_and_allows_empty_reports() {
+        let response = GetResultsResponse::from_response(&Response::from(
+            r#"<get_results_response status="200" status_text="OK">
+                <result id="result-z"><name>Last from server</name></result>
+                <result id="result-a"><name>First by identity</name></result>
+            </get_results_response>"#,
+        ))
+        .expect("typed results parse");
+
+        assert_eq!(
+            select_deterministic_scan_result(&response)
+                .expect("a result is selected")
+                .meta
+                .id
+                .as_str(),
+            "result-a"
+        );
+
+        let empty = GetResultsResponse::from_response(&Response::from(
+            r#"<get_results_response status="200" status_text="OK"/>"#,
+        ))
+        .expect("empty typed results parse");
+        assert!(select_deterministic_scan_result(&empty).is_none());
+    }
+
+    #[test]
+    fn scan_export_format_selection_is_usable_and_deterministic() {
+        let response = GetReportFormatsResponse::from_response(&Response::from(
+            r#"<get_report_formats_response status="200" status_text="OK">
+                <report_format id="inactive"><name>Inactive</name><active>0</active><content_type>text/plain</content_type><extension>txt</extension></report_format>
+                <report_format id="missing-extension"><name>Incomplete</name><active>1</active><content_type>text/plain</content_type></report_format>
+                <report_format id="format-z"><name>Z</name><active>1</active><content_type>application/pdf</content_type><extension>pdf</extension></report_format>
+                <report_format id="format-a"><name>A</name><active>1</active><content_type>text/xml</content_type><extension>xml</extension></report_format>
+            </get_report_formats_response>"#,
+        ))
+        .expect("typed report formats parse");
+
+        let selected = select_usable_report_format(&response).expect("usable format");
+
+        assert_eq!(selected.meta.id.as_str(), "format-a");
+        assert!(selected.active);
+        assert_eq!(selected.content_type.as_deref(), Some("text/xml"));
+        assert_eq!(selected.extension.as_deref(), Some("xml"));
+    }
+
+    #[test]
+    fn scan_export_format_selection_rejects_inactive_or_incomplete_formats() {
+        let response = GetReportFormatsResponse::from_response(&Response::from(
+            r#"<get_report_formats_response status="200" status_text="OK">
+                <report_format id="inactive"><name>Inactive</name><active>0</active><content_type>text/plain</content_type><extension>txt</extension></report_format>
+                <report_format id="incomplete"><name>Incomplete</name><active>1</active><content_type>text/plain</content_type></report_format>
+            </get_report_formats_response>"#,
+        ))
+        .expect("typed report formats parse");
+
+        let error = select_usable_report_format(&response)
+            .expect_err("no format satisfies the export contract");
+
+        assert_eq!(
+            error.to_string(),
+            "typed report-format selection requires an active format with content type and extension"
+        );
+    }
+
+    #[test]
+    fn gmp_22_8_gate_requires_the_exact_typed_rejection() {
+        let exact = Err::<(), _>(GvmError::UnsupportedCommand {
+            command: "get_report_export".to_string(),
+            version: GmpVersion(22, 7),
+            required: "22.8",
+        });
+        assert!(assert_gmp_22_8_rejection(exact, "get_report_export", GmpVersion(22, 7)).is_ok());
+
+        for rejection in [
+            GvmError::UnsupportedCommand {
+                command: "get_reports".to_string(),
+                version: GmpVersion(22, 7),
+                required: "22.8",
+            },
+            GvmError::UnsupportedCommand {
+                command: "get_report_export".to_string(),
+                version: GmpVersion(22, 6),
+                required: "22.8",
+            },
+            GvmError::UnsupportedCommand {
+                command: "get_report_export".to_string(),
+                version: GmpVersion(22, 7),
+                required: "22.7",
+            },
+        ] {
+            assert!(assert_gmp_22_8_rejection(
+                Err::<(), _>(rejection),
+                "get_report_export",
+                GmpVersion(22, 7),
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn gmp_22_8_observation_evidence_names_help_gate_and_no_wire_call() {
+        assert_eq!(
+            gmp_22_8_rejection_evidence(
+                "get_report_export",
+                "get_reports",
+                GmpVersion(22, 7),
+            ),
+            "live help advertised get_reports; canonical typed get_report_export was rejected locally because GMP 22.7 is below required 22.8; no wire request was sent"
+        );
+    }
+
+    #[test]
     fn setting_modify_request_base64_encodes_the_value_required_by_gmp() {
         let setting_id = EntityId::new("setting-id").expect("valid setting id");
         let request = modify_setting_request(&setting_id, "Europe/Berlin");
@@ -7026,6 +7549,25 @@ mod tests {
             select_scan_report_id(&provisional, None, Some(&last)),
             Some(last)
         );
+    }
+
+    #[test]
+    fn task_report_linkage_accepts_current_or_last_report_only_by_exact_id() {
+        let response = GetTasksResponse::from_response(&Response::from(
+            r#"<get_tasks_response status="200" status_text="OK">
+                <task id="task-current"><name>Current</name><current_report><report id="report-current"/></current_report></task>
+                <task id="task-last"><name>Last</name><last_report><report id="report-last"/></last_report></task>
+            </get_tasks_response>"#,
+        ))
+        .expect("typed task response parses");
+        let current = EntityId::new("report-current").expect("valid current report id");
+        let last = EntityId::new("report-last").expect("valid last report id");
+        let other = EntityId::new("report-other").expect("valid other report id");
+
+        assert!(task_links_report(&response.items[0], &current));
+        assert!(task_links_report(&response.items[1], &last));
+        assert!(!task_links_report(&response.items[0], &last));
+        assert!(!task_links_report(&response.items[1], &other));
     }
 
     #[test]
