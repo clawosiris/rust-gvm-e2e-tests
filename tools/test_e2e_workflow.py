@@ -144,6 +144,14 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
             workflow,
         )
         self.assertIn(
+            'python3 tools/prepare_rust_gvm_candidate.py \\\n'
+            '            --workspace-manifest Cargo.toml \\\n'
+            '            --library-manifest tests/library/Cargo.toml \\\n'
+            '            --lockfile Cargo.lock \\\n'
+            '            --sha "${RESOLVED_RUST_GVM_SHA}"',
+            workflow,
+        )
+        self.assertIn(
             f"ARG RUST_GVM_SHA={SUPPORTED_RUST_GVM_SHA}", dockerfile
         )
         self.assertIn("prepare_rust_gvm_candidate.py", dockerfile)
