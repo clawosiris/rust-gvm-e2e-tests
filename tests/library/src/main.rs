@@ -5819,11 +5819,21 @@ async fn settle_task_state_before_stop(
     loop {
         let status =
             read_task_status(client, config, task_id, read_timeout, "pre-stop task state").await?;
-        if !task_state_is_stoppable(&status) || started.elapsed() >= grace_period {
+        let elapsed = started.elapsed();
+        if task_state_is_terminal_after_stop(&status)
+            || (task_state_is_stoppable(&status) && elapsed >= grace_period)
+            || (!task_state_is_stoppable(&status) && !task_state_is_finishing(&status))
+            || elapsed >= read_timeout
+        {
             return Ok(status);
         }
 
-        sleep(Duration::from_secs(1).min(grace_period.saturating_sub(started.elapsed()))).await;
+        let remaining = if task_state_is_finishing(&status) {
+            read_timeout.saturating_sub(elapsed)
+        } else {
+            grace_period.saturating_sub(elapsed)
+        };
+        sleep(Duration::from_secs(1).min(remaining)).await;
     }
 }
 
@@ -6118,6 +6128,10 @@ fn task_state_is_stoppable(status: &str) -> bool {
     status == "Running"
 }
 
+fn task_state_is_finishing(status: &str) -> bool {
+    status == "Processing"
+}
+
 fn task_state_has_started(status: &str) -> bool {
     !matches!(status, "New" | "Requested" | "Queued")
 }
@@ -6347,6 +6361,12 @@ mod tests {
     const RUNNING_TASK_RESPONSE: &str = concat!(
         r#"<get_tasks_response status="200" status_text="OK">"#,
         r#"<task id="task-id"><name>Task</name><status>Running</status></task>"#,
+        "<task_count>1<filtered>1</filtered><page>1</page></task_count>",
+        "</get_tasks_response>"
+    );
+    const PROCESSING_TASK_RESPONSE: &str = concat!(
+        r#"<get_tasks_response status="200" status_text="OK">"#,
+        r#"<task id="task-id"><name>Task</name><status>Processing</status></task>"#,
         "<task_count>1<filtered>1</filtered><page>1</page></task_count>",
         "</get_tasks_response>"
     );
@@ -6848,6 +6868,47 @@ mod tests {
     }
 
     #[test]
+    fn pre_stop_wait_observes_processing_to_done_transition() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("pre-stop-processing");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![vec![
+                        ("get_version", Some(VERSION_RESPONSE)),
+                        ("authenticate", Some(AUTH_RESPONSE)),
+                        ("get_tasks", Some(PROCESSING_TASK_RESPONSE)),
+                        ("get_tasks", Some(DONE_TASK_RESPONSE)),
+                    ]],
+                ));
+                let config = socket_test_config(&path);
+                let mut client = connect_and_authenticate(&config).await;
+                let task_id = EntityId::new("task-id").expect("valid task ID");
+
+                let status = settle_task_state_before_stop(
+                    &mut client,
+                    &config,
+                    &task_id,
+                    Duration::from_secs(2),
+                    Duration::from_millis(100),
+                )
+                .await
+                .expect("processing transition should settle as Done");
+
+                assert_eq!(status, "Done");
+                assert_eq!(
+                    server.await.expect("scripted server"),
+                    ["get_version", "authenticate", "get_tasks", "get_tasks",]
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
+    }
+
+    #[test]
     fn mutation_response_loss_is_reconciled_without_retrying_mutation() {
         Builder::new_current_thread()
             .enable_all()
@@ -6948,6 +7009,19 @@ mod tests {
             assert!(
                 !task_state_is_stoppable(status),
                 "completed scan state {status} must not be sent stop_task"
+            );
+        }
+    }
+
+    #[test]
+    fn processing_scan_is_allowed_to_finish_without_a_stop_mutation() {
+        assert!(task_state_is_finishing("Processing"));
+        assert!(!task_state_is_stoppable("Processing"));
+
+        for status in ["Running", "Done", "Stopped", "Interrupted"] {
+            assert!(
+                !task_state_is_finishing(status),
+                "non-processing scan state {status} must not use the finishing wait path"
             );
         }
     }
