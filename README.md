@@ -101,6 +101,13 @@ required. Those exact issue #118 capabilities are visible as
 and recorded conditionally. The `scan-fixture` Nginx container is an ordinary
 network service target, not an OCI image target.
 
+Report-config mutation is separately dispositioned as a known upstream crash:
+the safe typed list read remains in `devel-isolated`, while create/clone/modify/
+delete are not executed against Community stable pending
+[greenbone/gvmd#3165](https://github.com/greenbone/gvmd/issues/3165). See
+[the test cases](docs/test-cases.md#devel-isolated) and the generated inventory
+for the exact reproducibility evidence.
+
 ## Validation
 
 ```bash

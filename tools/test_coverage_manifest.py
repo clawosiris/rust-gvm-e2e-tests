@@ -44,6 +44,7 @@ class CoveragePolicyTests(unittest.TestCase):
     def test_dispositions_are_mutually_exclusive(self):
         classes = [
             MANIFEST.EXCLUDED_COMMANDS,
+            MANIFEST.KNOWN_UPSTREAM_BUG_COMMANDS,
             MANIFEST.CONDITIONAL_COMMANDS,
             MANIFEST.NIGHTLY_COMMANDS,
             MANIFEST.ISOLATED_COMMANDS,
@@ -51,6 +52,19 @@ class CoveragePolicyTests(unittest.TestCase):
         for index, left in enumerate(classes):
             for right in classes[index + 1 :]:
                 self.assertFalse(left & right)
+
+    def test_report_config_mutations_are_known_upstream_bugs_not_isolated_live(self):
+        expected = {
+            "create_report_config",
+            "delete_report_config",
+            "modify_report_config",
+        }
+        self.assertEqual(MANIFEST.KNOWN_UPSTREAM_BUG_COMMANDS, expected)
+        for name in expected:
+            self.assertEqual(MANIFEST.command_disposition(name), "known-upstream-bug")
+            self.assertEqual(MANIFEST.lane_for("known-upstream-bug"), "none")
+            self.assertIn("greenbone/gvmd#3165", MANIFEST.rationale_for(name, "known-upstream-bug"))
+        self.assertEqual(MANIFEST.command_disposition("get_report_configs"), "isolated-live")
 
     def test_helper_only_variants_retain_explicit_exclusion_policy(self):
         self.assertEqual(

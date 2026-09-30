@@ -20,6 +20,7 @@ DISPOSITIONS = {
     "blocking-live",
     "nightly-live",
     "isolated-live",
+    "known-upstream-bug",
     "conditional-community",
     "excluded-community",
 }
@@ -85,11 +86,22 @@ NIGHTLY_COMMANDS = {
     "stop_task",
 }
 
+# Do not send report-config mutations to the Community stable stack while
+# greenbone/gvmd#3165 is unresolved. Runs 36611076644 and 36665378965 both
+# reproduced a connection closure; the latter retained gvmd 26.40.2 / GMP 22.7
+# evidence of `Report Config could not be created` followed by SIGSEGV. Exact
+# name reconciliation found no persisted object, so retrying would only replay
+# a known crash boundary.
+KNOWN_UPSTREAM_BUG_COMMANDS = {
+    "create_report_config",
+    "delete_report_config",
+    "modify_report_config",
+}
+
 ISOLATED_COMMANDS = {
     "create_asset",
     "create_group",
     "create_permission",
-    "create_report_config",
     "create_report_format",
     "create_role",
     "create_ticket",
@@ -99,7 +111,6 @@ ISOLATED_COMMANDS = {
     "delete_group",
     "delete_permission",
     "delete_report",
-    "delete_report_config",
     "delete_report_format",
     "delete_role",
     "delete_ticket",
@@ -118,7 +129,6 @@ ISOLATED_COMMANDS = {
     "modify_auth",
     "modify_group",
     "modify_permission",
-    "modify_report_config",
     "modify_report_format",
     "modify_role",
     "modify_setting",
@@ -368,6 +378,7 @@ def typed_helpers(source: Path) -> list[str]:
 def command_disposition(name: str) -> str:
     classes = [
         name in EXCLUDED_COMMANDS,
+        name in KNOWN_UPSTREAM_BUG_COMMANDS,
         name in CONDITIONAL_COMMANDS,
         name in NIGHTLY_COMMANDS,
         name in ISOLATED_COMMANDS,
@@ -377,10 +388,12 @@ def command_disposition(name: str) -> str:
     if classes[0]:
         return "excluded-community"
     if classes[1]:
-        return "conditional-community"
+        return "known-upstream-bug"
     if classes[2]:
-        return "nightly-live"
+        return "conditional-community"
     if classes[3]:
+        return "nightly-live"
+    if classes[4]:
         return "isolated-live"
     return "blocking-live"
 
@@ -390,6 +403,7 @@ def lane_for(disposition: str) -> str:
         "blocking-live": "devel-fast",
         "nightly-live": "devel-scan",
         "isolated-live": "devel-isolated",
+        "known-upstream-bug": "none",
         "conditional-community": "discovery-selected",
         "excluded-community": "none",
     }[disposition]
@@ -405,6 +419,11 @@ def rationale_for(name: str, disposition: str) -> str:
         "blocking-live": "Expected Community capability exercised by the warm-volume blocking lane.",
         "nightly-live": "Expected Community scan/report capability exercised by the bounded nightly/manual lane.",
         "isolated-live": "Supported operation isolated because it is administrative, global, or destructive.",
+        "known-upstream-bug": (
+            "Known upstream crash greenbone/gvmd#3165: gvmd 26.40.2 / GMP 22.7 "
+            "closed create_report_config connections in runs 36611076644 and 36665378965; "
+            "exact-name reconciliation found no persisted object, so this mutation family is not executed."
+        ),
         "conditional-community": "Availability is decided only by recorded get_version/get_features/help evidence.",
         "excluded-community": "Explicit issue #118 Community boundary: agent or OCI/container-image capability.",
     }[disposition]
@@ -580,6 +599,25 @@ def render_markdown(manifest: dict[str, object]) -> str:
         f"| `{item['name']}` | `{item['disposition']}` | `{item['lane']}` |"
         for item in commands  # type: ignore[union-attr]
     )
+    known_bug_commands = [
+        item for item in commands if item["disposition"] == "known-upstream-bug"  # type: ignore[index]
+    ]
+    if known_bug_commands:
+        lines.extend(
+            [
+                "",
+                "## Known upstream Community defects",
+                "",
+                "These entries are explicit non-execution dispositions, not passes or generic skips.",
+                "",
+                "| Command | Evidence |",
+                "|---|---|",
+            ]
+        )
+        lines.extend(
+            f"| `{item['name']}` | {item['rationale']} |"
+            for item in known_bug_commands
+        )
     lines.extend(
         [
             "",

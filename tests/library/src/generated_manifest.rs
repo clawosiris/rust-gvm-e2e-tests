@@ -103,8 +103,8 @@ pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "create_report_config",
         wire_command: "create_report_config",
-        disposition: Disposition::IsolatedLive,
-        lane: "devel-isolated",
+        disposition: Disposition::KnownUpstreamBug,
+        lane: "none",
     },
     CoverageEntry {
         name: "create_report_format",
@@ -265,8 +265,8 @@ pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "delete_report_config",
         wire_command: "delete_report_config",
-        disposition: Disposition::IsolatedLive,
-        lane: "devel-isolated",
+        disposition: Disposition::KnownUpstreamBug,
+        lane: "none",
     },
     CoverageEntry {
         name: "delete_report_format",
@@ -811,8 +811,8 @@ pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "modify_report_config",
         wire_command: "modify_report_config",
-        disposition: Disposition::IsolatedLive,
-        lane: "devel-isolated",
+        disposition: Disposition::KnownUpstreamBug,
+        lane: "none",
     },
     CoverageEntry {
         name: "modify_report_format",
@@ -1036,8 +1036,8 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "clone_report_config",
         wire_command: "create_report_config",
-        disposition: Disposition::IsolatedLive,
-        lane: "devel-isolated",
+        disposition: Disposition::KnownUpstreamBug,
+        lane: "none",
     },
     CoverageEntry {
         name: "clone_report_format",
@@ -1228,8 +1228,8 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "create_report_config",
         wire_command: "create_report_config",
-        disposition: Disposition::IsolatedLive,
-        lane: "devel-isolated",
+        disposition: Disposition::KnownUpstreamBug,
+        lane: "none",
     },
     CoverageEntry {
         name: "create_role",
@@ -1420,8 +1420,8 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "delete_report_config",
         wire_command: "delete_report_config",
-        disposition: Disposition::IsolatedLive,
-        lane: "devel-isolated",
+        disposition: Disposition::KnownUpstreamBug,
+        lane: "none",
     },
     CoverageEntry {
         name: "delete_report_format",
@@ -2350,8 +2350,8 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "modify_report_config",
         wire_command: "modify_report_config",
-        disposition: Disposition::IsolatedLive,
-        lane: "devel-isolated",
+        disposition: Disposition::KnownUpstreamBug,
+        lane: "none",
     },
     CoverageEntry {
         name: "modify_report_format",

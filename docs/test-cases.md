@@ -75,7 +75,7 @@ namespace. It covers:
   permission-denied failures, trash/restore/ultimate delete;
 - host asset and operating-system asset parsing plus modify and local request-validation
   failure behavior;
-- cloned report-format, report-config, and TLS-certificate lifecycles;
+- cloned report-format and TLS-certificate lifecycles;
 - global setting snapshot/write/restore;
 - dedicated `empty_trashcan` execution.
 
@@ -84,27 +84,21 @@ The access-control lifecycle uses the canonical nested permission subject and
 complete request values throughout; response-loss reconciliation reads the
 permission back and never replays an ambiguous mutation.
 
-Report-config coverage uses only the pinned typed API. Because the typed
-report-format projection omits parameter metadata, the lane sorts every active
-format by ID and tries one unique run-owned `CreateReportConfigRequest` per
-candidate with zero overrides. Only status 400 plus a normalized exact match
-for gvmd's authoritative text `Given report format does not have any
-configurable parameters.` advances to the next candidate; every attempted
-ID/name/status/text is retained. A generic 400 is blocking. If all candidates
-return the definitive result, the lane emits `conditional-unavailable` and
-does not claim a lifecycle pass. The checked-in stable help baseline continues
-to advertise the report-config commands; help advertisement alone cannot
-identify which active report format, if any, accepts configuration.
-
-The first successful create is cleanup-owned immediately and exercises typed
-list and singular identity/linkage reads, name/comment modification with
-read-after-write verification, clone with immediate cleanup ownership,
-singular clone verification, ultimate clone deletion, and exact typed 404
-proof. Create and clone response loss is reconciled by a fresh authenticated
-typed name query; the mutation is never replayed, and zero or multiple exact
-matches fail while retaining the unique name for cleanup/preflight. Ambiguous
-modify and delete responses likewise use typed read reconciliation without
-mutation replay. The original remains tracked for dependency-ordered cleanup.
+The lane retains the safe typed `get_report_configs` list read. When it finds
+an existing config, it selects the lowest stable ID and proves the typed
+`get_report_config` helper against that identity. An empty list emits explicit
+`conditional-unavailable` evidence for the singular read: creation remains
+quarantined, so it cannot be called a pass. The lane does not send
+`create_report_config`, clone, modify, or delete requests while
+[greenbone/gvmd#3165](https://github.com/greenbone/gvmd/issues/3165) remains
+unresolved. In stable gvmd 26.40.2 / GMP 22.7, runs `36611076644` and
+`36665378965` reproducibly closed the create connection; exact-name
+reconciliation found no persisted object. The retained Compose log for the
+latter run records `Report Config could not be created`, a backtrace, and
+`Received Segmentation fault signal`. The result artifact emits one explicit
+`known-upstream-bug` observation for every affected command/helper, including
+this evidence and the fact that no mutation wire request was executed. It is
+neither a pass nor a generic conditional skip.
 
 Report-format import remains separately `conditional-unavailable`: the pinned
 typed projection does not expose the export envelope needed to construct a
