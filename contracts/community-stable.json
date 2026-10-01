@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "deployment_id": "community-stable",
+  "allow_legacy_fallback": [],
+  "features": {
+    "ENABLE_AGENTS": "optional",
+    "ENABLE_CONTAINER_SCANNING": "optional",
+    "ENABLE_CREDENTIAL_STORES": "optional",
+    "ENABLE_JWT_AUTH": "optional",
+    "ENABLE_OPENVASD": "optional",
+    "ENABLE_SECURITY_INTELLIGENCE_EXPORT": "optional",
+    "ENABLE_WEB_APPLICATION_SCANNING": "optional",
+    "FEED_VT_METADATA": "optional"
+  },
+  "fixtures": {
+    "network_scan_target": "required",
+    "agent_endpoint": "optional",
+    "oci_registry": "optional",
+    "credential_store": "optional",
+    "export_integration": "optional",
+    "web_scanner": "optional",
+    "jwt_endpoint": "optional"
+  }
+}

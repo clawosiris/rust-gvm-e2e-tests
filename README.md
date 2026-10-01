@@ -1,12 +1,12 @@
 # rust-gvm-e2e-tests
 
 Real-stack conformance tests for
-[rust-gvm](https://github.com/greenbone-hive/rust-gvm) against Greenbone
-Community Edition.
+[rust-gvm](https://github.com/greenbone-hive/rust-gvm) against GMP deployments,
+including the repository-owned Community stack and caller-owned providers.
 The harness talks directly to `gvmd`, validates public typed response models,
 and cross-checks deterministic behavior with gvm-tools/python-gvm.
 
-## Community coverage architecture
+## Deployment coverage architecture
 
 Coverage policy has one source of truth:
 
@@ -15,9 +15,14 @@ Coverage policy has one source of truth:
 - `tests/library/src/generated_manifest.rs` compile-references every typed
   helper and compares all registered wire commands with
   `COMMAND_CAPABILITIES`;
-- [baselines/community-stable.json](baselines/community-stable.json) pins the
-  Community tag, GMP version, rust-gvm SHA, features, and conditional
-  availability discovered from version/features/help.
+- [coverage/feature-catalog.json](coverage/feature-catalog.json) maps feature
+  flags to command, helper, probe, fixture, and scenario requirements;
+- [contracts/community-stable.json](contracts/community-stable.json) declares
+  the Community provider's required, optional, and forbidden expectations.
+
+The old exact [Community baseline](baselines/community-stable.json) remains
+historical qualification evidence, not a runtime selection gate. Complete
+observed snapshots are emitted per lane for drift review.
 
 Regenerate or check against the supported rust-gvm checkout at
 `b85443167a9fd642b2d91f6f347db048de5aba9c`:
@@ -61,9 +66,11 @@ Checkout then runs with `clean: false`; the lane script retains responsibility
 for deleting only the selected lane's known artifact files.
 
 The test details are in [docs/test-cases.md](docs/test-cases.md). Each lane
-publishes structured JSON with pass/fail/known-upstream-bug/conditional/excluded
-counts, exact rust-gvm SHA, GMP version, runtime tags/digests, feature/help
-evidence, and all observations.
+publishes the capability snapshot, exact contract, deterministic pre-mutation
+plan, reconciled results, runtime tags/digests, GMP version, and exact rust-gvm
+SHA. Optional unavailable or typed-version-ineligible capabilities are explicit
+`not-selected` entries. Reconciled passes come from the exact runtime path that
+executed each selected surface, never from lane completion alone.
 
 ## Run locally on a Docker host
 
@@ -73,16 +80,17 @@ Build the runner, start the warm stack, and execute a lane:
 docker build -f docker/Dockerfile.runner \
   --build-arg RUST_GVM_SHA=b85443167a9fd642b2d91f6f347db048de5aba9c \
   -t rust-gvm-e2e-runner:ci .
-bash docker/scripts/run-community-lane.sh devel-fast
+bash docker/scripts/run-deployment-lane.sh devel-fast
 ```
 
 The build prepares an ephemeral Cargo manifest and lockfile for the selected
 exact SHA. It never rewrites the checked-in reviewed dependency pin.
 
-The lane script uses a unique `E2E_RUN_ID`, records exact images, and always
-stops containers while preserving volumes. Override `E2E_RUN_ID` for
-reproduction. Set `E2E_RECORD_BASELINE=1` only to produce a reviewed candidate
-artifact; normal runs enforce the checked-in baseline.
+The Compose provider uses a unique `E2E_RUN_ID`, records exact images, and
+always stops containers while preserving volumes. Discovery and contract
+validation complete before preflight cleanup or mutation. See
+[deployment providers](docs/deployment-providers.md) for external mode and the
+reusable workflow.
 
 ## Cleanup safety
 
@@ -93,13 +101,14 @@ then access/report resources and supporting entities. Final cleanup
 authenticates independently, accepts only explicit success/already-absent
 statuses, and also runs during unwind.
 
-## Community boundary
+## Dynamic capability boundary
 
-Agent management and OCI/container-image target management/scanning are never
-required. Those exact issue #118 capabilities are visible as
-`excluded-community`; all other uncertain Community functionality is probed
-and recorded conditionally. The `scan-fixture` Nginx container is an ordinary
-network service target, not an OCI image target.
+Agent and OCI/container-image operations are no longer hard-coded Community
+exclusions. Community emits them as `not-selected`; a deployment that enables
+them must advertise the mapped commands and pass safe readiness and fixture
+probes. Implemented agent-group and OCI-target lifecycles retain namespace,
+cleanup, and exactly-once safeguards. Enabled entries without a cleanup-safe
+public execution path fail as coverage gaps.
 
 Report-config mutation is separately dispositioned as a known upstream crash:
 the safe typed list read remains in `devel-isolated`, while create/clone/modify/
@@ -118,6 +127,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 python3 -m unittest discover -s tools -p 'test_*.py'
 bash -n docker/scripts/*.sh tests/cli/*.sh
 bash docker/scripts/test-community-lane-artifacts.sh
+bash docker/scripts/test-deployment-lane-artifacts.sh
 docker compose -f docker/docker-compose.yml config --quiet
 ```
 
@@ -127,9 +137,10 @@ runner through [Community E2E](.github/workflows/e2e.yml).
 ## Convergence qualification
 
 The coverage-rich harness is qualified on `main`; issue #148 records the
-authoritative all-lane evidence. The checked-in pin remains the reviewed
-baseline for ordinary runs, while exact-source candidate dispatches provide
-ongoing compatibility evidence for new canonical rust-gvm commits.
+authoritative Community all-lane evidence. The checked-in dependency pin
+remains the reviewed source default, while exact-source candidate dispatches
+provide ongoing compatibility evidence. Private external deployment
+qualification remains external rollout evidence and is not claimed here.
 
 ## License
 

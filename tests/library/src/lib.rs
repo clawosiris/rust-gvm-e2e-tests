@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Greenbone AG
 
-//! Shared Community coverage manifest and validation support.
+//! Shared deployment coverage manifest and capability-planning support.
 
 use std::collections::BTreeSet;
 
 use gvm_gmp::capabilities::COMMAND_CAPABILITIES;
 
+pub mod capability;
 mod generated_manifest;
 pub mod runtime;
 
@@ -15,15 +16,15 @@ pub use generated_manifest::{
     RUST_GVM_SHA,
 };
 
-/// Executable Community coverage disposition.
+/// Executable coverage disposition, independent from deployment capability policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Disposition {
     BlockingLive,
     NightlyLive,
     IsolatedLive,
     KnownUpstreamBug,
-    ConditionalCommunity,
-    ExcludedCommunity,
+    ConditionalAvailability,
+    CapabilitySelected,
 }
 
 impl Disposition {
@@ -35,8 +36,8 @@ impl Disposition {
             Self::NightlyLive => "nightly-live",
             Self::IsolatedLive => "isolated-live",
             Self::KnownUpstreamBug => "known-upstream-bug",
-            Self::ConditionalCommunity => "conditional-community",
-            Self::ExcludedCommunity => "excluded-community",
+            Self::ConditionalAvailability => "conditional-availability",
+            Self::CapabilitySelected => "capability-selected",
         }
     }
 }
@@ -48,6 +49,10 @@ pub struct CoverageEntry {
     pub wire_command: &'static str,
     pub disposition: Disposition,
     pub lane: &'static str,
+    /// Empty for deployment-independent coverage, otherwise an all-of feature list.
+    pub requires: &'static [&'static str],
+    /// Whether the public harness has a cleanup-safe executable path for this entry.
+    pub implemented: bool,
 }
 
 /// Availability of a helper exposed by the pre-convergence rich harness.
@@ -130,7 +135,7 @@ pub fn validate_compiled_manifest() -> Result<(), String> {
 mod tests {
     use super::*;
 
-    const EXPECTED_EXCLUSIONS: &[&str] = &[
+    const EXPECTED_CAPABILITY_SELECTED: &[&str] = &[
         "create_agent_group",
         "create_oci_image_target",
         "delete_agent",
@@ -155,13 +160,19 @@ mod tests {
     }
 
     #[test]
-    fn hard_exclusions_are_only_the_edition_boundary() {
+    fn former_edition_exclusions_are_capability_selected() {
         let actual: Vec<_> = COMMAND_COVERAGE
             .iter()
-            .filter(|entry| entry.disposition == Disposition::ExcludedCommunity)
+            .filter(|entry| {
+                entry.disposition == Disposition::CapabilitySelected
+                    && matches!(
+                        entry.requires,
+                        ["ENABLE_AGENTS" | "ENABLE_CONTAINER_SCANNING"]
+                    )
+            })
             .map(|entry| entry.name)
             .collect();
-        assert_eq!(actual, EXPECTED_EXCLUSIONS);
+        assert_eq!(actual, EXPECTED_CAPABILITY_SELECTED);
     }
 
     #[test]

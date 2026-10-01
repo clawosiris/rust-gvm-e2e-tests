@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "deployment_id": "replace-with-private-deployment-id",
+  "transport": {
+    "kind": "unix",
+    "socket_path": "/run/gvmd/gvmd.sock"
+  },
+  "runtime_images_path": "/run/e2e/runtime-images.json"
+}

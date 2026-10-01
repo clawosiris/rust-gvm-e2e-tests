@@ -59,17 +59,26 @@ def normalize(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--compose-file", required=True)
+    parser.add_argument("--compose-file", required=True, action="append")
+    parser.add_argument("--project-directory", default=".")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
+    compose_args = [part for path in args.compose_file for part in ("-f", path)]
+    compose_command = [
+        "docker",
+        "compose",
+        "--project-directory",
+        args.project_directory,
+        *compose_args,
+    ]
     compose = subprocess.run(
-        ["docker", "compose", "-f", args.compose_file, "images", "--format", "json"],
+        [*compose_command, "images", "--format", "json"],
         check=True,
         capture_output=True,
         text=True,
     )
     configured_services = subprocess.run(
-        ["docker", "compose", "-f", args.compose_file, "config", "--services"],
+        [*compose_command, "config", "--services"],
         check=True,
         capture_output=True,
         text=True,

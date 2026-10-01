@@ -32,18 +32,30 @@ class CoveragePolicyTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     MANIFEST.apply_policy_sha({"rust_gvm_sha": "a" * 40}, invalid)
 
-    def test_only_issue_118_hard_commands_are_excluded(self):
+    def test_historical_exclusions_are_now_feature_catalogued(self):
+        feature_map = MANIFEST.feature_command_map()
         actual = {
             name
-            for name in MANIFEST.EXCLUDED_COMMANDS
-            if MANIFEST.command_disposition(name) == "excluded-community"
+            for name in MANIFEST.HISTORICAL_FEATURE_COMMANDS
+            if MANIFEST.command_disposition(name) == "capability-selected"
         }
-        self.assertEqual(actual, MANIFEST.EXCLUDED_COMMANDS)
+        self.assertEqual(actual, MANIFEST.HISTORICAL_FEATURE_COMMANDS)
         self.assertEqual(len(actual), 15)
+        self.assertTrue(actual <= set(feature_map))
+
+    def test_scenario_requirements_are_explicit_and_independent(self):
+        features = MANIFEST.load_feature_catalog()["features"]
+        self.assertEqual(
+            features["ENABLE_OPENVASD"]["scenarios"]["openvasd-network-scan"],
+            {"lane": "devel-scan", "implemented": True},
+        )
+        self.assertEqual(
+            features["ENABLE_JWT_AUTH"]["scenarios"]["jwt-authentication-probe"],
+            {"lane": "devel-fast", "implemented": False},
+        )
 
     def test_dispositions_are_mutually_exclusive(self):
         classes = [
-            MANIFEST.EXCLUDED_COMMANDS,
             MANIFEST.KNOWN_UPSTREAM_BUG_COMMANDS,
             MANIFEST.CONDITIONAL_COMMANDS,
             MANIFEST.NIGHTLY_COMMANDS,
@@ -82,7 +94,7 @@ class CoveragePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             MANIFEST.command_disposition("sync_config"),
-            "conditional-community",
+            "conditional-availability",
         )
 
     def test_typed_helper_discovery_recurses_into_module_files(self):
@@ -103,18 +115,18 @@ class CoveragePolicyTests(unittest.TestCase):
             )
         self.assertEqual(
             MANIFEST.command_disposition("get_scan_report"),
-            "conditional-community",
+            "conditional-availability",
         )
 
     def test_semantic_report_export_helpers_retain_conditional_policy(self):
         for helper in ("get_report_export", "get_report_export_with_opts"):
             self.assertEqual(
                 MANIFEST.HELPER_DISPOSITION_OVERRIDES[helper],
-                "conditional-community",
+                "conditional-availability",
             )
         self.assertTrue(
             all(
-                disposition == "excluded-community"
+                disposition == "capability-selected"
                 for _, disposition in MANIFEST.EXTRA_HELPERS.values()
             )
         )
@@ -123,11 +135,16 @@ class CoveragePolicyTests(unittest.TestCase):
         self.assertIn("export_scan_report", MANIFEST.CONDITIONAL_COMMANDS)
         self.assertEqual(
             MANIFEST.command_disposition("export_scan_report"),
-            "conditional-community",
+            "conditional-availability",
         )
         self.assertIn(
             "cleanup-safe export reconciliation",
-            MANIFEST.rationale_for("export_scan_report", "conditional-community"),
+            MANIFEST.rationale_for("export_scan_report", "conditional-availability"),
+        )
+        self.assertIn("export_scan_report", MANIFEST.UNIMPLEMENTED_DISCOVERY_COMMANDS)
+        self.assertEqual(
+            MANIFEST.lane_for("conditional-availability", "export_scan_report"),
+            "devel-scan",
         )
 
     def test_disappeared_facade_is_replaced_when_wire_command_remains(self):
