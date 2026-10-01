@@ -87,6 +87,10 @@ cargo run --locked --bin gvm-community-e2e -- --mode wait-ready
   containers became healthy. The stock entrypoint performs the configuration
   import once; a `service_started` dependency can race the initial volume copy,
   and waiting longer inside the already-running `gvmd` does not rerun it.
+- Keep `report-formats` gated on healthy `data-objects`, and `dfn-cert-data`
+  gated on healthy `cert-bund-data`. Each pair writes one shared volume; the
+  prerequisite initializer clears that mount before copying and can otherwise
+  delete the dependent producer's readiness marker after it has been created.
 - The SCAP producer copies roughly 10 GiB before creating its health marker.
   Keep its Compose start period long enough for that copy; the image default
   can mark it unhealthy after about two minutes even though the copy is still

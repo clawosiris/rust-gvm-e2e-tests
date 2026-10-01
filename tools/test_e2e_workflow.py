@@ -11,6 +11,7 @@ WORKFLOW = Path(__file__).parents[1] / ".github/workflows/e2e.yml"
 DOCKERFILE = Path(__file__).parents[1] / "docker/Dockerfile.runner"
 LANE_SCRIPT = Path(__file__).parents[1] / "docker/scripts/run-community-lane.sh"
 WAIT_SCRIPT = Path(__file__).parents[1] / "docker/scripts/wait-ready.sh"
+COMPOSE_FILE = Path(__file__).parents[1] / "docker/docker-compose.yml"
 CARGO_MANIFEST = Path(__file__).parents[1] / "tests/library/Cargo.toml"
 LOCKFILE = Path(__file__).parents[1] / "Cargo.lock"
 SUPPORTED_RUST_GVM_SHA = "b85443167a9fd642b2d91f6f347db048de5aba9c"
@@ -188,6 +189,30 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
         )
         self.assertIn('remaining=$((READINESS_TIMEOUT_SECS - elapsed))', wait_script)
         self.assertIn('-e E2E_READINESS_TIMEOUT_SECS="$remaining"', wait_script)
+
+    def test_shared_volume_feed_producers_are_serialized(self):
+        compose = COMPOSE_FILE.read_text(encoding="utf-8")
+
+        for producer, prerequisite in (
+            ("dfn-cert-data", "cert-bund-data"),
+            ("report-formats", "data-objects"),
+        ):
+            service = re.search(
+                rf"^  {re.escape(producer)}:\n(.*?)(?=^  [a-z0-9][a-z0-9-]*:|\Z)",
+                compose,
+                re.MULTILINE | re.DOTALL,
+            )
+            self.assertIsNotNone(service)
+            self.assertRegex(
+                service.group(1),
+                rf"depends_on:\n\s+{re.escape(prerequisite)}:\n"
+                r"\s+condition: service_healthy",
+            )
+            self.assertNotRegex(
+                service.group(1),
+                rf"{re.escape(prerequisite)}:\n"
+                r"\s+condition: service_started",
+            )
 
 
 if __name__ == "__main__":
