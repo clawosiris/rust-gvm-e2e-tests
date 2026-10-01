@@ -115,9 +115,9 @@
     {
       "name": "create_report_config",
       "wire_command": "create_report_config",
-      "disposition": "isolated-live",
-      "lane": "devel-isolated",
-      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+      "disposition": "known-upstream-bug",
+      "lane": "none",
+      "rationale": "Known upstream crash greenbone/gvmd#3165: gvmd 26.40.2 / GMP 22.7 closed create_report_config connections in runs 36611076644 and 36665378965; exact-name reconciliation found no persisted object, so this mutation family is not executed."
     },
     {
       "name": "create_report_format",
@@ -304,9 +304,9 @@
     {
       "name": "delete_report_config",
       "wire_command": "delete_report_config",
-      "disposition": "isolated-live",
-      "lane": "devel-isolated",
-      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+      "disposition": "known-upstream-bug",
+      "lane": "none",
+      "rationale": "Known upstream crash greenbone/gvmd#3165: gvmd 26.40.2 / GMP 22.7 closed create_report_config connections in runs 36611076644 and 36665378965; exact-name reconciliation found no persisted object, so this mutation family is not executed."
     },
     {
       "name": "delete_report_format",
@@ -941,9 +941,9 @@
     {
       "name": "modify_report_config",
       "wire_command": "modify_report_config",
-      "disposition": "isolated-live",
-      "lane": "devel-isolated",
-      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+      "disposition": "known-upstream-bug",
+      "lane": "none",
+      "rationale": "Known upstream crash greenbone/gvmd#3165: gvmd 26.40.2 / GMP 22.7 closed create_report_config connections in runs 36611076644 and 36665378965; exact-name reconciliation found no persisted object, so this mutation family is not executed."
     },
     {
       "name": "modify_report_format",
@@ -1202,9 +1202,9 @@
     {
       "name": "clone_report_config",
       "wire_command": "create_report_config",
-      "disposition": "isolated-live",
-      "lane": "devel-isolated",
-      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+      "disposition": "known-upstream-bug",
+      "lane": "none",
+      "rationale": "Known upstream crash greenbone/gvmd#3165: gvmd 26.40.2 / GMP 22.7 closed create_report_config connections in runs 36611076644 and 36665378965; exact-name reconciliation found no persisted object, so this mutation family is not executed."
     },
     {
       "name": "clone_report_format",
@@ -1426,9 +1426,9 @@
     {
       "name": "create_report_config",
       "wire_command": "create_report_config",
-      "disposition": "isolated-live",
-      "lane": "devel-isolated",
-      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+      "disposition": "known-upstream-bug",
+      "lane": "none",
+      "rationale": "Known upstream crash greenbone/gvmd#3165: gvmd 26.40.2 / GMP 22.7 closed create_report_config connections in runs 36611076644 and 36665378965; exact-name reconciliation found no persisted object, so this mutation family is not executed."
     },
     {
       "name": "create_role",
@@ -1650,9 +1650,9 @@
     {
       "name": "delete_report_config",
       "wire_command": "delete_report_config",
-      "disposition": "isolated-live",
-      "lane": "devel-isolated",
-      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+      "disposition": "known-upstream-bug",
+      "lane": "none",
+      "rationale": "Known upstream crash greenbone/gvmd#3165: gvmd 26.40.2 / GMP 22.7 closed create_report_config connections in runs 36611076644 and 36665378965; exact-name reconciliation found no persisted object, so this mutation family is not executed."
     },
     {
       "name": "delete_report_format",
@@ -2735,9 +2735,9 @@
     {
       "name": "modify_report_config",
       "wire_command": "modify_report_config",
-      "disposition": "isolated-live",
-      "lane": "devel-isolated",
-      "rationale": "Supported operation isolated because it is administrative, global, or destructive."
+      "disposition": "known-upstream-bug",
+      "lane": "none",
+      "rationale": "Known upstream crash greenbone/gvmd#3165: gvmd 26.40.2 / GMP 22.7 closed create_report_config connections in runs 36611076644 and 36665378965; exact-name reconciliation found no persisted object, so this mutation family is not executed."
     },
     {
       "name": "modify_report_format",

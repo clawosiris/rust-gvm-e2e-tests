@@ -21,6 +21,7 @@ pub enum Disposition {
     BlockingLive,
     NightlyLive,
     IsolatedLive,
+    KnownUpstreamBug,
     ConditionalCommunity,
     ExcludedCommunity,
 }
@@ -33,6 +34,7 @@ impl Disposition {
             Self::BlockingLive => "blocking-live",
             Self::NightlyLive => "nightly-live",
             Self::IsolatedLive => "isolated-live",
+            Self::KnownUpstreamBug => "known-upstream-bug",
             Self::ConditionalCommunity => "conditional-community",
             Self::ExcludedCommunity => "excluded-community",
         }
@@ -160,6 +162,43 @@ mod tests {
             .map(|entry| entry.name)
             .collect();
         assert_eq!(actual, EXPECTED_EXCLUSIONS);
+    }
+
+    #[test]
+    fn report_config_mutations_are_explicit_known_upstream_bugs_but_reads_remain_isolated() {
+        for name in [
+            "create_report_config",
+            "delete_report_config",
+            "modify_report_config",
+        ] {
+            assert!(COMMAND_COVERAGE.iter().any(|entry| {
+                entry.name == name
+                    && entry.disposition == Disposition::KnownUpstreamBug
+                    && entry.lane == "none"
+            }));
+        }
+        assert!(COMMAND_COVERAGE.iter().any(|entry| {
+            entry.name == "get_report_configs"
+                && entry.disposition == Disposition::IsolatedLive
+                && entry.lane == "devel-isolated"
+        }));
+        for name in ["get_report_config", "get_report_configs"] {
+            assert!(HELPER_COVERAGE.iter().any(|entry| {
+                entry.name == name
+                    && entry.disposition == Disposition::IsolatedLive
+                    && entry.lane == "devel-isolated"
+            }));
+        }
+        for name in [
+            "create_report_config",
+            "clone_report_config",
+            "delete_report_config",
+            "modify_report_config",
+        ] {
+            assert!(HELPER_COVERAGE.iter().any(|entry| {
+                entry.name == name && entry.disposition == Disposition::KnownUpstreamBug
+            }));
+        }
     }
 
     #[test]

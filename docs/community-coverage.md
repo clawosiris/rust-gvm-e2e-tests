@@ -18,7 +18,8 @@
 | `blocking-live` | 70 |
 | `conditional-community` | 24 |
 | `excluded-community` | 15 |
-| `isolated-live` | 42 |
+| `isolated-live` | 39 |
+| `known-upstream-bug` | 3 |
 | `nightly-live` | 7 |
 
 ## Wire commands
@@ -40,7 +41,7 @@
 | `create_port_list` | `blocking-live` | `devel-fast` |
 | `create_port_range` | `blocking-live` | `devel-fast` |
 | `create_report` | `nightly-live` | `devel-scan` |
-| `create_report_config` | `isolated-live` | `devel-isolated` |
+| `create_report_config` | `known-upstream-bug` | `none` |
 | `create_report_format` | `isolated-live` | `devel-isolated` |
 | `create_role` | `isolated-live` | `devel-isolated` |
 | `create_scanner` | `blocking-live` | `devel-fast` |
@@ -67,7 +68,7 @@
 | `delete_port_list` | `blocking-live` | `devel-fast` |
 | `delete_port_range` | `blocking-live` | `devel-fast` |
 | `delete_report` | `isolated-live` | `devel-isolated` |
-| `delete_report_config` | `isolated-live` | `devel-isolated` |
+| `delete_report_config` | `known-upstream-bug` | `none` |
 | `delete_report_format` | `isolated-live` | `devel-isolated` |
 | `delete_role` | `isolated-live` | `devel-isolated` |
 | `delete_scanner` | `blocking-live` | `devel-fast` |
@@ -158,7 +159,7 @@
 | `modify_override` | `blocking-live` | `devel-fast` |
 | `modify_permission` | `isolated-live` | `devel-isolated` |
 | `modify_port_list` | `blocking-live` | `devel-fast` |
-| `modify_report_config` | `isolated-live` | `devel-isolated` |
+| `modify_report_config` | `known-upstream-bug` | `none` |
 | `modify_report_format` | `isolated-live` | `devel-isolated` |
 | `modify_role` | `isolated-live` | `devel-isolated` |
 | `modify_scanner` | `blocking-live` | `devel-fast` |
@@ -184,6 +185,16 @@
 | `verify_report_format` | `isolated-live` | `devel-isolated` |
 | `verify_scanner` | `blocking-live` | `devel-fast` |
 
+## Known upstream Community defects
+
+These entries are explicit non-execution dispositions, not passes or generic skips.
+
+| Command | Evidence |
+|---|---|
+| `create_report_config` | Known upstream crash greenbone/gvmd#3165: gvmd 26.40.2 / GMP 22.7 closed create_report_config connections in runs 36611076644 and 36665378965; exact-name reconciliation found no persisted object, so this mutation family is not executed. |
+| `delete_report_config` | Known upstream crash greenbone/gvmd#3165: gvmd 26.40.2 / GMP 22.7 closed create_report_config connections in runs 36611076644 and 36665378965; exact-name reconciliation found no persisted object, so this mutation family is not executed. |
+| `modify_report_config` | Known upstream crash greenbone/gvmd#3165: gvmd 26.40.2 / GMP 22.7 closed create_report_config connections in runs 36611076644 and 36665378965; exact-name reconciliation found no persisted object, so this mutation family is not executed. |
+
 ## Public helpers and helper variants
 
 | Helper | Wire command | Disposition | Lane |
@@ -200,7 +211,7 @@
 | `clone_override` | `create_override` | `blocking-live` | `devel-fast` |
 | `clone_permission` | `create_permission` | `isolated-live` | `devel-isolated` |
 | `clone_port_list` | `create_port_list` | `blocking-live` | `devel-fast` |
-| `clone_report_config` | `create_report_config` | `isolated-live` | `devel-isolated` |
+| `clone_report_config` | `create_report_config` | `known-upstream-bug` | `none` |
 | `clone_report_format` | `create_report_format` | `isolated-live` | `devel-isolated` |
 | `clone_role` | `create_role` | `isolated-live` | `devel-isolated` |
 | `clone_scan_config` | `create_config` | `blocking-live` | `devel-fast` |
@@ -232,7 +243,7 @@
 | `create_permission` | `create_permission` | `isolated-live` | `devel-isolated` |
 | `create_port_list` | `create_port_list` | `blocking-live` | `devel-fast` |
 | `create_port_range` | `create_port_range` | `blocking-live` | `devel-fast` |
-| `create_report_config` | `create_report_config` | `isolated-live` | `devel-isolated` |
+| `create_report_config` | `create_report_config` | `known-upstream-bug` | `none` |
 | `create_role` | `create_role` | `isolated-live` | `devel-isolated` |
 | `create_scan_config` | `create_config` | `blocking-live` | `devel-fast` |
 | `create_scanner` | `create_scanner` | `blocking-live` | `devel-fast` |
@@ -264,7 +275,7 @@
 | `delete_port_list` | `delete_port_list` | `blocking-live` | `devel-fast` |
 | `delete_port_range` | `delete_port_range` | `blocking-live` | `devel-fast` |
 | `delete_report` | `delete_report` | `isolated-live` | `devel-isolated` |
-| `delete_report_config` | `delete_report_config` | `isolated-live` | `devel-isolated` |
+| `delete_report_config` | `delete_report_config` | `known-upstream-bug` | `none` |
 | `delete_report_format` | `delete_report_format` | `isolated-live` | `devel-isolated` |
 | `delete_role` | `delete_role` | `isolated-live` | `devel-isolated` |
 | `delete_scan_config` | `delete_config` | `blocking-live` | `devel-fast` |
@@ -419,7 +430,7 @@
 | `modify_policy_set_comment` | `modify_config` | `blocking-live` | `devel-fast` |
 | `modify_policy_set_name` | `modify_config` | `blocking-live` | `devel-fast` |
 | `modify_port_list` | `modify_port_list` | `blocking-live` | `devel-fast` |
-| `modify_report_config` | `modify_report_config` | `isolated-live` | `devel-isolated` |
+| `modify_report_config` | `modify_report_config` | `known-upstream-bug` | `none` |
 | `modify_report_format` | `modify_report_format` | `isolated-live` | `devel-isolated` |
 | `modify_role` | `modify_role` | `isolated-live` | `devel-isolated` |
 | `modify_scan_config` | `modify_config` | `blocking-live` | `devel-fast` |

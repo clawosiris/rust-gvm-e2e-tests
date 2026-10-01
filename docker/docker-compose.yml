@@ -56,7 +56,7 @@ services:
       - cert-data:/mnt
     depends_on:
       cert-bund-data:
-        condition: service_started
+        condition: service_healthy
 
   data-objects:
     image: registry.community.greenbone.net/community/data-objects:latest
@@ -75,7 +75,7 @@ services:
       - data-objects:/mnt
     depends_on:
       data-objects:
-        condition: service_started
+        condition: service_healthy
 
   gpg-data:
     image: registry.community.greenbone.net/community/gpg-data:${GVM_VERSION:-stable}
