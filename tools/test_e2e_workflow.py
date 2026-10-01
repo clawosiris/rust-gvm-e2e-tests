@@ -10,6 +10,9 @@ from pathlib import Path
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/e2e.yml"
 DOCKERFILE = Path(__file__).parents[1] / "docker/Dockerfile.runner"
 LANE_SCRIPT = Path(__file__).parents[1] / "docker/scripts/run-deployment-lane.sh"
+POSTGRES_BOOTSTRAP_SCRIPT = (
+    Path(__file__).parents[1] / "docker/scripts/postgres-bootstrap.sh"
+)
 REUSABLE_WORKFLOW = Path(__file__).parents[1] / ".github/workflows/deployment-e2e.yml"
 WAIT_SCRIPT = Path(__file__).parents[1] / "docker/scripts/wait-ready.sh"
 COMPOSE_FILE = Path(__file__).parents[1] / "docker/docker-compose.yml"
@@ -205,14 +208,25 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
     def test_repaired_main_shared_state_and_readiness_contract_is_preserved(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         lane_script = LANE_SCRIPT.read_text(encoding="utf-8")
+        postgres_bootstrap_script = POSTGRES_BOOTSTRAP_SCRIPT.read_text(
+            encoding="utf-8"
+        )
         wait_script = WAIT_SCRIPT.read_text(encoding="utf-8")
 
         self.assertIn("branches: [main]", workflow)
         self.assertIn("group: rust-gvm-e2e-shared-compose-state", workflow)
         for job in SELF_HOSTED_LANES:
             self.assertIn("timeout-minutes: 420", self.jobs()[job])
-        self.assertIn("ALTER SYSTEM SET max_wal_size = '16GB'", lane_script)
-        self.assertIn("ALTER SYSTEM SET checkpoint_timeout = '30min'", lane_script)
+        self.assertIn("deployment_compose up -d pg-gvm", lane_script)
+        self.assertNotIn("up -d --wait --wait-timeout 300 pg-gvm", lane_script)
+        self.assertIn("wait_for_postgres_bootstrap", lane_script)
+        self.assertIn(
+            "ALTER SYSTEM SET max_wal_size = '16GB'", postgres_bootstrap_script
+        )
+        self.assertIn(
+            "ALTER SYSTEM SET checkpoint_timeout = '30min'",
+            postgres_bootstrap_script,
+        )
         self.assertIn("CHECKPOINT;", lane_script)
         self.assertIn(
             'READINESS_TIMEOUT_SECS="${E2E_READINESS_TIMEOUT_SECS:-21000}"',

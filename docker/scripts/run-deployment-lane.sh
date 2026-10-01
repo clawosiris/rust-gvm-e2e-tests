@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/deployment-lane-artifacts.sh"
+source "${script_dir}/postgres-bootstrap.sh"
 
 lane="${1:?usage: run-deployment-lane.sh <lane>}"
 validate_deployment_lane "${lane}"
@@ -113,15 +114,8 @@ trap cleanup EXIT
 
 if [[ "${E2E_CLEAN_VOLUMES:-0}" == "1" ]]; then deployment_compose down -v; fi
 deployment_compose pull
-deployment_compose up -d --wait --wait-timeout 300 pg-gvm
-for attempt in $(seq 1 60); do
-  if deployment_compose exec -T --user postgres pg-gvm \
-      psql --host=/var/run/postgresql --dbname=postgres --no-psqlrc -v ON_ERROR_STOP=1 \
-      -c "ALTER SYSTEM SET max_wal_size = '16GB';" -c "ALTER SYSTEM SET checkpoint_timeout = '30min';" \
-      -c "SELECT pg_reload_conf();"; then break; fi
-  [[ "${attempt}" -lt 60 ]] || { echo "PostgreSQL did not remain available for bootstrap tuning" >&2; exit 1; }
-  sleep 2
-done
+deployment_compose up -d pg-gvm
+wait_for_postgres_bootstrap
 deployment_compose up -d
 bash docker/scripts/wait-ready.sh
 runtime_image_args=()
