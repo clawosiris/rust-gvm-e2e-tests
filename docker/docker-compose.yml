@@ -101,6 +101,8 @@ services:
     image: registry.community.greenbone.net/community/pg-gvm:${GVM_VERSION:-stable}
     restart: on-failure:10
     stop_grace_period: 5m
+    environment:
+      PGCTLTIMEOUT: "${E2E_POSTGRES_BOOTSTRAP_TIMEOUT_SECS:-600}"
     volumes:
       - psql-data:/var/lib/postgresql
       - psql-socket:/var/run/postgresql

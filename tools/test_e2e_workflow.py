@@ -222,6 +222,10 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
         self.assertIn("deployment_compose up -d pg-gvm", lane_script)
         self.assertNotIn("up -d --wait --wait-timeout 300 pg-gvm", lane_script)
         self.assertIn("wait_for_postgres_bootstrap", lane_script)
+        self.assertIn(
+            'PGCTLTIMEOUT: "${E2E_POSTGRES_BOOTSTRAP_TIMEOUT_SECS:-600}"',
+            COMPOSE_FILE.read_text(encoding="utf-8"),
+        )
         self.assertNotIn('--project-directory "$(pwd)"', lane_script)
         self.assertIn("validate_compose_workspace.py", workflow)
         self.assertIn("--expected-workspace \"$(pwd -P)\"", workflow)
