@@ -146,6 +146,9 @@ jobs:
           bash docker/scripts/test-community-lane-artifacts.sh
           bash docker/scripts/test-deployment-lane-artifacts.sh
           docker compose -f "${COMPOSE_FILE}" config --quiet
+          python3 tools/validate_compose_workspace.py \
+            --compose-file "${COMPOSE_FILE}" \
+            --expected-workspace "$(pwd -P)"
 
   build-runner:
     name: Build Community runner

@@ -81,7 +81,7 @@ compose_file="${COMPOSE_FILE:-docker/docker-compose.yml}"
 IFS=':' read -r -a compose_files <<< "${compose_file}"
 compose_args=()
 for file in "${compose_files[@]}"; do compose_args+=(-f "${file}"); done
-deployment_compose() { docker compose --project-directory "$(pwd)" "${compose_args[@]}" "$@"; }
+deployment_compose() { docker compose "${compose_args[@]}" "$@"; }
 if [[ "${lane}" == "devel-isolated" ]]; then
   export COMPOSE_PROJECT_NAME="${E2E_ISOLATED_PROJECT:-rust-gvm-e2e-isolated}"
   export E2E_ISOLATED=1
@@ -120,7 +120,7 @@ deployment_compose up -d
 bash docker/scripts/wait-ready.sh
 runtime_image_args=()
 for file in "${compose_files[@]}"; do runtime_image_args+=(--compose-file "${file}"); done
-python3 tools/runtime_images.py "${runtime_image_args[@]}" --project-directory "$(pwd)" \
+python3 tools/runtime_images.py "${runtime_image_args[@]}" \
   --output "artifacts/${deployment_id}-${lane}-runtime-images.json"
 deployment_compose --profile runner run --rm -T --no-deps --entrypoint "" rust-gvm-e2e \
   gvm-community-e2e --lane "${lane}"

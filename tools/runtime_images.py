@@ -57,20 +57,26 @@ def normalize(
     return sorted(images, key=lambda item: item["service"])
 
 
+def build_compose_command(
+    compose_files: list[str], project_directory: str | None = None
+) -> list[str]:
+    command = ["docker", "compose"]
+    if project_directory is not None:
+        command.extend(("--project-directory", project_directory))
+    for path in compose_files:
+        command.extend(("-f", path))
+    return command
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--compose-file", required=True, action="append")
-    parser.add_argument("--project-directory", default=".")
+    parser.add_argument("--project-directory")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    compose_args = [part for path in args.compose_file for part in ("-f", path)]
-    compose_command = [
-        "docker",
-        "compose",
-        "--project-directory",
-        args.project_directory,
-        *compose_args,
-    ]
+    compose_command = build_compose_command(
+        args.compose_file, args.project_directory
+    )
     compose = subprocess.run(
         [*compose_command, "images", "--format", "json"],
         check=True,

@@ -10,6 +10,7 @@ from pathlib import Path
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/e2e.yml"
 DOCKERFILE = Path(__file__).parents[1] / "docker/Dockerfile.runner"
 LANE_SCRIPT = Path(__file__).parents[1] / "docker/scripts/run-deployment-lane.sh"
+RUNTIME_IMAGES_SCRIPT = Path(__file__).parents[1] / "tools/runtime_images.py"
 POSTGRES_BOOTSTRAP_SCRIPT = (
     Path(__file__).parents[1] / "docker/scripts/postgres-bootstrap.sh"
 )
@@ -208,6 +209,7 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
     def test_repaired_main_shared_state_and_readiness_contract_is_preserved(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         lane_script = LANE_SCRIPT.read_text(encoding="utf-8")
+        runtime_images_script = RUNTIME_IMAGES_SCRIPT.read_text(encoding="utf-8")
         postgres_bootstrap_script = POSTGRES_BOOTSTRAP_SCRIPT.read_text(
             encoding="utf-8"
         )
@@ -220,6 +222,12 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
         self.assertIn("deployment_compose up -d pg-gvm", lane_script)
         self.assertNotIn("up -d --wait --wait-timeout 300 pg-gvm", lane_script)
         self.assertIn("wait_for_postgres_bootstrap", lane_script)
+        self.assertNotIn('--project-directory "$(pwd)"', lane_script)
+        self.assertIn("validate_compose_workspace.py", workflow)
+        self.assertIn("--expected-workspace \"$(pwd -P)\"", workflow)
+        self.assertIn(
+            'parser.add_argument("--project-directory")', runtime_images_script
+        )
         self.assertIn(
             "ALTER SYSTEM SET max_wal_size = '16GB'", postgres_bootstrap_script
         )
