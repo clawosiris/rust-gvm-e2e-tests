@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "modeled-command",
+      "advertised_commands": ["get_version"],
+      "expected_modeled": ["get_version"],
+      "expected_allowlisted": [],
+      "expected_unknown": []
+    },
+    {
+      "name": "exact-allowlisted-command",
+      "advertised_commands": ["cancel_report_export"],
+      "expected_modeled": [],
+      "expected_allowlisted": ["cancel_report_export"],
+      "expected_unknown": []
+    },
+    {
+      "name": "synthetic-unknown-command",
+      "advertised_commands": ["synthetic_future_command"],
+      "expected_modeled": [],
+      "expected_allowlisted": [],
+      "expected_unknown": ["synthetic_future_command"]
+    }
+  ]
+}

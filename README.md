@@ -12,6 +12,8 @@ Coverage policy has one source of truth:
 
 - [coverage/manifest.json](coverage/manifest.json) is the machine inventory;
 - [docs/community-coverage.md](docs/community-coverage.md) is generated from it;
+- [coverage/live-help-allowlist.json](coverage/live-help-allowlist.json) is the
+  reviewed exact-name policy for live commands not modeled by rust-gvm;
 - `tests/library/src/generated_manifest.rs` compile-references every typed
   helper and compares all registered wire commands with
   `COMMAND_CAPABILITIES`;
@@ -44,6 +46,12 @@ Adding/removing a registry command or public typed helper without updating the
 policy fails generation, compilation, or inventory tests. Removed helper
 surfaces and helpers replaced by canonical request values are recorded
 separately; generated files are never edited by hand.
+
+Authenticated brief-XML help is reverse-reconciled against the complete
+generated command inventory before cleanup or mutation. Every advertised name
+must be modeled or have its own reviewed allowlist row with rationale and live
+evidence. Unknown names fail discovery and remain explicit in the capability,
+test-plan failure, and lane-result JSON artifacts.
 
 ## Executable lanes
 
