@@ -13,7 +13,7 @@ pub mod runtime;
 
 pub use generated_manifest::{
     compile_enforce_public_helper_surface, COMMAND_COVERAGE, HELPER_COVERAGE, HELPER_MIGRATIONS,
-    RUST_GVM_SHA,
+    LIVE_HELP_ALLOWLIST, RUST_GVM_SHA,
 };
 
 /// Executable coverage disposition, independent from deployment capability policy.
@@ -55,6 +55,16 @@ pub struct CoverageEntry {
     pub implemented: bool,
 }
 
+/// One reviewed exact-name exception for a command advertised by authenticated
+/// live help but not modeled by the pinned rust-gvm command registry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LiveHelpAllowlistEntry {
+    pub name: &'static str,
+    pub rationale: &'static str,
+    pub evidence_source: &'static str,
+    pub evidence_detail: &'static str,
+}
+
 /// Availability of a helper exposed by the pre-convergence rich harness.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SurfaceStatus {
@@ -88,6 +98,38 @@ pub fn validate_compiled_manifest() -> Result<(), String> {
             "command manifest drift: upstream-only={:?}, manifest-only={:?}",
             upstream.difference(&covered).collect::<Vec<_>>(),
             covered.difference(&upstream).collect::<Vec<_>>()
+        ));
+    }
+    let allowlisted: BTreeSet<_> = LIVE_HELP_ALLOWLIST.iter().map(|entry| entry.name).collect();
+    if LIVE_HELP_ALLOWLIST.len() != allowlisted.len() {
+        return Err("live-help allowlist contains duplicate entries".to_string());
+    }
+    let invalid_allowlist = LIVE_HELP_ALLOWLIST
+        .iter()
+        .filter(|entry| {
+            entry.name.split('_').any(|part| {
+                part.is_empty()
+                    || !part
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            }) || entry.rationale.trim().is_empty()
+                || entry.evidence_source.trim().is_empty()
+                || entry.evidence_detail.trim().is_empty()
+        })
+        .map(|entry| entry.name)
+        .collect::<Vec<_>>();
+    if !invalid_allowlist.is_empty() {
+        return Err(format!(
+            "live-help allowlist contains invalid exact-name evidence: {invalid_allowlist:?}"
+        ));
+    }
+    let modeled_allowlist_overlap = upstream
+        .intersection(&allowlisted)
+        .copied()
+        .collect::<Vec<_>>();
+    if !modeled_allowlist_overlap.is_empty() {
+        return Err(format!(
+            "live-help allowlist contains modeled commands: {modeled_allowlist_overlap:?}"
         ));
     }
     let helpers: BTreeSet<_> = HELPER_COVERAGE.iter().map(|entry| entry.name).collect();
@@ -157,6 +199,26 @@ mod tests {
     fn registry_and_manifest_are_exactly_equal() {
         validate_compiled_manifest().expect("compiled manifest must match dependency registry");
         assert_eq!(COMMAND_COVERAGE.len(), 158);
+    }
+
+    #[test]
+    fn live_help_allowlist_is_exact_reviewed_and_disjoint_from_modeled_commands() {
+        validate_compiled_manifest().expect("compiled live-help policy must be valid");
+        assert_eq!(LIVE_HELP_ALLOWLIST.len(), 6);
+        assert_eq!(
+            LIVE_HELP_ALLOWLIST
+                .iter()
+                .map(|entry| entry.name)
+                .collect::<Vec<_>>(),
+            [
+                "cancel_report_export",
+                "download_report_export",
+                "export_audit_report",
+                "export_delta_audit_report",
+                "export_delta_scan_report",
+                "get_report_exports",
+            ]
+        );
     }
 
     #[test]

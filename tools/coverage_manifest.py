@@ -63,6 +63,7 @@ IMPLEMENTED_FEATURE_COMMANDS = {
 }
 
 FEATURE_CATALOG_PATH = ROOT / "coverage/feature-catalog.json"
+LIVE_HELP_ALLOWLIST_PATH = ROOT / "coverage/live-help-allowlist.json"
 
 
 def load_feature_catalog() -> dict[str, object]:
@@ -70,6 +71,39 @@ def load_feature_catalog() -> dict[str, object]:
     if catalog.get("schema_version") != 1 or not isinstance(catalog.get("features"), dict):
         raise ValueError("feature catalog must use schema_version 1 and contain features")
     return catalog
+
+
+def load_live_help_allowlist() -> list[dict[str, str]]:
+    policy = json.loads(LIVE_HELP_ALLOWLIST_PATH.read_text(encoding="utf-8"))
+    if set(policy) != {"schema_version", "commands"} or policy["schema_version"] != 1:
+        raise ValueError("live-help allowlist must use schema_version 1 and contain only commands")
+    commands = policy["commands"]
+    if not isinstance(commands, list):
+        raise ValueError("live-help allowlist commands must be a list")
+    required = {"name", "rationale", "evidence_source", "evidence_detail"}
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for entry in commands:
+        if not isinstance(entry, dict) or set(entry) != required:
+            raise ValueError("every live-help allowlist entry must contain exact reviewed fields")
+        if not all(isinstance(entry[field], str) and entry[field].strip() for field in required):
+            raise ValueError("live-help allowlist fields must be nonempty strings")
+        name = entry["name"]
+        if re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", name) is None:
+            raise ValueError(f"live-help allowlist entry is not an exact command name: {name}")
+        if name in seen:
+            raise ValueError(f"live-help allowlist repeats command {name}")
+        evidence_path = ROOT / entry["evidence_source"]
+        if not evidence_path.is_file():
+            raise ValueError(f"live-help evidence source does not exist: {entry['evidence_source']}")
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        if name not in evidence.get("help_commands", []):
+            raise ValueError(
+                f"live-help evidence source does not advertise exact command {name}"
+            )
+        seen.add(name)
+        result.append({field: entry[field] for field in sorted(required)})
+    return sorted(result, key=lambda entry: entry["name"])
 
 
 def feature_command_map(catalog: dict[str, object] | None = None) -> dict[str, str]:
@@ -595,6 +629,13 @@ def build_manifest(
 ) -> dict[str, object]:
     commands = command_names(source)
     command_set = set(commands)
+    live_help_allowlist = load_live_help_allowlist()
+    overlap = command_set & {entry["name"] for entry in live_help_allowlist}
+    if overlap:
+        raise ValueError(
+            "live-help allowlist contains commands modeled by rust-gvm: "
+            + ", ".join(sorted(overlap))
+        )
     feature_map = feature_command_map()
     command_entries = []
     for name in commands:
@@ -651,6 +692,8 @@ def build_manifest(
         "helper_variant_count": sum(name in EXTRA_HELPERS for name in helper_names),
         "replaced_helper_count": sum(item.status == "replaced" for item in migrations),
         "removed_helper_count": sum(item.status == "removed" for item in migrations),
+        "live_help_allowlist_count": len(live_help_allowlist),
+        "live_help_allowlist": live_help_allowlist,
         "feature_catalog": load_feature_catalog()["features"],
         "scenarios": [
             {
@@ -677,6 +720,7 @@ def render_markdown(manifest: dict[str, object]) -> str:
     commands = manifest["commands"]
     helpers = manifest["helpers"]
     migrations = manifest["helper_migrations"]
+    live_help_allowlist = manifest["live_help_allowlist"]
     counts = {
         disposition: sum(
             item["disposition"] == disposition for item in commands  # type: ignore[index]
@@ -694,6 +738,7 @@ def render_markdown(manifest: dict[str, object]) -> str:
         f"- explicit helper-only variants: **{manifest['helper_variant_count']}**",
         f"- replaced legacy helper surfaces: **{manifest['replaced_helper_count']}**",
         f"- removed legacy helper surfaces: **{manifest['removed_helper_count']}**",
+        f"- exact live-help allowlist entries: **{manifest['live_help_allowlist_count']}**",
         "- ordinary live runs use warm persistent volumes",
         "- a `*-live` disposition assigns an intended lane; only a published run artifact proves execution",
         "",
@@ -703,6 +748,21 @@ def render_markdown(manifest: dict[str, object]) -> str:
         "|---|---:|",
     ]
     lines.extend(f"| `{name}` | {count} |" for name, count in counts.items())
+    lines.extend(
+        [
+            "",
+            "## Exact live-help allowlist",
+            "",
+            "These exact command names are advertised by reviewed live deployment evidence but are not modeled by the pinned rust-gvm registry. Any other unmodeled advertised command blocks discovery before mutation.",
+            "",
+            "| Command | Rationale | Evidence |",
+            "|---|---|---|",
+        ]
+    )
+    lines.extend(
+        f"| `{item['name']}` | {item['rationale']} | `{item['evidence_source']}`: {item['evidence_detail']} |"
+        for item in live_help_allowlist  # type: ignore[union-attr]
+    )
     lines.extend(
         [
             "",
@@ -822,6 +882,17 @@ def render_rust(manifest: dict[str, object]) -> str:
                 replacement,
             )
         )
+    live_help_allowlist_lines = []
+    for item in manifest["live_help_allowlist"]:  # type: ignore[union-attr]
+        live_help_allowlist_lines.append(
+            "    LiveHelpAllowlistEntry { name: %s, rationale: %s, evidence_source: %s, evidence_detail: %s },"
+            % (
+                rust_string(item["name"]),
+                rust_string(item["rationale"]),
+                rust_string(item["evidence_source"]),
+                rust_string(item["evidence_detail"]),
+            )
+        )
     source = "\n".join(
         [
             "// SPDX-License-Identifier: AGPL-3.0-or-later",
@@ -831,7 +902,7 @@ def render_rust(manifest: dict[str, object]) -> str:
             "use gvm_client::GmpClient;",
             "use gvm_connection::UnixSocketConnection;",
             "",
-            "use crate::{CoverageEntry, Disposition, SurfaceMigration, SurfaceStatus};",
+            "use crate::{CoverageEntry, Disposition, LiveHelpAllowlistEntry, SurfaceMigration, SurfaceStatus};",
             "",
             f'pub const RUST_GVM_SHA: &str = {rust_string(str(manifest["rust_gvm_sha"]))};',
             "",
@@ -845,6 +916,10 @@ def render_rust(manifest: dict[str, object]) -> str:
             "",
             "pub static HELPER_MIGRATIONS: &[SurfaceMigration] = &[",
             *migration_lines,
+            "];",
+            "",
+            "pub static LIVE_HELP_ALLOWLIST: &[LiveHelpAllowlistEntry] = &[",
+            *live_help_allowlist_lines,
             "];",
             "",
             "#[allow(clippy::let_underscore_untyped)]",

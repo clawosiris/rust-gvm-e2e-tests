@@ -138,6 +138,15 @@ state, unknown enabled features, and enabled entries without a cleanup-safe
 implementation are blocking. Optional unavailable entries are explicit
 `not-selected` results and never count as passes.
 
+Before probes, cleanup, or mutation, the complete authenticated brief-XML help
+set is classified command by command against the generated modeled inventory
+and the reviewed exact-name allowlist. Modeled and allowlisted commands retain
+their separate machine-readable evidence. Any unknown advertised name blocks
+discovery and is written to the capability snapshot, failed plan, and result
+artifacts. A synthetic unknown fixture proves this fail-closed path; separate
+fixture cases prove modeled and explicitly allowlisted names pass. Wildcards
+and command-family exclusions are not accepted.
+
 Authenticated help and probes are authoritative for deployment availability.
 Typed semantic version floors are an additional pre-execution gate: help
 advertisement cannot select a command/helper that the negotiated GMP version
