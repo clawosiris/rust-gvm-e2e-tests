@@ -67,6 +67,16 @@ on:
         required: false
         type: string
         default: "900"
+      report-export-timeout-seconds:
+        description: Asynchronous report-export terminal-state budget
+        required: false
+        type: string
+        default: "300"
+      report-export-poll-interval-seconds:
+        description: Asynchronous report-export poll interval
+        required: false
+        type: string
+        default: "1"
       lane:
         description: One fixed safety lane or all
         required: true
@@ -203,6 +213,8 @@ jobs:
       E2E_OCI_IMAGE_REFERENCE: ${{ inputs.oci-image-reference }}
       E2E_READINESS_TIMEOUT_SECS: ${{ inputs.readiness-timeout-seconds }}
       E2E_TASK_PROGRESS_TIMEOUT_SECS: ${{ inputs.task-progress-timeout-seconds }}
+      E2E_REPORT_EXPORT_TIMEOUT_SECS: ${{ inputs.report-export-timeout-seconds }}
+      E2E_REPORT_EXPORT_POLL_INTERVAL_SECS: ${{ inputs.report-export-poll-interval-seconds }}
       GVM_ADMIN_USER: ${{ secrets.gvm-admin-user || 'admin' }}
       GVM_ADMIN_PASS: ${{ secrets.gvm-admin-pass || 'admin' }}
     steps:

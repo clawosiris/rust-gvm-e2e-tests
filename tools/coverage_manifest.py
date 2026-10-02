@@ -130,12 +130,13 @@ def feature_command_map(catalog: dict[str, object] | None = None) -> dict[str, s
     return result
 
 CONDITIONAL_COMMANDS = {
+    "cancel_report_export",
     "create_web_application_target",
     "delete_web_application_target",
-    # The command is advertised and version-eligible on the Community baseline,
-    # but the pinned typed API has no cancel/delete/reconciliation lifecycle for
-    # the export ID it creates or reuses. Keep it discovery-visible without
-    # claiming a cleanup-safe live mutation.
+    "download_report_export",
+    "export_audit_report",
+    "export_delta_audit_report",
+    "export_delta_scan_report",
     "export_scan_report",
     "get_credential_stores",
     "get_integration_configs",
@@ -144,6 +145,7 @@ CONDITIONAL_COMMANDS = {
     "get_report_closed_cves",
     "get_report_cves",
     "get_report_errors",
+    "get_report_exports",
     "get_report_hosts",
     "get_report_operating_systems",
     "get_report_ports",
@@ -164,7 +166,10 @@ CONDITIONAL_COMMANDS = {
 # deterministic live execution path in the public harness. The planner emits
 # them as explicit not-selected entries even when help advertises them.
 UNIMPLEMENTED_DISCOVERY_COMMANDS = {
-    "export_scan_report",
+    "cancel_report_export",
+    "export_audit_report",
+    "export_delta_audit_report",
+    "export_delta_scan_report",
     "get_license",
     "get_timezones",
     "modify_license",
@@ -172,11 +177,17 @@ UNIMPLEMENTED_DISCOVERY_COMMANDS = {
 }
 
 SCAN_CONDITIONAL_COMMANDS = {
+    "cancel_report_export",
+    "download_report_export",
+    "export_audit_report",
+    "export_delta_audit_report",
+    "export_delta_scan_report",
     "export_scan_report",
     "get_report_applications",
     "get_report_closed_cves",
     "get_report_cves",
     "get_report_errors",
+    "get_report_exports",
     "get_report_hosts",
     "get_report_operating_systems",
     "get_report_ports",
@@ -535,10 +546,32 @@ def lane_for(disposition: str, wire_command: str = "") -> str:
 
 
 def rationale_for(name: str, disposition: str) -> str:
-    if name == "export_scan_report":
+    if name in {"export_scan_report", "get_report_exports", "download_report_export"}:
         return (
-            "Advertised typed mutation is discovery-visible but not executed until "
-            "the pinned API provides cleanup-safe export reconciliation."
+            "Help-gated asynchronous scan-report export lifecycle coverage; creation, "
+            "bounded state polling, download consumption, and final reconciliation execute "
+            "together only when the cleanup-safe command set is advertised."
+        )
+    if name == "cancel_report_export":
+        return (
+            "Cancellation executes only for a separately created export observed in pending "
+            "or running state; an immediate terminal state receives an exact live disposition "
+            "and cleanup instead of a synthetic pass."
+        )
+    if name == "export_audit_report":
+        return (
+            "Typed and help-gated, but Community Compose has no deterministic audit-report "
+            "fixture; the scan lane emits the provider-fixture disposition without mutation."
+        )
+    if name == "export_delta_audit_report":
+        return (
+            "Typed and help-gated, but Community Compose has no deterministic compatible "
+            "audit-report pair; the scan lane emits the provider-fixture disposition."
+        )
+    if name == "export_delta_scan_report":
+        return (
+            "Typed and help-gated, but Community Compose provisions one deterministic scan "
+            "report rather than a compatible delta pair; the scan lane emits that disposition."
         )
     if name in UNIMPLEMENTED_DISCOVERY_COMMANDS:
         return (

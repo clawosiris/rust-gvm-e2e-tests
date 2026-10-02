@@ -25,7 +25,7 @@ From the repository root, build the pinned runner and use the lane wrapper:
 
 ```bash
 docker build -f docker/Dockerfile.runner \
-  --build-arg RUST_GVM_SHA=b85443167a9fd642b2d91f6f347db048de5aba9c \
+  --build-arg RUST_GVM_SHA=8ea68a82636974256b2c198ea24a5aa26262b659 \
   -t rust-gvm-e2e-runner:ci .
 bash docker/scripts/run-deployment-lane.sh devel-fast
 ```
@@ -65,6 +65,10 @@ docker/scripts/reset.sh
   Default `30`.
 - `E2E_READINESS_MAX_RECONNECTS`: Bounded connection-loss retries. Default
   `12`.
+- `E2E_REPORT_EXPORT_TIMEOUT_SECS`: Bounded asynchronous report-export state
+  reconciliation budget. Default `300`.
+- `E2E_REPORT_EXPORT_POLL_INTERVAL_SECS`: Report-export state poll interval.
+  Default `1`.
 - `GVM_VERSION`: GVM runtime image tag. Default `stable`.
 - `E2E_RUN_SCAN`: Set to `1` to run the slower scan lifecycle test in addition to the smoke checks.
 

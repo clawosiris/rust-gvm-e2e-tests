@@ -2,6 +2,22 @@
   "schema_version": 1,
   "deployment_id": "community-stable",
   "fixtures": {
+    "audit_report": {
+      "state": "unavailable",
+      "detail": "Community Compose does not provision a deterministic audit task/report"
+    },
+    "audit_report_pair": {
+      "state": "unavailable",
+      "detail": "Community Compose does not provision two compatible audit reports"
+    },
+    "delta_scan_report_pair": {
+      "state": "unavailable",
+      "detail": "the scan lane creates one deterministic scan report, not a compatible delta pair"
+    },
+    "report_export_cancellation_window": {
+      "state": "unavailable",
+      "detail": "worker scheduling does not guarantee a pending/running window; the lane uses exact live-state evidence"
+    },
     "network_scan_target": {
       "state": "ready",
       "detail": "repository-owned scan-fixture service"
