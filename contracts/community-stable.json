@@ -14,6 +14,10 @@
   },
   "fixtures": {
     "network_scan_target": "required",
+    "audit_report": "optional",
+    "audit_report_pair": "optional",
+    "delta_scan_report_pair": "optional",
+    "report_export_cancellation_window": "optional",
     "agent_endpoint": "optional",
     "oci_registry": "optional",
     "credential_store": "optional",

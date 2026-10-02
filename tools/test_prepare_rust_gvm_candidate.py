@@ -9,7 +9,7 @@ from pathlib import Path
 from prepare_rust_gvm_candidate import rewrite_manifest, verify_lock
 
 
-PIN = "b85443167a9fd642b2d91f6f347db048de5aba9c"
+PIN = "8ea68a82636974256b2c198ea24a5aa26262b659"
 CANDIDATE = "bc7f3474efd2f1f05904b73ea7fe223e102ebade"
 CANONICAL = "https://github.com/greenbone-hive/rust-gvm.git"
 

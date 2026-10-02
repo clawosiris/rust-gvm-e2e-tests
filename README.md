@@ -27,7 +27,7 @@ historical qualification evidence, not a runtime selection gate. Complete
 observed snapshots are emitted per lane for drift review.
 
 Regenerate or check against the supported rust-gvm checkout at
-`b85443167a9fd642b2d91f6f347db048de5aba9c`:
+`8ea68a82636974256b2c198ea24a5aa26262b659`:
 
 ```bash
 python3 tools/coverage_manifest.py --rust-gvm-source ../rust-gvm
@@ -86,7 +86,7 @@ Build the runner, start the warm stack, and execute a lane:
 
 ```bash
 docker build -f docker/Dockerfile.runner \
-  --build-arg RUST_GVM_SHA=b85443167a9fd642b2d91f6f347db048de5aba9c \
+  --build-arg RUST_GVM_SHA=8ea68a82636974256b2c198ea24a5aa26262b659 \
   -t rust-gvm-e2e-runner:ci .
 bash docker/scripts/run-deployment-lane.sh devel-fast
 ```
@@ -104,10 +104,13 @@ reusable workflow.
 
 Every created entity begins with `rust-gvm-e2e-<run-id>-`. Preflight cleanup
 only selects that namespace (plus the historical fixed names from issue #7).
-Deletion is dependency ordered: tickets/reports/tasks before targets/configs/scanners,
-then access/report resources and supporting entities. Final cleanup
-authenticates independently, accepts only explicit success/already-absent
-statuses, and also runs during unwind.
+Deletion is dependency ordered: report exports before tickets/reports/tasks,
+then targets/configs/scanners, access/report resources, and supporting
+entities. Asynchronous report exports are reconciled by exact ID and linked
+report before their parents: active work is canceled and polled, completed
+work is downloaded once and proved consumed, and ambiguous mutations are read
+back without blind replay. Final cleanup authenticates independently, accepts
+only explicit success/already-absent statuses, and also runs during unwind.
 
 ## Dynamic capability boundary
 

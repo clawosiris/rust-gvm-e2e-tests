@@ -847,12 +847,15 @@ mod tests {
     }
 
     #[test]
-    fn live_help_reverse_parity_fixture_covers_modeled_allowlisted_and_unknown() {
+    fn live_help_reverse_parity_fixture_covers_modeled_and_unknown_after_allowlist_removal() {
         let fixture: LiveHelpFixture =
             serde_json::from_str(include_str!("../../../fixtures/live-help-parity.json"))
                 .expect("live-help parity fixture must parse");
         assert_eq!(fixture.schema_version, 1);
-        let modeled = BTreeSet::from(["get_version".to_string()]);
+        let modeled = BTreeSet::from([
+            "cancel_report_export".to_string(),
+            "get_version".to_string(),
+        ]);
         for case in fixture.cases {
             let advertised = case.advertised_commands.into_iter().collect();
             let parity =

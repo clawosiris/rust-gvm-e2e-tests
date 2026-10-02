@@ -65,6 +65,7 @@ use gvm_gmp::enums::{
     ScannerType,
 };
 use gvm_gmp::responses::permission::GetPermissionsResponse;
+use gvm_gmp::responses::report::ReportExportInfo;
 use gvm_gmp::responses::report_config::GetReportConfigsResponse;
 use gvm_gmp::responses::report_format::{GetReportFormatsResponse, ReportFormat};
 use gvm_gmp::responses::result::{GetResultsResponse, ScanResult};
@@ -226,6 +227,8 @@ async fn async_main() -> Result<(), AppError> {
 #[derive(Clone, Debug)]
 struct EnvConfig {
     task_progress_timeout_secs: u64,
+    report_export_timeout_secs: u64,
+    report_export_poll_interval_secs: u64,
     readiness_timeout_secs: u64,
     readiness_poll_interval_secs: u64,
     readiness_max_reconnects: usize,
@@ -243,6 +246,12 @@ impl EnvConfig {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(90);
+        let report_export_timeout_secs = env_u64("E2E_REPORT_EXPORT_TIMEOUT_SECS", 300);
+        let report_export_poll_interval_secs = env_u64("E2E_REPORT_EXPORT_POLL_INTERVAL_SECS", 1);
+        ensure(
+            report_export_timeout_secs > 0 && report_export_poll_interval_secs > 0,
+            "report-export timeout and poll interval must both be positive",
+        )?;
         let run_id = env::var("E2E_RUN_ID")
             .ok()
             .filter(|value| !value.trim().is_empty())
@@ -260,6 +269,8 @@ impl EnvConfig {
                 "1" | "true" | "TRUE" | "yes" | "YES"
             ),
             task_progress_timeout_secs,
+            report_export_timeout_secs,
+            report_export_poll_interval_secs,
             readiness_timeout_secs: env_u64("E2E_READINESS_TIMEOUT_SECS", 21_000),
             readiness_poll_interval_secs: env_u64("E2E_READINESS_POLL_INTERVAL_SECS", 30),
             readiness_max_reconnects: env_usize("E2E_READINESS_MAX_RECONNECTS", 12),
@@ -397,6 +408,8 @@ impl Mode {
 #[derive(Debug)]
 struct CleanupTracker {
     config: EnvConfig,
+    report_exports: Vec<TrackedReportExport>,
+    report_export_reconciliation_required: bool,
     target_ids: Vec<String>,
     report_ids: Vec<String>,
     task_ids: Vec<String>,
@@ -423,6 +436,13 @@ struct CleanupTracker {
     armed: bool,
 }
 
+#[derive(Clone, Debug)]
+struct TrackedReportExport {
+    id: String,
+    cancel_attempted: bool,
+    download_attempted: bool,
+}
+
 #[derive(Debug, Default)]
 struct ScanMutationGuard {
     started_task_ids: BTreeSet<String>,
@@ -445,6 +465,8 @@ impl CleanupTracker {
     fn new(config: EnvConfig) -> Self {
         Self {
             config,
+            report_exports: Vec::new(),
+            report_export_reconciliation_required: false,
             target_ids: Vec::new(),
             report_ids: Vec::new(),
             task_ids: Vec::new(),
@@ -473,7 +495,9 @@ impl CleanupTracker {
     }
 
     fn is_empty(&self) -> bool {
-        self.report_ids.is_empty()
+        self.report_exports.is_empty()
+            && !self.report_export_reconciliation_required
+            && self.report_ids.is_empty()
             && self.task_ids.is_empty()
             && self.target_ids.is_empty()
             && self.config_ids.is_empty()
@@ -510,6 +534,65 @@ impl CleanupTracker {
         if id.as_str() != "0" && !self.report_ids.iter().any(|value| value == id.as_str()) {
             self.report_ids.push(id.to_string());
         }
+    }
+
+    fn arm_report_export_reconciliation(&mut self) {
+        self.report_export_reconciliation_required = true;
+    }
+
+    fn track_report_export(&mut self, id: &EntityId) {
+        if !self
+            .report_exports
+            .iter()
+            .any(|tracked| tracked.id == id.as_str())
+        {
+            self.report_exports.push(TrackedReportExport {
+                id: id.to_string(),
+                cancel_attempted: false,
+                download_attempted: false,
+            });
+        }
+    }
+
+    fn mark_report_export_cancel_attempted(&mut self, id: &EntityId) -> Result<(), AppError> {
+        let tracked = self
+            .report_exports
+            .iter_mut()
+            .find(|tracked| tracked.id == id.as_str())
+            .ok_or_else(|| {
+                AppError::Assertion(format!(
+                    "cannot mark cancel attempt for untracked report export {id}"
+                ))
+            })?;
+        ensure(
+            !tracked.cancel_attempted,
+            &format!("duplicate cancel_report_export blocked locally for {id}"),
+        )?;
+        tracked.cancel_attempted = true;
+        Ok(())
+    }
+
+    fn mark_report_export_download_attempted(&mut self, id: &EntityId) -> Result<(), AppError> {
+        let tracked = self
+            .report_exports
+            .iter_mut()
+            .find(|tracked| tracked.id == id.as_str())
+            .ok_or_else(|| {
+                AppError::Assertion(format!(
+                    "cannot mark download attempt for untracked report export {id}"
+                ))
+            })?;
+        ensure(
+            !tracked.download_attempted,
+            &format!("duplicate download_report_export blocked locally for {id}"),
+        )?;
+        tracked.download_attempted = true;
+        Ok(())
+    }
+
+    fn forget_report_export(&mut self, id: &EntityId) {
+        self.report_exports
+            .retain(|tracked| tracked.id != id.as_str());
     }
 
     fn track_config(&mut self, id: &EntityId) {
@@ -606,6 +689,11 @@ impl CleanupTracker {
                 &self.config.password,
             ))
             .await?;
+
+        if self.report_export_reconciliation_required || !self.report_exports.is_empty() {
+            client.discover_commands().await?;
+            reconcile_tracked_report_exports(&mut client, self).await?;
+        }
 
         while let Some(ticket_id) = self.ticket_ids.last().cloned() {
             let entity_id = parse_entity_id(&ticket_id)?;
@@ -837,6 +925,8 @@ impl Drop for CleanupTracker {
         }
 
         let config = self.config.clone();
+        let report_exports = self.report_exports.clone();
+        let report_export_reconciliation_required = self.report_export_reconciliation_required;
         let report_ids = self.report_ids.clone();
         let task_ids = self.task_ids.clone();
         let target_ids = self.target_ids.clone();
@@ -864,6 +954,8 @@ impl Drop for CleanupTracker {
         let cleanup = async move {
             let mut tracker = CleanupTracker {
                 config,
+                report_exports,
+                report_export_reconciliation_required,
                 report_ids,
                 task_ids,
                 target_ids,
@@ -984,12 +1076,63 @@ async fn cleanup_previous_runs(config: &EnvConfig) -> Result<(), AppError> {
         }};
     }
 
-    let tasks = client.execute(GetTasksRequest::default()).await?;
+    client.discover_commands().await?;
+    let tasks = client
+        .execute(GetTasksRequest {
+            details: Some(true),
+            ..Default::default()
+        })
+        .await?;
     assert_typed_cleanup_status(tasks.status, &[200], "preflight get_tasks", None)?;
-    for task in tasks.items {
-        if !is_e2e_owned_value(&task.meta.name) {
-            continue;
+    let owned_tasks = tasks
+        .items
+        .into_iter()
+        .filter(|task| is_e2e_owned_value(&task.meta.name))
+        .collect::<Vec<_>>();
+    let stale_report_ids = owned_tasks
+        .iter()
+        .flat_map(|task| {
+            [
+                task.current_report
+                    .as_ref()
+                    .map(|report| report.id.to_string()),
+                task.last_report
+                    .as_ref()
+                    .map(|report| report.id.to_string()),
+            ]
+            .into_iter()
+            .flatten()
+        })
+        .collect::<BTreeSet<_>>();
+    if !stale_report_ids.is_empty()
+        && matches!(
+            client.command_support("export_scan_report"),
+            gvm_client::CommandSupport::Supported
+        )
+    {
+        for command in [
+            "get_report_exports",
+            "cancel_report_export",
+            "download_report_export",
+        ] {
+            ensure(
+                matches!(
+                    client.command_support(command),
+                    gvm_client::CommandSupport::Supported
+                ),
+                &format!(
+                    "preflight found E2E-owned scan reports and export_scan_report is advertised, but cleanup command {command} is unavailable"
+                ),
+            )?;
         }
+        let mut stale_tracker = CleanupTracker::new(config.clone());
+        stale_tracker.armed = false;
+        stale_tracker.report_ids = stale_report_ids.into_iter().collect();
+        stale_tracker.arm_report_export_reconciliation();
+        reconcile_tracked_report_exports(&mut client, &mut stale_tracker).await?;
+    }
+
+    for task in owned_tasks {
         let task_id = task.meta.id;
         let stop = client
             .execute(StopTaskRequest::new(task_id.clone()))
@@ -1321,7 +1464,9 @@ fn runtime_helper_path(name: &str) -> bool {
             | "delete_scanner"
             | "delete_target"
             | "describe_auth"
+            | "download_report_export"
             | "empty_trashcan"
+            | "export_scan_report"
             | "get_aggregates"
             | "get_alert"
             | "get_alerts"
@@ -1364,6 +1509,7 @@ fn runtime_helper_path(name: &str) -> bool {
             | "get_report_cves"
             | "get_report_errors"
             | "get_report_export"
+            | "get_report_exports"
             | "get_report_formats"
             | "get_report_hosts"
             | "get_report_operating_systems"
@@ -4365,6 +4511,668 @@ fn select_usable_report_format(
         })
 }
 
+fn report_export_status_is_active(status: &str) -> bool {
+    matches!(status, "pending" | "running" | "cancel_requested")
+}
+
+fn report_export_status_is_terminal(status: &str) -> bool {
+    matches!(status, "done" | "error" | "canceled" | "expired")
+}
+
+fn validate_report_export_state(
+    export: &ReportExportInfo,
+    export_id: &EntityId,
+    report_id: Option<&EntityId>,
+    report_format_id: Option<&EntityId>,
+) -> Result<(), AppError> {
+    ensure(
+        export.meta.id == *export_id,
+        &format!(
+            "get_report_exports returned {} for requested export {export_id}",
+            export.meta.id
+        ),
+    )?;
+    ensure(
+        report_export_status_is_active(&export.status)
+            || report_export_status_is_terminal(&export.status),
+        &format!(
+            "report export {export_id} returned unknown state {:?}",
+            export.status
+        ),
+    )?;
+    if let Some(report_id) = report_id {
+        ensure(
+            export.report_id.as_ref() == Some(report_id),
+            &format!("report export {export_id} did not preserve report identity {report_id}"),
+        )?;
+        ensure(
+            export.export_type == "scan",
+            &format!(
+                "scan report export {export_id} returned type {:?}",
+                export.export_type
+            ),
+        )?;
+    }
+    if let Some(report_format_id) = report_format_id {
+        ensure(
+            export.report_format_id.as_ref() == Some(report_format_id),
+            &format!("report export {export_id} did not preserve report format {report_format_id}"),
+        )?;
+    }
+    Ok(())
+}
+
+async fn get_report_export_once(
+    client: &mut GmpClient<UnixSocketConnection>,
+    export_id: &EntityId,
+) -> Result<Option<ReportExportInfo>, AppError> {
+    match client
+        .get_report_exports(GetReportExportsRequest::new(export_id.clone()))
+        .await
+    {
+        Ok(response) => {
+            assert_typed_status(
+                response.status,
+                &response.status_text,
+                200,
+                "get_report_exports by id",
+            )?;
+            ensure(
+                response.items.len() <= 1,
+                &format!(
+                    "get_report_exports returned {} rows for exact ID {export_id}",
+                    response.items.len()
+                ),
+            )?;
+            Ok(response.items.into_iter().next())
+        }
+        Err(GvmError::Server { status: 404, .. }) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn poll_report_export_terminal(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    export_id: &EntityId,
+    report_id: Option<&EntityId>,
+    report_format_id: Option<&EntityId>,
+    phase: &str,
+) -> Result<ReportExportInfo, AppError> {
+    let timeout = Duration::from_secs(config.report_export_timeout_secs);
+    let started = Instant::now();
+    let mut observed = Vec::new();
+    loop {
+        let export = get_report_export_once(client, export_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::Assertion(format!(
+                    "report export {export_id} disappeared during {phase} before download"
+                ))
+            })?;
+        validate_report_export_state(&export, export_id, report_id, report_format_id)?;
+        let state = format!("{}:{}", export.status, export.progress);
+        if observed.last() != Some(&state) {
+            log_line(&format!(
+                "report export {export_id} {phase} state={:?} progress={:?}",
+                export.status, export.progress
+            ));
+            observed.push(state);
+        }
+        if report_export_status_is_terminal(&export.status) {
+            log_pass(
+                &format!("report export {phase}"),
+                &format!("{export_id} observed states [{}]", observed.join(" -> ")),
+            );
+            return Ok(export);
+        }
+        ensure(
+            started.elapsed() < timeout,
+            &format!(
+                "report export {export_id} did not reach a terminal state within {} seconds; observed [{}]",
+                timeout.as_secs(),
+                observed.join(" -> ")
+            ),
+        )?;
+        sleep(Duration::from_secs(config.report_export_poll_interval_secs)).await;
+    }
+}
+
+async fn prove_report_export_consumed(
+    client: &mut GmpClient<UnixSocketConnection>,
+    export_id: &EntityId,
+) -> Result<(), AppError> {
+    match client
+        .get_report_exports(GetReportExportsRequest::new(export_id.clone()))
+        .await
+    {
+        Err(GvmError::Server { status: 404, .. }) => {}
+        Ok(response) => {
+            return Err(AppError::Assertion(format!(
+                "downloaded report export {export_id} remained queryable with status {} and {} row(s)",
+                response.status,
+                response.items.len()
+            )));
+        }
+        Err(error) => return Err(error.into()),
+    }
+    log_pass(
+        "report export consumption",
+        &format!("get_report_exports returned exact 404 absence for {export_id}"),
+    );
+    Ok(())
+}
+
+async fn download_completed_report_export(
+    client: &mut GmpClient<UnixSocketConnection>,
+    tracker: &mut CleanupTracker,
+    export_id: &EntityId,
+    report_id: &EntityId,
+    report_format_id: &EntityId,
+    expected_content_type: Option<&str>,
+    expected_extension: Option<&str>,
+) -> Result<usize, AppError> {
+    tracker.mark_report_export_download_attempted(export_id)?;
+    let response = client
+        .download_report_export(DownloadReportExportRequest::new(export_id.clone()))
+        .await?;
+    assert_typed_status(
+        response.status,
+        &response.status_text,
+        200,
+        "download_report_export",
+    )?;
+    let export = response.report_export;
+    ensure(
+        export.id == *export_id,
+        "download changed report-export identity",
+    )?;
+    ensure(
+        export.export_type == "scan" && export.status == "done" && export.progress == "completed",
+        &format!(
+            "downloaded export {export_id} metadata was type={:?} status={:?} progress={:?}",
+            export.export_type, export.status, export.progress
+        ),
+    )?;
+    ensure(
+        export.report_id.as_ref() == Some(report_id)
+            && export.report_format_id.as_ref() == Some(report_format_id)
+            && export.delta_report_id.is_none()
+            && export.report_config_id.is_none(),
+        &format!("downloaded export {export_id} relationship metadata did not match request"),
+    )?;
+    ensure(
+        !export.bytes.is_empty()
+            && export.file_size > 0
+            && export.file_size == export.bytes.len() as u64,
+        &format!(
+            "downloaded export {export_id} contained {} bytes with declared file_size {}",
+            export.bytes.len(),
+            export.file_size
+        ),
+    )?;
+    if let Some(expected) = expected_content_type {
+        ensure(
+            export.content_type.as_deref() == Some(expected),
+            &format!(
+                "downloaded export {export_id} content type {:?} did not match selected format {expected:?}",
+                export.content_type
+            ),
+        )?;
+    }
+    if let Some(expected) = expected_extension {
+        ensure(
+            export.extension.as_deref() == Some(expected),
+            &format!(
+                "downloaded export {export_id} extension {:?} did not match selected format {expected:?}",
+                export.extension
+            ),
+        )?;
+    }
+    let byte_count = export.bytes.len();
+    prove_report_export_consumed(client, export_id).await?;
+    tracker.forget_report_export(export_id);
+    Ok(byte_count)
+}
+
+async fn reconcile_tracked_report_exports(
+    client: &mut GmpClient<UnixSocketConnection>,
+    tracker: &mut CleanupTracker,
+) -> Result<(), AppError> {
+    let report_ids = tracker.report_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let listed = client
+        .get_report_exports(GetReportExportsRequest::default())
+        .await?;
+    assert_typed_status(
+        listed.status,
+        &listed.status_text,
+        200,
+        "cleanup get_report_exports",
+    )?;
+    for export in listed.items {
+        if export
+            .report_id
+            .as_ref()
+            .is_some_and(|id| report_ids.contains(id.as_str()))
+        {
+            tracker.track_report_export(&export.meta.id);
+        }
+    }
+
+    let tracked = tracker.report_exports.clone();
+    for tracked_export in tracked {
+        let export_id = parse_entity_id(&tracked_export.id)?;
+        let Some(mut export) = get_report_export_once(client, &export_id).await? else {
+            tracker.forget_report_export(&export_id);
+            continue;
+        };
+        validate_report_export_state(&export, &export_id, None, None)?;
+        if matches!(export.status.as_str(), "pending" | "running") {
+            if tracked_export.cancel_attempted {
+                log_line(&format!(
+                    "report export {export_id} remains active after an ambiguous prior cancellation; polling without replay"
+                ));
+            } else {
+                tracker.mark_report_export_cancel_attempted(&export_id)?;
+                match client
+                    .cancel_report_export(CancelReportExportRequest::new(export_id.clone()))
+                    .await
+                {
+                    Ok(response) => assert_typed_status(
+                        response.status,
+                        &response.status_text,
+                        200,
+                        "cleanup cancel_report_export",
+                    )?,
+                    Err(error) => log_line(&format!(
+                        "ambiguous cleanup cancellation for report export {export_id}: {error}; reconciling by read without replay"
+                    )),
+                }
+            }
+            export = poll_report_export_terminal(
+                client,
+                &tracker.config,
+                &export_id,
+                None,
+                None,
+                "cleanup cancellation",
+            )
+            .await?;
+        } else if export.status == "cancel_requested" {
+            export = poll_report_export_terminal(
+                client,
+                &tracker.config,
+                &export_id,
+                None,
+                None,
+                "cleanup cancellation",
+            )
+            .await?;
+        }
+
+        if export.status == "done" {
+            if tracked_export.download_attempted {
+                log_line(&format!(
+                    "report export {export_id} is done after an ambiguous prior download; not replaying the consuming mutation"
+                ));
+            } else {
+                tracker.mark_report_export_download_attempted(&export_id)?;
+                match client
+                    .download_report_export(DownloadReportExportRequest::new(export_id.clone()))
+                    .await
+                {
+                    Ok(response) => {
+                        assert_typed_status(
+                            response.status,
+                            &response.status_text,
+                            200,
+                            "cleanup download_report_export",
+                        )?;
+                        ensure(
+                            !response.report_export.bytes.is_empty(),
+                            &format!("cleanup download for report export {export_id} was empty"),
+                        )?;
+                        prove_report_export_consumed(client, &export_id).await?;
+                    }
+                    Err(error) => {
+                        let reconciled = get_report_export_once(client, &export_id).await?;
+                        log_line(&format!(
+                            "ambiguous cleanup download for report export {export_id}: {error}; post-read state={}",
+                            reconciled
+                                .as_ref()
+                                .map_or("absent".to_string(), |value| value.status.clone())
+                        ));
+                    }
+                }
+            }
+        }
+        ensure(
+            report_export_status_is_terminal(&export.status),
+            &format!(
+                "cleanup left report export {export_id} active in {}",
+                export.status
+            ),
+        )?;
+        tracker.forget_report_export(&export_id);
+    }
+
+    let final_exports = client
+        .get_report_exports(GetReportExportsRequest::default())
+        .await?;
+    assert_typed_status(
+        final_exports.status,
+        &final_exports.status_text,
+        200,
+        "final cleanup get_report_exports",
+    )?;
+    let active = final_exports
+        .items
+        .iter()
+        .filter(|export| {
+            export
+                .report_id
+                .as_ref()
+                .is_some_and(|id| report_ids.contains(id.as_str()))
+                && report_export_status_is_active(&export.status)
+        })
+        .map(|export| format!("{}:{}", export.meta.id, export.status))
+        .collect::<Vec<_>>();
+    ensure(
+        active.is_empty(),
+        &format!(
+            "E2E-owned reports retained active report exports after cleanup: {}",
+            active.join(", ")
+        ),
+    )?;
+    tracker.report_export_reconciliation_required = false;
+    log_pass(
+        "report export cleanup",
+        "all tracked and report-linked exports reconciled; no active E2E-owned export remains",
+    );
+    Ok(())
+}
+
+fn report_export_fixture_disposition(
+    advertised_commands: &BTreeSet<String>,
+    descriptor: &FixtureDescriptor,
+    command: &str,
+    fixture: &str,
+) -> Result<(), AppError> {
+    if !advertised_commands.contains(command) {
+        runtime::observe(
+            &format!("report export variant {command}"),
+            Outcome::ConditionalUnavailable,
+            &format!("authenticated help did not advertise {command}; no mutation was sent"),
+        );
+        return Ok(());
+    }
+    let evidence = descriptor.fixtures.get(fixture).ok_or_else(|| {
+        AppError::Assertion(format!(
+            "fixture descriptor omitted report-export fixture {fixture} for {command}"
+        ))
+    })?;
+    ensure(
+        evidence.state == ProbeState::Unavailable,
+        &format!(
+            "{command} is advertised and fixture {fixture} is {:?}; this lane requires an implemented lifecycle when the fixture is not explicitly unavailable",
+            evidence.state
+        ),
+    )?;
+    runtime::observe(
+        &format!("report export variant {command}"),
+        Outcome::ConditionalUnavailable,
+        &format!(
+            "authenticated help advertised {command}; provider fixture {fixture}=unavailable: {}; no mutation was sent",
+            evidence.detail
+        ),
+    );
+    Ok(())
+}
+
+#[derive(Debug)]
+struct ScanReportExportFixture {
+    advertised_commands: BTreeSet<String>,
+    report_id: EntityId,
+    report_format_id: EntityId,
+    content_type: Option<String>,
+    extension: Option<String>,
+}
+
+async fn run_async_report_export_lifecycle(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    tracker: &mut CleanupTracker,
+    fixture: &ScanReportExportFixture,
+) -> Result<(), AppError> {
+    let advertised_commands = &fixture.advertised_commands;
+    let report_id = &fixture.report_id;
+    let report_format_id = &fixture.report_format_id;
+    let expected_content_type = fixture.content_type.as_deref();
+    let expected_extension = fixture.extension.as_deref();
+    let required = [
+        "export_scan_report",
+        "get_report_exports",
+        "download_report_export",
+    ];
+    let advertised = required
+        .iter()
+        .filter(|command| advertised_commands.contains(**command))
+        .copied()
+        .collect::<Vec<_>>();
+    if advertised.is_empty() {
+        runtime::observe(
+            "scan report asynchronous export lifecycle",
+            Outcome::ConditionalUnavailable,
+            "authenticated help advertised none of export_scan_report, get_report_exports, or download_report_export; no mutation was sent",
+        );
+        return Ok(());
+    }
+    ensure(
+        advertised.len() == required.len(),
+        &format!(
+            "cleanup-safe asynchronous export requires all commands {:?}; help advertised only {:?}; no mutation was sent",
+            required, advertised
+        ),
+    )?;
+    for command in required {
+        ensure(
+            matches!(
+                client.command_support(command),
+                gvm_client::CommandSupport::Supported
+            ),
+            &format!("typed client did not classify advertised {command} as supported"),
+        )?;
+    }
+
+    tracker.arm_report_export_reconciliation();
+    let mut request = ExportScanReportRequest::new(report_id.clone());
+    request.report_format_id = Some(report_format_id.clone());
+    let created = client.export_scan_report(request).await?;
+    tracker.track_report_export(&created.id);
+    ensure(
+        matches!(created.status, 200 | 201),
+        &format!(
+            "export_scan_report returned unexpected status {} ({})",
+            created.status, created.status_text
+        ),
+    )?;
+    let export_id = created.id;
+    let terminal = poll_report_export_terminal(
+        client,
+        config,
+        &export_id,
+        Some(report_id),
+        Some(report_format_id),
+        "completion",
+    )
+    .await?;
+    ensure(
+        terminal.status == "done" && terminal.progress == "completed",
+        &format!(
+            "primary report export {export_id} terminated as {}:{} (error={:?})",
+            terminal.status, terminal.progress, terminal.error_message
+        ),
+    )?;
+    let bytes = download_completed_report_export(
+        client,
+        tracker,
+        &export_id,
+        report_id,
+        report_format_id,
+        expected_content_type,
+        expected_extension,
+    )
+    .await?;
+    log_pass(
+        "scan report asynchronous export lifecycle",
+        &format!(
+            "created {export_id}, observed exact terminal done/completed, downloaded {bytes} bytes, and proved server-side consumption"
+        ),
+    );
+    record_helper_executions(
+        &[
+            "export_scan_report",
+            "get_report_exports",
+            "download_report_export",
+        ],
+        "help-gated asynchronous scan export completed, downloaded, and reconciled",
+    )?;
+
+    if !advertised_commands.contains("cancel_report_export") {
+        runtime::observe(
+            "scan report export cancellation",
+            Outcome::ConditionalUnavailable,
+            "authenticated help did not advertise cancel_report_export; no second export was created",
+        );
+        reconcile_tracked_report_exports(client, tracker).await?;
+        return Ok(());
+    }
+    ensure(
+        matches!(
+            client.command_support("cancel_report_export"),
+            gvm_client::CommandSupport::Supported
+        ),
+        "typed client did not classify advertised cancel_report_export as supported",
+    )?;
+
+    let mut cancel_request = ExportScanReportRequest::new(report_id.clone());
+    cancel_request.report_format_id = Some(report_format_id.clone());
+    cancel_request.lean = Some(true);
+    let cancel_candidate = client.export_scan_report(cancel_request).await?;
+    tracker.track_report_export(&cancel_candidate.id);
+    ensure(
+        matches!(cancel_candidate.status, 200 | 201),
+        "cancellation candidate export did not return 200 or 201",
+    )?;
+    let cancel_id = cancel_candidate.id;
+    let initial = get_report_export_once(client, &cancel_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::Assertion(format!(
+                "cancellation candidate report export {cancel_id} disappeared before observation"
+            ))
+        })?;
+    validate_report_export_state(
+        &initial,
+        &cancel_id,
+        Some(report_id),
+        Some(report_format_id),
+    )?;
+    match initial.status.as_str() {
+        "pending" | "running" => {
+            tracker.mark_report_export_cancel_attempted(&cancel_id)?;
+            let canceled = client
+                .cancel_report_export(CancelReportExportRequest::new(cancel_id.clone()))
+                .await?;
+            assert_typed_status(
+                canceled.status,
+                &canceled.status_text,
+                200,
+                "cancel_report_export",
+            )?;
+            let terminal = poll_report_export_terminal(
+                client,
+                config,
+                &cancel_id,
+                Some(report_id),
+                Some(report_format_id),
+                "cancellation",
+            )
+            .await?;
+            ensure(
+                terminal.status == "canceled",
+                &format!(
+                    "cancel_report_export for {cancel_id} settled as {}:{} instead of canceled",
+                    terminal.status, terminal.progress
+                ),
+            )?;
+            tracker.forget_report_export(&cancel_id);
+            runtime::observe(
+                "scan report export cancellation",
+                Outcome::Pass,
+                &format!(
+                    "separate export {cancel_id} was observed {}, cancel_report_export returned 200, and get_report_exports reconciled canceled",
+                    initial.status
+                ),
+            );
+        }
+        "done" => {
+            let bytes = download_completed_report_export(
+                client,
+                tracker,
+                &cancel_id,
+                report_id,
+                report_format_id,
+                expected_content_type,
+                expected_extension,
+            )
+            .await?;
+            runtime::observe(
+                "scan report export cancellation",
+                Outcome::ConditionalUnavailable,
+                &format!(
+                    "separate export {cancel_id} was already done/completed at the first get_report_exports observation; downloaded {bytes} bytes and proved consumption; no deterministic pending/running cancellation window existed"
+                ),
+            );
+        }
+        status if report_export_status_is_terminal(status) => {
+            tracker.forget_report_export(&cancel_id);
+            runtime::observe(
+                "scan report export cancellation",
+                Outcome::ConditionalUnavailable,
+                &format!(
+                    "separate export {cancel_id} was already terminal at first observation: status={:?}, progress={:?}, error={:?}; no cancellation mutation was sent",
+                    initial.status, initial.progress, initial.error_message
+                ),
+            );
+        }
+        "cancel_requested" => {
+            let terminal = poll_report_export_terminal(
+                client,
+                config,
+                &cancel_id,
+                Some(report_id),
+                Some(report_format_id),
+                "pre-existing cancellation",
+            )
+            .await?;
+            tracker.forget_report_export(&cancel_id);
+            runtime::observe(
+                "scan report export cancellation",
+                Outcome::ConditionalUnavailable,
+                &format!(
+                    "separate export {cancel_id} was already cancel_requested before this lane sent cancellation and reconciled as {}; no mutation was replayed",
+                    terminal.status
+                ),
+            );
+        }
+        _ => unreachable!("state validation rejects unknown report-export status"),
+    }
+
+    reconcile_tracked_report_exports(client, tracker).await?;
+    Ok(())
+}
+
 fn assert_gmp_22_8_rejection<T>(
     result: Result<T, GvmError>,
     command: &str,
@@ -4907,22 +5715,36 @@ async fn run_scan_suite(
         ),
     );
 
-    ensure(
-        advertised_commands.contains("export_scan_report"),
-        "live XML help did not advertise export_scan_report",
+    run_async_report_export_lifecycle(
+        client,
+        config,
+        tracker,
+        &ScanReportExportFixture {
+            advertised_commands: advertised_commands.clone(),
+            report_id: report_id.clone(),
+            report_format_id: selected_format_id.clone(),
+            content_type: selected_content_type.clone(),
+            extension: selected_extension.clone(),
+        },
+    )
+    .await?;
+
+    let fixture_descriptor: FixtureDescriptor = read_json(
+        "E2E_FIXTURE_DESCRIPTOR_PATH",
+        include_str!("../../../fixtures/community-provider.json"),
     )?;
-    ensure(
-        matches!(
-            client.command_support("export_scan_report"),
-            gvm_client::CommandSupport::Supported
-        ),
-        "typed client did not classify advertised export_scan_report as supported",
-    )?;
-    runtime::observe(
-        "scan report asynchronous export",
-        Outcome::NotSelected,
-        "advertised typed export_scan_report was not invoked because the pinned API exposes creation/reuse but no typed cancel/delete/reconciliation lifecycle; an export ID could not be cleanup-owned safely",
-    );
+    for (command, fixture) in [
+        ("export_audit_report", "audit_report"),
+        ("export_delta_audit_report", "audit_report_pair"),
+        ("export_delta_scan_report", "delta_scan_report_pair"),
+    ] {
+        report_export_fixture_disposition(
+            &advertised_commands,
+            &fixture_descriptor,
+            command,
+            fixture,
+        )?;
+    }
 
     ensure(
         advertised_commands.contains("get_reports"),
@@ -4931,7 +5753,7 @@ async fn run_scan_suite(
     let synchronous_export = client
         .get_report_export(GetReportExportRequest::new(
             report_id.clone(),
-            selected_format_id,
+            selected_format_id.clone(),
         ))
         .await;
     if negotiated_version >= GmpVersion(22, 8) {
@@ -7286,6 +8108,8 @@ mod tests {
     fn socket_test_config(path: &Path) -> EnvConfig {
         EnvConfig {
             task_progress_timeout_secs: 3,
+            report_export_timeout_secs: 3,
+            report_export_poll_interval_secs: 1,
             readiness_timeout_secs: 3,
             readiness_poll_interval_secs: 1,
             readiness_max_reconnects: 2,
@@ -8365,6 +9189,90 @@ mod tests {
             conditional_helper_available("get_report_export", GmpVersion(22, 8))
                 .expect("export helper has conditional coverage")
         );
+    }
+
+    #[test]
+    fn asynchronous_report_export_states_have_exact_active_and_terminal_sets() {
+        for state in ["pending", "running", "cancel_requested"] {
+            assert!(report_export_status_is_active(state), "{state}");
+            assert!(!report_export_status_is_terminal(state), "{state}");
+        }
+        for state in ["done", "error", "canceled", "expired"] {
+            assert!(!report_export_status_is_active(state), "{state}");
+            assert!(report_export_status_is_terminal(state), "{state}");
+        }
+        for state in ["", "complete", "cancelled", "queued"] {
+            assert!(!report_export_status_is_active(state), "{state}");
+            assert!(!report_export_status_is_terminal(state), "{state}");
+        }
+    }
+
+    #[test]
+    fn report_export_tracker_blocks_cancel_and_download_replay() {
+        let mut tracker = CleanupTracker::new(socket_test_config(Path::new(
+            "/tmp/rust-gvm-e2e-report-export-test.sock",
+        )));
+        tracker.armed = false;
+        let export_id = EntityId::new("report-export-id").expect("valid export id");
+
+        tracker.track_report_export(&export_id);
+        tracker.track_report_export(&export_id);
+        assert_eq!(tracker.report_exports.len(), 1);
+        tracker
+            .mark_report_export_cancel_attempted(&export_id)
+            .expect("first cancellation attempt is owned");
+        assert!(tracker
+            .mark_report_export_cancel_attempted(&export_id)
+            .expect_err("cancellation replay must be blocked")
+            .to_string()
+            .contains("duplicate cancel_report_export"));
+        tracker
+            .mark_report_export_download_attempted(&export_id)
+            .expect("first download attempt is owned");
+        assert!(tracker
+            .mark_report_export_download_attempted(&export_id)
+            .expect_err("download replay must be blocked")
+            .to_string()
+            .contains("duplicate download_report_export"));
+    }
+
+    #[test]
+    fn community_report_export_variant_fixtures_are_explicitly_unavailable() {
+        let descriptor: FixtureDescriptor =
+            serde_json::from_str(include_str!("../../../fixtures/community-provider.json"))
+                .expect("fixture descriptor parses");
+        for fixture in [
+            "audit_report",
+            "audit_report_pair",
+            "delta_scan_report_pair",
+            "report_export_cancellation_window",
+        ] {
+            let evidence = descriptor
+                .fixtures
+                .get(fixture)
+                .expect("report-export fixture remains inventory-visible");
+            assert_eq!(evidence.state, ProbeState::Unavailable, "{fixture}");
+            assert!(!evidence.detail.trim().is_empty(), "{fixture}");
+        }
+    }
+
+    #[test]
+    fn only_cleanup_safe_scan_export_helpers_are_deterministic_runtime_paths() {
+        for helper in [
+            "export_scan_report",
+            "get_report_exports",
+            "download_report_export",
+        ] {
+            assert!(runtime_helper_path(helper), "{helper}");
+        }
+        for helper in [
+            "cancel_report_export",
+            "export_audit_report",
+            "export_delta_audit_report",
+            "export_delta_scan_report",
+        ] {
+            assert!(!runtime_helper_path(helper), "{helper}");
+        }
     }
 
     #[test]

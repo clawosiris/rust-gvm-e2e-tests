@@ -19,17 +19,7 @@ SPEC.loader.exec_module(MANIFEST)
 class CoveragePolicyTests(unittest.TestCase):
     def test_live_help_allowlist_is_exact_and_evidence_backed(self):
         entries = MANIFEST.load_live_help_allowlist()
-        self.assertEqual(
-            [entry["name"] for entry in entries],
-            [
-                "cancel_report_export",
-                "download_report_export",
-                "export_audit_report",
-                "export_delta_audit_report",
-                "export_delta_scan_report",
-                "get_report_exports",
-            ],
-        )
+        self.assertEqual(entries, [])
         self.assertTrue(all(entry["rationale"] for entry in entries))
         self.assertTrue(all(entry["evidence_detail"] for entry in entries))
 
@@ -165,20 +155,43 @@ class CoveragePolicyTests(unittest.TestCase):
             )
         )
 
-    def test_async_report_export_is_conditional_until_cleanup_is_typed(self):
-        self.assertIn("export_scan_report", MANIFEST.CONDITIONAL_COMMANDS)
-        self.assertEqual(
-            MANIFEST.command_disposition("export_scan_report"),
-            "conditional-availability",
+    def test_async_report_export_lifecycle_policy_is_explicit(self):
+        lifecycle = {
+            "export_scan_report",
+            "get_report_exports",
+            "download_report_export",
+        }
+        fixture_or_window_gated = {
+            "cancel_report_export",
+            "export_audit_report",
+            "export_delta_audit_report",
+            "export_delta_scan_report",
+        }
+        for command in lifecycle | fixture_or_window_gated:
+            self.assertIn(command, MANIFEST.CONDITIONAL_COMMANDS)
+            self.assertEqual(
+                MANIFEST.command_disposition(command), "conditional-availability"
+            )
+            self.assertEqual(
+                MANIFEST.lane_for("conditional-availability", command), "devel-scan"
+            )
+        self.assertTrue(
+            lifecycle.isdisjoint(MANIFEST.UNIMPLEMENTED_DISCOVERY_COMMANDS)
+        )
+        self.assertTrue(
+            fixture_or_window_gated <= MANIFEST.UNIMPLEMENTED_DISCOVERY_COMMANDS
         )
         self.assertIn(
-            "cleanup-safe export reconciliation",
+            "final reconciliation",
             MANIFEST.rationale_for("export_scan_report", "conditional-availability"),
         )
-        self.assertIn("export_scan_report", MANIFEST.UNIMPLEMENTED_DISCOVERY_COMMANDS)
-        self.assertEqual(
-            MANIFEST.lane_for("conditional-availability", "export_scan_report"),
-            "devel-scan",
+        self.assertIn(
+            "pending or running",
+            MANIFEST.rationale_for("cancel_report_export", "conditional-availability"),
+        )
+        self.assertIn(
+            "no deterministic audit-report",
+            MANIFEST.rationale_for("export_audit_report", "conditional-availability"),
         )
 
     def test_disappeared_facade_is_replaced_when_wire_command_remains(self):
