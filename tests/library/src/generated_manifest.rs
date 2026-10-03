@@ -7,7 +7,7 @@ use gvm_connection::UnixSocketConnection;
 
 use crate::{CoverageEntry, Disposition, LiveHelpAllowlistEntry, SurfaceMigration, SurfaceStatus};
 
-pub const RUST_GVM_SHA: &str = "b85443167a9fd642b2d91f6f347db048de5aba9c";
+pub const RUST_GVM_SHA: &str = "8ea68a82636974256b2c198ea24a5aa26262b659";
 
 pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
@@ -17,6 +17,14 @@ pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
         lane: "devel-fast",
         requires: &[],
         implemented: true,
+    },
+    CoverageEntry {
+        name: "cancel_report_export",
+        wire_command: "cancel_report_export",
+        disposition: Disposition::ConditionalAvailability,
+        lane: "devel-scan",
+        requires: &[],
+        implemented: false,
     },
     CoverageEntry {
         name: "create_agent_group",
@@ -451,6 +459,14 @@ pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
         implemented: true,
     },
     CoverageEntry {
+        name: "download_report_export",
+        wire_command: "download_report_export",
+        disposition: Disposition::ConditionalAvailability,
+        lane: "devel-scan",
+        requires: &[],
+        implemented: true,
+    },
+    CoverageEntry {
         name: "empty_trashcan",
         wire_command: "empty_trashcan",
         disposition: Disposition::IsolatedLive,
@@ -459,12 +475,36 @@ pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
         implemented: true,
     },
     CoverageEntry {
+        name: "export_audit_report",
+        wire_command: "export_audit_report",
+        disposition: Disposition::ConditionalAvailability,
+        lane: "devel-scan",
+        requires: &[],
+        implemented: false,
+    },
+    CoverageEntry {
+        name: "export_delta_audit_report",
+        wire_command: "export_delta_audit_report",
+        disposition: Disposition::ConditionalAvailability,
+        lane: "devel-scan",
+        requires: &[],
+        implemented: false,
+    },
+    CoverageEntry {
+        name: "export_delta_scan_report",
+        wire_command: "export_delta_scan_report",
+        disposition: Disposition::ConditionalAvailability,
+        lane: "devel-scan",
+        requires: &[],
+        implemented: false,
+    },
+    CoverageEntry {
         name: "export_scan_report",
         wire_command: "export_scan_report",
         disposition: Disposition::ConditionalAvailability,
         lane: "devel-scan",
         requires: &[],
-        implemented: false,
+        implemented: true,
     },
     CoverageEntry {
         name: "get_agent_groups",
@@ -717,6 +757,14 @@ pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "get_report_errors",
         wire_command: "get_report_errors",
+        disposition: Disposition::ConditionalAvailability,
+        lane: "devel-scan",
+        requires: &[],
+        implemented: true,
+    },
+    CoverageEntry {
+        name: "get_report_exports",
+        wire_command: "get_report_exports",
         disposition: Disposition::ConditionalAvailability,
         lane: "devel-scan",
         requires: &[],
@@ -1284,6 +1332,14 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
         lane: "devel-fast",
         requires: &[],
         implemented: true,
+    },
+    CoverageEntry {
+        name: "cancel_report_export",
+        wire_command: "cancel_report_export",
+        disposition: Disposition::ConditionalAvailability,
+        lane: "devel-scan",
+        requires: &[],
+        implemented: false,
     },
     CoverageEntry {
         name: "clone_agent_group",
@@ -1990,6 +2046,14 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
         implemented: true,
     },
     CoverageEntry {
+        name: "download_report_export",
+        wire_command: "download_report_export",
+        disposition: Disposition::ConditionalAvailability,
+        lane: "devel-scan",
+        requires: &[],
+        implemented: true,
+    },
+    CoverageEntry {
         name: "empty_trashcan",
         wire_command: "empty_trashcan",
         disposition: Disposition::IsolatedLive,
@@ -1998,12 +2062,36 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
         implemented: true,
     },
     CoverageEntry {
+        name: "export_audit_report",
+        wire_command: "export_audit_report",
+        disposition: Disposition::ConditionalAvailability,
+        lane: "devel-scan",
+        requires: &[],
+        implemented: false,
+    },
+    CoverageEntry {
+        name: "export_delta_audit_report",
+        wire_command: "export_delta_audit_report",
+        disposition: Disposition::ConditionalAvailability,
+        lane: "devel-scan",
+        requires: &[],
+        implemented: false,
+    },
+    CoverageEntry {
+        name: "export_delta_scan_report",
+        wire_command: "export_delta_scan_report",
+        disposition: Disposition::ConditionalAvailability,
+        lane: "devel-scan",
+        requires: &[],
+        implemented: false,
+    },
+    CoverageEntry {
         name: "export_scan_report",
         wire_command: "export_scan_report",
         disposition: Disposition::ConditionalAvailability,
         lane: "devel-scan",
         requires: &[],
-        implemented: false,
+        implemented: true,
     },
     CoverageEntry {
         name: "get_agent",
@@ -2576,6 +2664,14 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "get_report_export",
         wire_command: "get_reports",
+        disposition: Disposition::ConditionalAvailability,
+        lane: "devel-scan",
+        requires: &[],
+        implemented: true,
+    },
+    CoverageEntry {
+        name: "get_report_exports",
+        wire_command: "get_report_exports",
         disposition: Disposition::ConditionalAvailability,
         lane: "devel-scan",
         requires: &[],
@@ -3582,18 +3678,12 @@ pub static HELPER_MIGRATIONS: &[SurfaceMigration] = &[
     },
 ];
 
-pub static LIVE_HELP_ALLOWLIST: &[LiveHelpAllowlistEntry] = &[
-    LiveHelpAllowlistEntry { name: "cancel_report_export", rationale: "gvmd advertises the report-export cancellation operation, but the pinned rust-gvm command registry has no modeled request for it; phase 1 records the exact advertisement without executing it.", evidence_source: "baselines/community-stable.json", evidence_detail: "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact cancel_report_export command." },
-    LiveHelpAllowlistEntry { name: "download_report_export", rationale: "gvmd advertises the report-export download operation, but the pinned rust-gvm command registry has no modeled request for it; phase 1 records the exact advertisement without executing it.", evidence_source: "baselines/community-stable.json", evidence_detail: "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact download_report_export command." },
-    LiveHelpAllowlistEntry { name: "export_audit_report", rationale: "gvmd advertises this audit-report export spelling separately from modeled scan-report operations, and the pinned rust-gvm command registry has no exact request for it; phase 1 records but does not execute it.", evidence_source: "baselines/community-stable.json", evidence_detail: "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact export_audit_report command." },
-    LiveHelpAllowlistEntry { name: "export_delta_audit_report", rationale: "gvmd advertises this delta audit-report export spelling separately from modeled scan-report operations, and the pinned rust-gvm command registry has no exact request for it; phase 1 records but does not execute it.", evidence_source: "baselines/community-stable.json", evidence_detail: "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact export_delta_audit_report command." },
-    LiveHelpAllowlistEntry { name: "export_delta_scan_report", rationale: "gvmd advertises this delta scan-report export spelling, but the pinned rust-gvm command registry has no exact request for it; phase 1 records the advertisement without executing an unmodeled mutation.", evidence_source: "baselines/community-stable.json", evidence_detail: "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact export_delta_scan_report command." },
-    LiveHelpAllowlistEntry { name: "get_report_exports", rationale: "gvmd advertises the report-export collection read, but the pinned rust-gvm command registry has no modeled request for it; phase 1 records the exact advertisement without claiming typed coverage.", evidence_source: "baselines/community-stable.json", evidence_detail: "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact get_report_exports command." },
-];
+pub static LIVE_HELP_ALLOWLIST: &[LiveHelpAllowlistEntry] = &[];
 
 #[allow(clippy::let_underscore_untyped)]
 pub fn compile_enforce_public_helper_surface() {
     let _ = GmpClient::<UnixSocketConnection>::authenticate;
+    let _ = GmpClient::<UnixSocketConnection>::cancel_report_export;
     let _ = GmpClient::<UnixSocketConnection>::clone_agent_group;
     let _ = GmpClient::<UnixSocketConnection>::clone_alert;
     let _ = GmpClient::<UnixSocketConnection>::clone_audit;
@@ -3682,7 +3772,11 @@ pub fn compile_enforce_public_helper_surface() {
     let _ = GmpClient::<UnixSocketConnection>::delete_user;
     let _ = GmpClient::<UnixSocketConnection>::delete_web_application_target;
     let _ = GmpClient::<UnixSocketConnection>::describe_auth;
+    let _ = GmpClient::<UnixSocketConnection>::download_report_export;
     let _ = GmpClient::<UnixSocketConnection>::empty_trashcan;
+    let _ = GmpClient::<UnixSocketConnection>::export_audit_report;
+    let _ = GmpClient::<UnixSocketConnection>::export_delta_audit_report;
+    let _ = GmpClient::<UnixSocketConnection>::export_delta_scan_report;
     let _ = GmpClient::<UnixSocketConnection>::export_scan_report;
     let _ = GmpClient::<UnixSocketConnection>::get_agent;
     let _ = GmpClient::<UnixSocketConnection>::get_agent_group;
@@ -3756,6 +3850,7 @@ pub fn compile_enforce_public_helper_surface() {
     let _ = GmpClient::<UnixSocketConnection>::get_report_cves;
     let _ = GmpClient::<UnixSocketConnection>::get_report_errors;
     let _ = GmpClient::<UnixSocketConnection>::get_report_export;
+    let _ = GmpClient::<UnixSocketConnection>::get_report_exports;
     let _ = GmpClient::<UnixSocketConnection>::get_report_format;
     let _ = GmpClient::<UnixSocketConnection>::get_report_formats;
     let _ = GmpClient::<UnixSocketConnection>::get_report_hosts;

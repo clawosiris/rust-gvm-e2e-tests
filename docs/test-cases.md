@@ -51,11 +51,38 @@ capability floor. Each surface must produce that exact typed
 GMP 22.8 or newer the same code executes the request and requires a successful
 typed response, including nonempty decoded bytes for synchronous export.
 
-The advertised asynchronous `ExportScanReportRequest` is intentionally not
-mutated: the pinned typed API can create or reuse an export ID but exposes no
-typed cancel/delete/reconciliation lifecycle, so cleanup ownership cannot be
-guaranteed after success or an ambiguous response. Ticket coverage is outside
-this PR's gating contract and is not emitted as a scan observation.
+When authenticated help advertises the complete cleanup-safe command set, the
+lane creates an asynchronous scan-report export and owns its returned ID
+before checking any later assertion. Bounded `get_report_exports` polling
+records every exact status/progress transition and requires terminal
+`done`/`completed`. The lane downloads the file, checks its nonempty decoded
+bytes, exact byte count, report/format relationships, type, content type, and
+extension, then requires an exact typed 404 from `get_report_exports` to prove
+gvmd consumed and removed the export after the response.
+
+A second export uses a distinct option set for cancellation qualification. The
+lane sends `cancel_report_export` only after it observes that export in
+`pending` or `running`, then polls through any `cancel_requested` transition to
+`canceled`. If the worker reaches a terminal state before the first read, the
+lane consumes a completed file when applicable and emits the exact observed
+state as `conditional-unavailable`; it never claims cancellation passed
+without sending it. `E2E_REPORT_EXPORT_TIMEOUT_SECS` (default 300) and
+`E2E_REPORT_EXPORT_POLL_INTERVAL_SECS` (default 1) bound both paths.
+
+The tracker reconciles report exports before reports and never blindly replays
+an ambiguous cancel or download. Cleanup discovers exports linked to every
+tracked report, cancels or waits for active work, consumes an unattempted
+completed artifact, and finally proves no linked export remains active before
+report/task deletion. Preflight applies the same ordering to stale namespaced
+tasks.
+
+Audit and delta variants remain inventory-visible and help-gated. Community
+Compose explicitly declares `audit_report`, `audit_report_pair`, and
+`delta_scan_report_pair` fixtures unavailable, so `export_audit_report`,
+`export_delta_audit_report`, and `export_delta_scan_report` emit exact
+fixture-backed dispositions without mutation. A provider that declares one of
+those fixtures ready fails closed until that lifecycle is implemented. Ticket
+coverage remains outside this layer's gating contract.
 
 The lane additionally imports a sanitized report fixture and removes reports
 before tasks, targets, and supporting resources. A concrete report returned by
@@ -144,8 +171,8 @@ and the reviewed exact-name allowlist. Modeled and allowlisted commands retain
 their separate machine-readable evidence. Any unknown advertised name blocks
 discovery and is written to the capability snapshot, failed plan, and result
 artifacts. A synthetic unknown fixture proves this fail-closed path; separate
-fixture cases prove modeled and explicitly allowlisted names pass. Wildcards
-and command-family exclusions are not accepted.
+fixture cases prove modeled names pass after the report-export allowlist is
+empty. Wildcards and command-family exclusions are not accepted.
 
 Authenticated help and probes are authoritative for deployment availability.
 Typed semantic version floors are an additional pre-execution gate: help

@@ -1,50 +1,13 @@
 {
   "schema_version": 3,
-  "rust_gvm_sha": "b85443167a9fd642b2d91f6f347db048de5aba9c",
-  "registry_count": 158,
-  "typed_helper_count": 261,
+  "rust_gvm_sha": "8ea68a82636974256b2c198ea24a5aa26262b659",
+  "registry_count": 164,
+  "typed_helper_count": 267,
   "helper_variant_count": 4,
   "replaced_helper_count": 28,
   "removed_helper_count": 1,
-  "live_help_allowlist_count": 6,
-  "live_help_allowlist": [
-    {
-      "evidence_detail": "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact cancel_report_export command.",
-      "evidence_source": "baselines/community-stable.json",
-      "name": "cancel_report_export",
-      "rationale": "gvmd advertises the report-export cancellation operation, but the pinned rust-gvm command registry has no modeled request for it; phase 1 records the exact advertisement without executing it."
-    },
-    {
-      "evidence_detail": "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact download_report_export command.",
-      "evidence_source": "baselines/community-stable.json",
-      "name": "download_report_export",
-      "rationale": "gvmd advertises the report-export download operation, but the pinned rust-gvm command registry has no modeled request for it; phase 1 records the exact advertisement without executing it."
-    },
-    {
-      "evidence_detail": "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact export_audit_report command.",
-      "evidence_source": "baselines/community-stable.json",
-      "name": "export_audit_report",
-      "rationale": "gvmd advertises this audit-report export spelling separately from modeled scan-report operations, and the pinned rust-gvm command registry has no exact request for it; phase 1 records but does not execute it."
-    },
-    {
-      "evidence_detail": "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact export_delta_audit_report command.",
-      "evidence_source": "baselines/community-stable.json",
-      "name": "export_delta_audit_report",
-      "rationale": "gvmd advertises this delta audit-report export spelling separately from modeled scan-report operations, and the pinned rust-gvm command registry has no exact request for it; phase 1 records but does not execute it."
-    },
-    {
-      "evidence_detail": "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact export_delta_scan_report command.",
-      "evidence_source": "baselines/community-stable.json",
-      "name": "export_delta_scan_report",
-      "rationale": "gvmd advertises this delta scan-report export spelling, but the pinned rust-gvm command registry has no exact request for it; phase 1 records the advertisement without executing an unmodeled mutation."
-    },
-    {
-      "evidence_detail": "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact get_report_exports command.",
-      "evidence_source": "baselines/community-stable.json",
-      "name": "get_report_exports",
-      "rationale": "gvmd advertises the report-export collection read, but the pinned rust-gvm command registry has no modeled request for it; phase 1 records the exact advertisement without claiming typed coverage."
-    }
-  ],
+  "live_help_allowlist_count": 0,
+  "live_help_allowlist": [],
   "feature_catalog": {
     "ENABLE_AGENTS": {
       "commands": [
@@ -273,6 +236,15 @@
       "rationale": "Expected Community capability exercised by the warm-volume blocking lane.",
       "requires": [],
       "implemented": true
+    },
+    {
+      "name": "cancel_report_export",
+      "wire_command": "cancel_report_export",
+      "disposition": "conditional-availability",
+      "lane": "devel-scan",
+      "rationale": "Cancellation executes only for a separately created export observed in pending or running state; an immediate terminal state receives an exact live disposition and cleanup instead of a synthetic pass.",
+      "requires": [],
+      "implemented": false
     },
     {
       "name": "create_agent_group",
@@ -775,6 +747,15 @@
       "implemented": true
     },
     {
+      "name": "download_report_export",
+      "wire_command": "download_report_export",
+      "disposition": "conditional-availability",
+      "lane": "devel-scan",
+      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, download consumption, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
+      "requires": [],
+      "implemented": true
+    },
+    {
       "name": "empty_trashcan",
       "wire_command": "empty_trashcan",
       "disposition": "isolated-live",
@@ -784,13 +765,40 @@
       "implemented": true
     },
     {
+      "name": "export_audit_report",
+      "wire_command": "export_audit_report",
+      "disposition": "conditional-availability",
+      "lane": "devel-scan",
+      "rationale": "Typed and help-gated, but Community Compose has no deterministic audit-report fixture; the scan lane emits the provider-fixture disposition without mutation.",
+      "requires": [],
+      "implemented": false
+    },
+    {
+      "name": "export_delta_audit_report",
+      "wire_command": "export_delta_audit_report",
+      "disposition": "conditional-availability",
+      "lane": "devel-scan",
+      "rationale": "Typed and help-gated, but Community Compose has no deterministic compatible audit-report pair; the scan lane emits the provider-fixture disposition.",
+      "requires": [],
+      "implemented": false
+    },
+    {
+      "name": "export_delta_scan_report",
+      "wire_command": "export_delta_scan_report",
+      "disposition": "conditional-availability",
+      "lane": "devel-scan",
+      "rationale": "Typed and help-gated, but Community Compose provisions one deterministic scan report rather than a compatible delta pair; the scan lane emits that disposition.",
+      "requires": [],
+      "implemented": false
+    },
+    {
       "name": "export_scan_report",
       "wire_command": "export_scan_report",
       "disposition": "conditional-availability",
       "lane": "devel-scan",
-      "rationale": "Advertised typed mutation is discovery-visible but not executed until the pinned API provides cleanup-safe export reconciliation.",
+      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, download consumption, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
       "requires": [],
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "get_agent_groups",
@@ -1091,6 +1099,15 @@
       "disposition": "conditional-availability",
       "lane": "devel-scan",
       "rationale": "Availability is decided by recorded version, feature, help, and probe evidence.",
+      "requires": [],
+      "implemented": true
+    },
+    {
+      "name": "get_report_exports",
+      "wire_command": "get_report_exports",
+      "disposition": "conditional-availability",
+      "lane": "devel-scan",
+      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, download consumption, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
       "requires": [],
       "implemented": true
     },
@@ -1745,6 +1762,15 @@
       "rationale": "Expected Community capability exercised by the warm-volume blocking lane.",
       "requires": [],
       "implemented": true
+    },
+    {
+      "name": "cancel_report_export",
+      "wire_command": "cancel_report_export",
+      "disposition": "conditional-availability",
+      "lane": "devel-scan",
+      "rationale": "Cancellation executes only for a separately created export observed in pending or running state; an immediate terminal state receives an exact live disposition and cleanup instead of a synthetic pass.",
+      "requires": [],
+      "implemented": false
     },
     {
       "name": "clone_agent_group",
@@ -2569,6 +2595,15 @@
       "implemented": true
     },
     {
+      "name": "download_report_export",
+      "wire_command": "download_report_export",
+      "disposition": "conditional-availability",
+      "lane": "devel-scan",
+      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, download consumption, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
+      "requires": [],
+      "implemented": true
+    },
+    {
       "name": "empty_trashcan",
       "wire_command": "empty_trashcan",
       "disposition": "isolated-live",
@@ -2578,13 +2613,40 @@
       "implemented": true
     },
     {
+      "name": "export_audit_report",
+      "wire_command": "export_audit_report",
+      "disposition": "conditional-availability",
+      "lane": "devel-scan",
+      "rationale": "Typed and help-gated, but Community Compose has no deterministic audit-report fixture; the scan lane emits the provider-fixture disposition without mutation.",
+      "requires": [],
+      "implemented": false
+    },
+    {
+      "name": "export_delta_audit_report",
+      "wire_command": "export_delta_audit_report",
+      "disposition": "conditional-availability",
+      "lane": "devel-scan",
+      "rationale": "Typed and help-gated, but Community Compose has no deterministic compatible audit-report pair; the scan lane emits the provider-fixture disposition.",
+      "requires": [],
+      "implemented": false
+    },
+    {
+      "name": "export_delta_scan_report",
+      "wire_command": "export_delta_scan_report",
+      "disposition": "conditional-availability",
+      "lane": "devel-scan",
+      "rationale": "Typed and help-gated, but Community Compose provisions one deterministic scan report rather than a compatible delta pair; the scan lane emits that disposition.",
+      "requires": [],
+      "implemented": false
+    },
+    {
       "name": "export_scan_report",
       "wire_command": "export_scan_report",
       "disposition": "conditional-availability",
       "lane": "devel-scan",
-      "rationale": "Advertised typed mutation is discovery-visible but not executed until the pinned API provides cleanup-safe export reconciliation.",
+      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, download consumption, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
       "requires": [],
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "get_agent",
@@ -3255,6 +3317,15 @@
       "disposition": "conditional-availability",
       "lane": "devel-scan",
       "rationale": "Availability is decided by recorded version, feature, help, and probe evidence.",
+      "requires": [],
+      "implemented": true
+    },
+    {
+      "name": "get_report_exports",
+      "wire_command": "get_report_exports",
+      "disposition": "conditional-availability",
+      "lane": "devel-scan",
+      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, download consumption, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
       "requires": [],
       "implemented": true
     },

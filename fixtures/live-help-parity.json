@@ -9,10 +9,10 @@
       "expected_unknown": []
     },
     {
-      "name": "exact-allowlisted-command",
+      "name": "modeled-report-export-command",
       "advertised_commands": ["cancel_report_export"],
-      "expected_modeled": [],
-      "expected_allowlisted": ["cancel_report_export"],
+      "expected_modeled": ["cancel_report_export"],
+      "expected_allowlisted": [],
       "expected_unknown": []
     },
     {
