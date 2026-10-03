@@ -8,6 +8,7 @@
 - explicit helper-only variants: **4**
 - replaced legacy helper surfaces: **28**
 - removed legacy helper surfaces: **1**
+- exact live-help allowlist entries: **6**
 - ordinary live runs use warm persistent volumes
 - a `*-live` disposition assigns an intended lane; only a published run artifact proves execution
 
@@ -21,6 +22,19 @@
 | `isolated-live` | 39 |
 | `known-upstream-bug` | 3 |
 | `nightly-live` | 7 |
+
+## Exact live-help allowlist
+
+These exact command names are advertised by reviewed live deployment evidence but are not modeled by the pinned rust-gvm registry. Any other unmodeled advertised command blocks discovery before mutation.
+
+| Command | Rationale | Evidence |
+|---|---|---|
+| `cancel_report_export` | gvmd advertises the report-export cancellation operation, but the pinned rust-gvm command registry has no modeled request for it; phase 1 records the exact advertisement without executing it. | `baselines/community-stable.json`: The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact cancel_report_export command. |
+| `download_report_export` | gvmd advertises the report-export download operation, but the pinned rust-gvm command registry has no modeled request for it; phase 1 records the exact advertisement without executing it. | `baselines/community-stable.json`: The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact download_report_export command. |
+| `export_audit_report` | gvmd advertises this audit-report export spelling separately from modeled scan-report operations, and the pinned rust-gvm command registry has no exact request for it; phase 1 records but does not execute it. | `baselines/community-stable.json`: The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact export_audit_report command. |
+| `export_delta_audit_report` | gvmd advertises this delta audit-report export spelling separately from modeled scan-report operations, and the pinned rust-gvm command registry has no exact request for it; phase 1 records but does not execute it. | `baselines/community-stable.json`: The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact export_delta_audit_report command. |
+| `export_delta_scan_report` | gvmd advertises this delta scan-report export spelling, but the pinned rust-gvm command registry has no exact request for it; phase 1 records the advertisement without executing an unmodeled mutation. | `baselines/community-stable.json`: The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact export_delta_scan_report command. |
+| `get_report_exports` | gvmd advertises the report-export collection read, but the pinned rust-gvm command registry has no modeled request for it; phase 1 records the exact advertisement without claiming typed coverage. | `baselines/community-stable.json`: The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact get_report_exports command. |
 
 ## Wire commands
 

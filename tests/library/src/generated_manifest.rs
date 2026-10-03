@@ -5,7 +5,7 @@
 use gvm_client::GmpClient;
 use gvm_connection::UnixSocketConnection;
 
-use crate::{CoverageEntry, Disposition, SurfaceMigration, SurfaceStatus};
+use crate::{CoverageEntry, Disposition, LiveHelpAllowlistEntry, SurfaceMigration, SurfaceStatus};
 
 pub const RUST_GVM_SHA: &str = "b85443167a9fd642b2d91f6f347db048de5aba9c";
 
@@ -3580,6 +3580,15 @@ pub static HELPER_MIGRATIONS: &[SurfaceMigration] = &[
         status: SurfaceStatus::Removed,
         replacement: None,
     },
+];
+
+pub static LIVE_HELP_ALLOWLIST: &[LiveHelpAllowlistEntry] = &[
+    LiveHelpAllowlistEntry { name: "cancel_report_export", rationale: "gvmd advertises the report-export cancellation operation, but the pinned rust-gvm command registry has no modeled request for it; phase 1 records the exact advertisement without executing it.", evidence_source: "baselines/community-stable.json", evidence_detail: "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact cancel_report_export command." },
+    LiveHelpAllowlistEntry { name: "download_report_export", rationale: "gvmd advertises the report-export download operation, but the pinned rust-gvm command registry has no modeled request for it; phase 1 records the exact advertisement without executing it.", evidence_source: "baselines/community-stable.json", evidence_detail: "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact download_report_export command." },
+    LiveHelpAllowlistEntry { name: "export_audit_report", rationale: "gvmd advertises this audit-report export spelling separately from modeled scan-report operations, and the pinned rust-gvm command registry has no exact request for it; phase 1 records but does not execute it.", evidence_source: "baselines/community-stable.json", evidence_detail: "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact export_audit_report command." },
+    LiveHelpAllowlistEntry { name: "export_delta_audit_report", rationale: "gvmd advertises this delta audit-report export spelling separately from modeled scan-report operations, and the pinned rust-gvm command registry has no exact request for it; phase 1 records but does not execute it.", evidence_source: "baselines/community-stable.json", evidence_detail: "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact export_delta_audit_report command." },
+    LiveHelpAllowlistEntry { name: "export_delta_scan_report", rationale: "gvmd advertises this delta scan-report export spelling, but the pinned rust-gvm command registry has no exact request for it; phase 1 records the advertisement without executing an unmodeled mutation.", evidence_source: "baselines/community-stable.json", evidence_detail: "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact export_delta_scan_report command." },
+    LiveHelpAllowlistEntry { name: "get_report_exports", rationale: "gvmd advertises the report-export collection read, but the pinned rust-gvm command registry has no modeled request for it; phase 1 records the exact advertisement without claiming typed coverage.", evidence_source: "baselines/community-stable.json", evidence_detail: "The checked-in historical Community stable GMP 22.7 authenticated live-help snapshot contains the exact get_report_exports command." },
 ];
 
 #[allow(clippy::let_underscore_untyped)]

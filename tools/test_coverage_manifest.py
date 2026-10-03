@@ -17,6 +17,40 @@ SPEC.loader.exec_module(MANIFEST)
 
 
 class CoveragePolicyTests(unittest.TestCase):
+    def test_live_help_allowlist_is_exact_and_evidence_backed(self):
+        entries = MANIFEST.load_live_help_allowlist()
+        self.assertEqual(
+            [entry["name"] for entry in entries],
+            [
+                "cancel_report_export",
+                "download_report_export",
+                "export_audit_report",
+                "export_delta_audit_report",
+                "export_delta_scan_report",
+                "get_report_exports",
+            ],
+        )
+        self.assertTrue(all(entry["rationale"] for entry in entries))
+        self.assertTrue(all(entry["evidence_detail"] for entry in entries))
+
+    def test_live_help_allowlist_rejects_wildcard_entries(self):
+        original = MANIFEST.LIVE_HELP_ALLOWLIST_PATH
+        with tempfile.TemporaryDirectory() as temporary:
+            policy = Path(temporary) / "allowlist.json"
+            policy.write_text(
+                '{"schema_version":1,"commands":[{'
+                '"name":"get_*","rationale":"not exact",'
+                '"evidence_source":"baselines/community-stable.json",'
+                '"evidence_detail":"not exact"}]}',
+                encoding="utf-8",
+            )
+            MANIFEST.LIVE_HELP_ALLOWLIST_PATH = policy
+            try:
+                with self.assertRaisesRegex(ValueError, "not an exact command name"):
+                    MANIFEST.load_live_help_allowlist()
+            finally:
+                MANIFEST.LIVE_HELP_ALLOWLIST_PATH = original
+
     def test_policy_sha_override_changes_only_manifest_metadata(self):
         manifest = {
             "rust_gvm_sha": "a" * 40,

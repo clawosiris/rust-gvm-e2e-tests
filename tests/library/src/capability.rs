@@ -9,6 +9,8 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
 
+use crate::LiveHelpAllowlistEntry;
+
 /// The deployment's policy for an observed capability or fixture.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -93,12 +95,92 @@ pub struct CommandSupport {
     pub evidence: Evidence,
 }
 
+/// Owned reviewed evidence for one exact allowlisted live-help command.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AllowlistedLiveHelpCommand {
+    pub name: String,
+    pub rationale: String,
+    pub evidence_source: String,
+    pub evidence_detail: String,
+}
+
+/// Exhaustive classification of the authenticated live-help command set.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LiveHelpParity {
+    pub advertised_commands: Vec<String>,
+    pub modeled_commands: Vec<String>,
+    pub allowlisted_commands: Vec<AllowlistedLiveHelpCommand>,
+    pub unknown_commands: Vec<String>,
+}
+
+/// Classify every advertised command against the generated modeled inventory
+/// and the reviewed exact-name allowlist.
+pub fn classify_live_help_commands(
+    advertised: &BTreeSet<String>,
+    modeled: &BTreeSet<String>,
+    allowlist: &[LiveHelpAllowlistEntry],
+) -> Result<LiveHelpParity, String> {
+    let mut reviewed = BTreeMap::new();
+    for entry in allowlist {
+        if modeled.contains(entry.name) {
+            return Err(format!(
+                "live-help allowlist command is already modeled: {}",
+                entry.name
+            ));
+        }
+        if reviewed.insert(entry.name, entry).is_some() {
+            return Err(format!(
+                "live-help allowlist repeats exact command {}",
+                entry.name
+            ));
+        }
+    }
+
+    let mut parity = LiveHelpParity {
+        advertised_commands: advertised.iter().cloned().collect(),
+        ..LiveHelpParity::default()
+    };
+    for name in advertised {
+        if modeled.contains(name) {
+            parity.modeled_commands.push(name.clone());
+        } else if let Some(entry) = reviewed.get(name.as_str()) {
+            parity
+                .allowlisted_commands
+                .push(AllowlistedLiveHelpCommand {
+                    name: name.clone(),
+                    rationale: entry.rationale.to_string(),
+                    evidence_source: entry.evidence_source.to_string(),
+                    evidence_detail: entry.evidence_detail.to_string(),
+                });
+        } else {
+            parity.unknown_commands.push(name.clone());
+        }
+    }
+    Ok(parity)
+}
+
+/// Reject any authenticated live-help command without an exact reviewed
+/// disposition. The caller publishes the parity object before returning this
+/// error, so the unknown names remain machine-readable.
+pub fn enforce_live_help_parity(parity: &LiveHelpParity) -> Result<(), String> {
+    if parity.unknown_commands.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "authenticated live-help reverse parity failed; unknown advertised commands: {}",
+            parity.unknown_commands.join(", ")
+        ))
+    }
+}
+
 /// Complete deployment-neutral discovery artifact.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DeploymentCapabilities {
     pub schema_version: u32,
     pub deployment_id: String,
     pub gmp_version: Option<String>,
+    #[serde(default)]
+    pub live_help_parity: LiveHelpParity,
     #[serde(default)]
     pub features: BTreeMap<String, ObservedFeature>,
     #[serde(default)]
@@ -695,6 +777,7 @@ mod tests {
             schema_version: 1,
             deployment_id: "test".into(),
             gmp_version: Some("22.7".into()),
+            live_help_parity: LiveHelpParity::default(),
             features: BTreeMap::from([("ENABLE_AGENTS".into(), feature)]),
             commands: BTreeMap::from([(
                 "get_agents".into(),
@@ -745,6 +828,72 @@ mod tests {
             implemented: true,
             semantic_eligible: true,
             semantic_evidence: "GMP 22.7 satisfies the typed semantic".into(),
+        }
+    }
+
+    #[derive(Deserialize)]
+    struct LiveHelpFixture {
+        schema_version: u32,
+        cases: Vec<LiveHelpFixtureCase>,
+    }
+
+    #[derive(Deserialize)]
+    struct LiveHelpFixtureCase {
+        name: String,
+        advertised_commands: Vec<String>,
+        expected_modeled: Vec<String>,
+        expected_allowlisted: Vec<String>,
+        expected_unknown: Vec<String>,
+    }
+
+    #[test]
+    fn live_help_reverse_parity_fixture_covers_modeled_allowlisted_and_unknown() {
+        let fixture: LiveHelpFixture =
+            serde_json::from_str(include_str!("../../../fixtures/live-help-parity.json"))
+                .expect("live-help parity fixture must parse");
+        assert_eq!(fixture.schema_version, 1);
+        let modeled = BTreeSet::from(["get_version".to_string()]);
+        for case in fixture.cases {
+            let advertised = case.advertised_commands.into_iter().collect();
+            let parity =
+                classify_live_help_commands(&advertised, &modeled, crate::LIVE_HELP_ALLOWLIST)
+                    .unwrap_or_else(|error| panic!("fixture {} policy failed: {error}", case.name));
+            assert_eq!(
+                parity.modeled_commands, case.expected_modeled,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                parity
+                    .allowlisted_commands
+                    .iter()
+                    .map(|entry| entry.name.clone())
+                    .collect::<Vec<_>>(),
+                case.expected_allowlisted,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                parity.unknown_commands, case.expected_unknown,
+                "{}",
+                case.name
+            );
+            let artifact = serde_json::to_value(&parity)
+                .unwrap_or_else(|error| panic!("fixture {} must serialize: {error}", case.name));
+            assert_eq!(
+                artifact["unknown_commands"],
+                serde_json::json!(parity.unknown_commands),
+                "{}",
+                case.name
+            );
+            if parity.unknown_commands.is_empty() {
+                enforce_live_help_parity(&parity)
+                    .unwrap_or_else(|error| panic!("fixture {} must pass: {error}", case.name));
+            } else {
+                let error = enforce_live_help_parity(&parity)
+                    .expect_err("synthetic unknown command must fail closed");
+                assert!(error.contains(&parity.unknown_commands.join(", ")));
+            }
         }
     }
 
