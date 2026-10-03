@@ -15,6 +15,29 @@ SPEC.loader.exec_module(MODULE)
 
 
 class RuntimeImagesTests(unittest.TestCase):
+    def test_compose_command_preserves_file_relative_path_resolution(self):
+        self.assertEqual(
+            MODULE.build_compose_command(["docker/docker-compose.yml"]),
+            ["docker", "compose", "-f", "docker/docker-compose.yml"],
+        )
+
+    def test_compose_command_accepts_explicit_project_directory(self):
+        self.assertEqual(
+            MODULE.build_compose_command(
+                ["base.yml", "override.yml"], "/provider/project"
+            ),
+            [
+                "docker",
+                "compose",
+                "--project-directory",
+                "/provider/project",
+                "-f",
+                "base.yml",
+                "-f",
+                "override.yml",
+            ],
+        )
+
     def test_accepts_compose_array_and_records_digest(self):
         rows = MODULE.parse_compose_images(
             '[{"Service":"gvmd","Repository":"example/gvmd","Tag":"stable","ID":"sha256:1"}]'

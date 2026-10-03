@@ -43,7 +43,7 @@ asserts typed 404 behavior for a missing report.
 
 The lane selects the lowest-ID active typed report format that exposes both a
 content type and extension, then proves the same format identity through the
-singular typed read. On the enforced GMP 22.7 baseline, canonical structured
+singular typed read. On the qualified Community GMP 22.7 deployment, canonical structured
 report drill-downs and synchronous `GetReportExportRequest` are advertised by
 live help but rejected locally by rust-gvm's exact documented GMP 22.8
 capability floor. Each surface must produce that exact typed
@@ -127,39 +127,38 @@ intentionally excludes the momentary `currently_syncing` flag, which can change
 between sequential client reads; stable feed type, name, and status remain
 blocking.
 
-## Conditional and excluded outcomes
+## Capability-selected outcomes
 
-The fast discovery probe combines `get_version`, `get_features`, and normalized
-`help` command evidence with rust-gvm’s semantic version registry. The
-checked-in baseline pins the complete help inventory, feature states, and
-conditional result. A changed advertisement or availability fails until
-reviewed. Conditional and excluded states remain distinct from pass in the JSON
-artifact. Confirmed upstream defects are also distinct as `known-upstream-bug`
-and must name their tracked issue and exact reproduced response.
+Every deployment lane discovers `get_version`, raw current-or-legacy
+`get_features`, authenticated `help`, safe feature probes, and provider fixture
+evidence. It validates the selected deployment contract and writes a sorted
+plan before preflight cleanup. Required/forbidden contradictions, hidden
+commands for enabled features, unhealthy enabled features, unknown required
+state, unknown enabled features, and enabled entries without a cleanup-safe
+implementation are blocking. Optional unavailable entries are explicit
+`not-selected` results and never count as passes.
 
-Authenticated live help/features are authoritative for Community capability
-selection. The rust-gvm minimum-version gate is recorded separately as
-diagnostic evidence. Advertised report drill-downs remain planned capabilities,
-and the scan lane now checks their exact typed capability outcome. A GMP 22.7
-result records the local 22.8 rejection and does not claim positive wire
-execution.
+Authenticated help and probes are authoritative for deployment availability.
+Typed semantic version floors are an additional pre-execution gate: help
+advertisement cannot select a command/helper that the negotiated GMP version
+cannot invoke. Such entries are deterministically `not-selected` with the
+required and negotiated versions plus explicit no-wire evidence. This includes
+`get_report_export` and the migrated `get_report_export_with_opts` surface on
+GMP 22.7. Confirmed upstream defects remain distinct
+`known-upstream-bug` outcomes with tracked reproduction evidence.
 
-Only issue #118’s 15 agent/OCI wire commands, four helper-only task variants,
-and six OCI typed target methods are hard Community exclusions. A network
-service hosted in a container remains covered.
+The former issue #118 agent and OCI exclusions now have feature requirements.
+When selected, `devel-fast` performs non-mutating reads plus reversible,
+namespace-owned agent-group and OCI-target create/read/modify/delete lifecycles.
+The OCI lifecycle requires the provider's deterministic
+`E2E_OCI_IMAGE_REFERENCE`. Commands that need additional private fixtures are
+marked unimplemented and cause a coverage-gap failure if their feature becomes
+enabled; they are not silently skipped or reported as executed.
 
-## Issue #127 architecture status
-
-The convergence preserves the current Community feature/help snapshot,
-capability selection, structured results, fixed safety lanes, runtime image
-provenance, isolation boundary, and exact result states. Issue #127's proposed
-deployment-neutral contract/planner architecture is not implemented here:
-there is no reusable external provider, feature-requirement catalog,
-pre-execution `test-plan.json`, Enterprise contract, or selected-result
-reconciliation yet. Those remain proposed follow-up work and must not be
-inferred from the Community manifest.
-
-The checked-in baseline is marked pending live revalidation for issue #148.
-Targeted scan and isolated runs followed by one authoritative `lane=all` run
-must supply publication evidence; this repository change does not fabricate
-those results.
+After execution, every selected command, helper, and scenario must reconcile to
+exactly one successful terminal result. Missing, duplicate, unexpected, failed,
+or conditional selected results fail the lane. Terminal results are emitted by
+the command/helper/scenario runtime branch itself; completing a suite or lane
+does not synthesize results for untouched plan entries. See
+[deployment providers](deployment-providers.md) for artifact names, provider
+contracts, and the external rollout boundary.

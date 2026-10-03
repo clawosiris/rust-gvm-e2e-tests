@@ -1,0 +1,257 @@
+name: Deployment E2E (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      harness-ref:
+        description: Exact 40-character rust-gvm-e2e-tests commit SHA
+        required: true
+        type: string
+      deployment-id:
+        description: Stable public deployment identifier
+        required: true
+        type: string
+      contract-path:
+        description: Contract path in the caller repository
+        required: true
+        type: string
+      fixture-descriptor-path:
+        description: Non-secret fixture descriptor path in the caller repository
+        required: true
+        type: string
+      provider-mode:
+        description: compose or external
+        required: true
+        type: string
+      provider-descriptor-path:
+        description: External provider descriptor path in the caller repository
+        required: false
+        type: string
+        default: ""
+      compose-files:
+        description: Colon-separated Compose files, in merge order
+        required: false
+        type: string
+        default: docker/docker-compose.yml
+      rust-gvm-ref:
+        description: Exact 40-character canonical rust-gvm commit SHA
+        required: true
+        type: string
+      gvm-rools-ref:
+        description: gvm-rools ref used to build the CLI oracle
+        required: false
+        type: string
+        default: main
+      runtime-image-version:
+        description: Provider runtime image version or tag
+        required: false
+        type: string
+        default: stable
+      scan-target-host:
+        description: Deterministic provider-owned network scan target
+        required: false
+        type: string
+        default: scan-fixture
+      oci-image-reference:
+        description: Non-secret deterministic OCI reference for selected container coverage
+        required: false
+        type: string
+        default: ""
+      readiness-timeout-seconds:
+        description: Authenticated socket and feed readiness budget
+        required: false
+        type: string
+        default: "21000"
+      task-progress-timeout-seconds:
+        description: Scan task progress budget
+        required: false
+        type: string
+        default: "900"
+      lane:
+        description: One fixed safety lane or all
+        required: true
+        type: string
+      clean:
+        description: Explicitly destroy Compose-provider volumes first
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      release-token:
+        required: false
+      gvm-admin-user:
+        required: false
+      gvm-admin-pass:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-gvm-e2e-${{ inputs.deployment-id }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ inputs.deployment-id }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Reject moving source references
+        env:
+          HARNESS_REF: ${{ inputs.harness-ref }}
+          RUST_GVM_REF: ${{ inputs.rust-gvm-ref }}
+          LANE: ${{ inputs.lane }}
+        run: |
+          [[ "${HARNESS_REF}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${RUST_GVM_REF}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${LANE}" =~ ^(devel-fast|devel-scan|devel-isolated|devel-transport|differential|all)$ ]]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          repository: clawosiris/rust-gvm-e2e-tests
+          ref: ${{ inputs.harness-ref }}
+          path: harness
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: provider
+      - name: Stage and validate non-secret provider inputs
+        env:
+          CONTRACT_PATH: ${{ inputs.contract-path }}
+          FIXTURE_PATH: ${{ inputs.fixture-descriptor-path }}
+          PROVIDER_DESCRIPTOR_PATH: ${{ inputs.provider-descriptor-path }}
+          PROVIDER_MODE: ${{ inputs.provider-mode }}
+        run: |
+          mkdir -p harness/.provider-input
+          cp -- "provider/${CONTRACT_PATH}" harness/.provider-input/deployment-contract.json
+          cp -- "provider/${FIXTURE_PATH}" harness/.provider-input/fixtures.json
+          args=(--contract .provider-input/deployment-contract.json --fixtures .provider-input/fixtures.json --provider "${PROVIDER_MODE}")
+          if [[ "${PROVIDER_MODE}" == external ]]; then
+            cp -- "provider/${PROVIDER_DESCRIPTOR_PATH}" harness/.provider-input/provider.json
+            args+=(--provider-descriptor .provider-input/provider.json)
+          fi
+          (cd harness && python3 tools/deployment_provider.py "${args[@]}")
+      - name: Verify exact dependency inventory and local policies
+        env:
+          RUST_GVM_REF: ${{ inputs.rust-gvm-ref }}
+        run: |
+          git init -q /tmp/rust-gvm
+          git -C /tmp/rust-gvm remote add origin https://github.com/greenbone-hive/rust-gvm.git
+          git -C /tmp/rust-gvm fetch --depth 1 origin "${RUST_GVM_REF}"
+          git -C /tmp/rust-gvm checkout --detach FETCH_HEAD
+          test "$(git -C /tmp/rust-gvm rev-parse HEAD)" = "${RUST_GVM_REF}"
+          policy_sha="$(python3 -c 'import json; print(json.load(open("harness/coverage/manifest.json"))["rust_gvm_sha"])')"
+          python3 harness/tools/coverage_manifest.py --check \
+            --rust-gvm-source /tmp/rust-gvm --policy-rust-gvm-sha "${policy_sha}"
+          python3 harness/tools/prepare_rust_gvm_candidate.py \
+            --workspace-manifest harness/Cargo.toml \
+            --library-manifest harness/tests/library/Cargo.toml \
+            --lockfile harness/Cargo.lock --sha "${RUST_GVM_REF}"
+          (cd harness && cargo fmt --all --check)
+          (cd harness && cargo check --workspace --all-targets --locked)
+          (cd harness && cargo test --workspace --locked)
+          (cd harness && cargo clippy --workspace --all-targets --locked -- -D warnings)
+          (cd harness && python3 -m unittest discover -s tools -p 'test_*.py')
+          (cd harness && bash -n docker/scripts/*.sh tests/cli/*.sh)
+          (cd harness && bash docker/scripts/test-community-lane-artifacts.sh)
+          (cd harness && bash docker/scripts/test-deployment-lane-artifacts.sh)
+          (cd harness && docker compose -f docker/docker-compose.yml config --quiet)
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build exact deployment-neutral runner
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: harness
+          file: harness/docker/Dockerfile.runner
+          tags: rust-gvm-e2e-runner:ci
+          outputs: type=docker,dest=runner-image.tar
+          build-args: |
+            RUST_GVM_SHA=${{ inputs.rust-gvm-ref }}
+            GVM_ROOLS_REF=${{ inputs.gvm-rools-ref }}
+          secrets: |
+            github_token=${{ secrets.release-token }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: deployment-runner-${{ inputs.deployment-id }}-${{ github.run_id }}
+          path: runner-image.tar
+          retention-days: 1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: deployment-inputs-${{ inputs.deployment-id }}-${{ github.run_id }}
+          path: harness/.provider-input/
+          retention-days: 1
+
+  run:
+    name: E2E (${{ inputs.deployment-id }}/${{ matrix.lane }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJSON(inputs.lane == 'all' && '["devel-fast","devel-scan","devel-isolated","devel-transport","differential"]' || format('["{0}"]', inputs.lane)) }}
+    runs-on: [self-hosted]
+    timeout-minutes: 420
+    env:
+      E2E_DEPLOYMENT_ID: ${{ inputs.deployment-id }}
+      E2E_PROVIDER_MODE: ${{ inputs.provider-mode }}
+      E2E_DEPLOYMENT_CONTRACT: .provider-input/deployment-contract.json
+      E2E_FIXTURE_DESCRIPTOR: .provider-input/fixtures.json
+      E2E_PROVIDER_DESCRIPTOR: .provider-input/provider.json
+      E2E_RUST_GVM_SHA: ${{ inputs.rust-gvm-ref }}
+      E2E_CLEAN_VOLUMES: ${{ inputs.clean && '1' || '0' }}
+      GVM_VERSION: ${{ inputs.runtime-image-version }}
+      COMPOSE_FILE: ${{ inputs.compose-files }}
+      E2E_SCAN_TARGET_HOST: ${{ inputs.scan-target-host }}
+      E2E_OCI_IMAGE_REFERENCE: ${{ inputs.oci-image-reference }}
+      E2E_READINESS_TIMEOUT_SECS: ${{ inputs.readiness-timeout-seconds }}
+      E2E_TASK_PROGRESS_TIMEOUT_SECS: ${{ inputs.task-progress-timeout-seconds }}
+      GVM_ADMIN_USER: ${{ secrets.gvm-admin-user || 'admin' }}
+      GVM_ADMIN_PASS: ${{ secrets.gvm-admin-pass || 'admin' }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: deployment-runner-${{ inputs.deployment-id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/deployment-runner-${{ github.run_id }}
+      - name: Load exact runner image
+        id: runner-image
+        env:
+          EXPECTED_RUST_GVM_SHA: ${{ inputs.rust-gvm-ref }}
+        run: |
+          runner_tar="${RUNNER_TEMP}/deployment-runner-${GITHUB_RUN_ID}/runner-image.tar"
+          docker load --input "${runner_tar}"
+          runner_image_id="$(docker image inspect --format '{{.Id}}' rust-gvm-e2e-runner:ci)"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${runner_image_id}")" = "${EXPECTED_RUST_GVM_SHA}"
+          printf 'image-id=%s\n' "${runner_image_id}" >> "${GITHUB_OUTPUT}"
+          rm -f -- "${runner_tar}"
+      - name: Restore artifacts directory ownership
+        env:
+          RUNNER_IMAGE_ID: ${{ steps.runner-image.outputs.image-id }}
+        run: |
+          artifacts_dir="${GITHUB_WORKSPACE}/artifacts"
+          if [[ -d "${artifacts_dir}" && ! -L "${artifacts_dir}" ]]; then
+            docker run --rm --user 0:0 \
+              --mount "type=bind,src=${artifacts_dir},dst=/workspace/artifacts" \
+              --entrypoint /bin/chown "${RUNNER_IMAGE_ID}" \
+              "$(id -u):$(id -g)" /workspace/artifacts
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: provider
+          clean: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          repository: clawosiris/rust-gvm-e2e-tests
+          ref: ${{ inputs.harness-ref }}
+          clean: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: deployment-inputs-${{ inputs.deployment-id }}-${{ github.run_id }}
+          path: .provider-input
+      - run: bash docker/scripts/run-deployment-lane.sh "${{ matrix.lane }}"
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: results-${{ inputs.deployment-id }}-${{ matrix.lane }}-${{ github.run_id }}
+          path: |
+            artifacts/
+            coverage/manifest.json
+            coverage/feature-catalog.json

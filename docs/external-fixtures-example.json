@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "deployment_id": "replace-with-private-deployment-id",
+  "fixtures": {
+    "network_scan_target": {
+      "state": "ready",
+      "detail": "provider-owned deterministic target reachable by the scanner"
+    },
+    "agent_endpoint": {
+      "state": "unknown",
+      "detail": "replace with non-secret readiness evidence"
+    },
+    "oci_registry": {
+      "state": "unknown",
+      "detail": "replace with non-secret readiness evidence"
+    }
+  },
+  "probes": {
+    "jwt-auth": {
+      "state": "unknown",
+      "detail": "replace with a non-secret endpoint readiness result"
+    }
+  }
+}

@@ -22,7 +22,8 @@ COPY Cargo.toml /tmp/rust-gvm-e2e-tests/Cargo.toml
 COPY tests/library/Cargo.toml /tmp/rust-gvm-e2e-tests/tests/library/Cargo.toml
 COPY Cargo.lock /tmp/rust-gvm-e2e-tests/Cargo.lock
 COPY tests/library/src /tmp/rust-gvm-e2e-tests/tests/library/src
-COPY baselines /tmp/rust-gvm-e2e-tests/baselines
+COPY contracts /tmp/rust-gvm-e2e-tests/contracts
+COPY coverage/feature-catalog.json /tmp/rust-gvm-e2e-tests/coverage/feature-catalog.json
 COPY fixtures /tmp/rust-gvm-e2e-tests/fixtures
 COPY tools/prepare_rust_gvm_candidate.py /tmp/rust-gvm-e2e-tests/tools/prepare_rust_gvm_candidate.py
 

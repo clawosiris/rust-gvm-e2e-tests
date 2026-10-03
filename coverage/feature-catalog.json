@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "features": {
+    "ENABLE_AGENTS": {
+      "commands": [
+        "create_agent_group",
+        "delete_agent",
+        "delete_agent_group",
+        "get_agent_groups",
+        "get_agent_installer_instruction",
+        "get_agent_support_bundle",
+        "get_agents",
+        "modify_agent",
+        "modify_agent_control_scan_config",
+        "modify_agent_group",
+        "sync_agents"
+      ],
+      "probe": "agents",
+      "fixture": "agent_endpoint",
+      "scenarios": {
+        "agent-read": {"lane": "devel-fast", "implemented": true},
+        "agent-group-lifecycle": {"lane": "devel-fast", "implemented": true}
+      }
+    },
+    "ENABLE_CONTAINER_SCANNING": {
+      "commands": [
+        "create_oci_image_target",
+        "delete_oci_image_target",
+        "get_oci_image_targets",
+        "modify_oci_image_target"
+      ],
+      "probe": "oci-image-targets",
+      "fixture": "oci_registry",
+      "scenarios": {
+        "oci-target-lifecycle": {"lane": "devel-fast", "implemented": true}
+      }
+    },
+    "ENABLE_CREDENTIAL_STORES": {
+      "commands": [
+        "get_credential_stores",
+        "modify_credential_store",
+        "verify_credential_store"
+      ],
+      "probe": "credential-stores",
+      "fixture": "credential_store",
+      "scenarios": {
+        "credential-store-read": {"lane": "devel-fast", "implemented": true}
+      }
+    },
+    "ENABLE_SECURITY_INTELLIGENCE_EXPORT": {
+      "commands": ["get_integration_configs", "modify_integration_config"],
+      "probe": "integration-configs",
+      "fixture": "export_integration",
+      "scenarios": {
+        "integration-read": {"lane": "devel-fast", "implemented": true}
+      }
+    },
+    "ENABLE_WEB_APPLICATION_SCANNING": {
+      "commands": [
+        "create_web_application_target",
+        "delete_web_application_target",
+        "get_web_application_targets",
+        "modify_web_application_target"
+      ],
+      "probe": "web-application-targets",
+      "fixture": "web_scanner",
+      "scenarios": {
+        "web-target-read": {"lane": "devel-fast", "implemented": true}
+      }
+    },
+    "ENABLE_OPENVASD": {
+      "commands": [],
+      "probe": "openvasd-scanner",
+      "fixture": "network_scan_target",
+      "scenarios": {
+        "openvasd-discovery": {"lane": "devel-fast", "implemented": true},
+        "openvasd-network-scan": {"lane": "devel-scan", "implemented": true}
+      }
+    },
+    "FEED_VT_METADATA": {
+      "commands": [],
+      "probe": "vt-metadata",
+      "fixture": null,
+      "scenarios": {
+        "vt-metadata-read": {"lane": "devel-fast", "implemented": true}
+      }
+    },
+    "ENABLE_JWT_AUTH": {
+      "commands": [],
+      "probe": "jwt-auth",
+      "fixture": "jwt_endpoint",
+      "scenarios": {
+        "jwt-authentication-probe": {"lane": "devel-fast", "implemented": false}
+      }
+    }
+  }
+}

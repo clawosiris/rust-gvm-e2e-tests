@@ -9,7 +9,12 @@ from pathlib import Path
 
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/e2e.yml"
 DOCKERFILE = Path(__file__).parents[1] / "docker/Dockerfile.runner"
-LANE_SCRIPT = Path(__file__).parents[1] / "docker/scripts/run-community-lane.sh"
+LANE_SCRIPT = Path(__file__).parents[1] / "docker/scripts/run-deployment-lane.sh"
+RUNTIME_IMAGES_SCRIPT = Path(__file__).parents[1] / "tools/runtime_images.py"
+POSTGRES_BOOTSTRAP_SCRIPT = (
+    Path(__file__).parents[1] / "docker/scripts/postgres-bootstrap.sh"
+)
+REUSABLE_WORKFLOW = Path(__file__).parents[1] / ".github/workflows/deployment-e2e.yml"
 WAIT_SCRIPT = Path(__file__).parents[1] / "docker/scripts/wait-ready.sh"
 COMPOSE_FILE = Path(__file__).parents[1] / "docker/docker-compose.yml"
 CARGO_MANIFEST = Path(__file__).parents[1] / "tests/library/Cargo.toml"
@@ -65,7 +70,7 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
             repair = body.index("- name: Restore artifacts directory ownership")
             checkout = body.index("- uses: actions/checkout@")
             lane = body.index(
-                f"- run: bash docker/scripts/run-community-lane.sh {job}"
+                f"- run: bash docker/scripts/run-deployment-lane.sh {job}"
             )
             self.assertLess(download, load)
             self.assertLess(load, repair)
@@ -117,11 +122,41 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
             self.assertNotIn("${{ runner.temp }}", body)
 
     def test_external_actions_are_immutable(self):
-        workflow = WORKFLOW.read_text(encoding="utf-8")
+        workflow = WORKFLOW.read_text(encoding="utf-8") + REUSABLE_WORKFLOW.read_text(encoding="utf-8")
         actions = re.findall(r"uses:\s+([^\s]+)", workflow)
         self.assertTrue(actions)
         for action in actions:
             self.assertRegex(action, r"^[^@]+@[0-9a-f]{40}$")
+
+    def test_reusable_workflow_has_generic_provider_contract(self):
+        workflow = REUSABLE_WORKFLOW.read_text(encoding="utf-8")
+        lane_script = LANE_SCRIPT.read_text(encoding="utf-8")
+        for value in (
+            "workflow_call:",
+            "harness-ref:",
+            "deployment-id:",
+            "contract-path:",
+            "fixture-descriptor-path:",
+            "provider-mode:",
+            "provider-descriptor-path:",
+            "compose-files:",
+            "runtime-image-version:",
+            "scan-target-host:",
+            "oci-image-reference:",
+            "readiness-timeout-seconds:",
+            "task-progress-timeout-seconds:",
+            "E2E (${{ inputs.deployment-id }}/${{ matrix.lane }})",
+            "run-deployment-lane.sh",
+        ):
+            self.assertIn(value, workflow)
+        self.assertNotIn("enterprise image", workflow.lower())
+        self.assertNotIn("registry password", workflow.lower())
+        self.assertRegex(
+            workflow,
+            r"ref: \$\{\{ github\.sha \}\}\n\s+path: provider\n\s+clean: false",
+        )
+        self.assertIn("org.opencontainers.image.revision", lane_script)
+        self.assertIn("runner image rust-gvm revision does not match", lane_script)
 
     def test_workflow_keeps_reviewed_default_and_supports_exact_candidates(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -174,14 +209,36 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
     def test_repaired_main_shared_state_and_readiness_contract_is_preserved(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         lane_script = LANE_SCRIPT.read_text(encoding="utf-8")
+        runtime_images_script = RUNTIME_IMAGES_SCRIPT.read_text(encoding="utf-8")
+        postgres_bootstrap_script = POSTGRES_BOOTSTRAP_SCRIPT.read_text(
+            encoding="utf-8"
+        )
         wait_script = WAIT_SCRIPT.read_text(encoding="utf-8")
 
         self.assertIn("branches: [main]", workflow)
         self.assertIn("group: rust-gvm-e2e-shared-compose-state", workflow)
         for job in SELF_HOSTED_LANES:
             self.assertIn("timeout-minutes: 420", self.jobs()[job])
-        self.assertIn("ALTER SYSTEM SET max_wal_size = '16GB'", lane_script)
-        self.assertIn("ALTER SYSTEM SET checkpoint_timeout = '30min'", lane_script)
+        self.assertIn("deployment_compose up -d pg-gvm", lane_script)
+        self.assertNotIn("up -d --wait --wait-timeout 300 pg-gvm", lane_script)
+        self.assertIn("wait_for_postgres_bootstrap", lane_script)
+        self.assertIn(
+            'PGCTLTIMEOUT: "${E2E_POSTGRES_BOOTSTRAP_TIMEOUT_SECS:-600}"',
+            COMPOSE_FILE.read_text(encoding="utf-8"),
+        )
+        self.assertNotIn('--project-directory "$(pwd)"', lane_script)
+        self.assertIn("validate_compose_workspace.py", workflow)
+        self.assertIn("--expected-workspace \"$(pwd -P)\"", workflow)
+        self.assertIn(
+            'parser.add_argument("--project-directory")', runtime_images_script
+        )
+        self.assertIn(
+            "ALTER SYSTEM SET max_wal_size = '16GB'", postgres_bootstrap_script
+        )
+        self.assertIn(
+            "ALTER SYSTEM SET checkpoint_timeout = '30min'",
+            postgres_bootstrap_script,
+        )
         self.assertIn("CHECKPOINT;", lane_script)
         self.assertIn(
             'READINESS_TIMEOUT_SECS="${E2E_READINESS_TIMEOUT_SECS:-21000}"',

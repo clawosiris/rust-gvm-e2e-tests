@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 Greenbone AG
-"""Generate and drift-check the Community command/helper coverage manifest."""
+"""Generate and drift-check the deployment-neutral coverage manifest."""
 
 from __future__ import annotations
 
@@ -21,13 +21,13 @@ DISPOSITIONS = {
     "nightly-live",
     "isolated-live",
     "known-upstream-bug",
-    "conditional-community",
-    "excluded-community",
+    "conditional-availability",
+    "capability-selected",
 }
 
 SURFACE_STATUSES = {"current", "removed", "replaced"}
 
-EXCLUDED_COMMANDS = {
+HISTORICAL_FEATURE_COMMANDS = {
     "create_agent_group",
     "delete_agent",
     "delete_agent_group",
@@ -44,6 +44,56 @@ EXCLUDED_COMMANDS = {
     "get_oci_image_targets",
     "modify_oci_image_target",
 }
+
+# Feature-gated operations that the public harness can execute safely with the
+# generic fixture contract. Any other enabled catalog command is a coverage gap.
+IMPLEMENTED_FEATURE_COMMANDS = {
+    "create_agent_group",
+    "delete_agent_group",
+    "get_agent_groups",
+    "get_agents",
+    "modify_agent_group",
+    "create_oci_image_target",
+    "delete_oci_image_target",
+    "get_oci_image_targets",
+    "modify_oci_image_target",
+    "get_credential_stores",
+    "get_integration_configs",
+    "get_web_application_targets",
+}
+
+FEATURE_CATALOG_PATH = ROOT / "coverage/feature-catalog.json"
+
+
+def load_feature_catalog() -> dict[str, object]:
+    catalog = json.loads(FEATURE_CATALOG_PATH.read_text(encoding="utf-8"))
+    if catalog.get("schema_version") != 1 or not isinstance(catalog.get("features"), dict):
+        raise ValueError("feature catalog must use schema_version 1 and contain features")
+    return catalog
+
+
+def feature_command_map(catalog: dict[str, object] | None = None) -> dict[str, str]:
+    catalog = catalog or load_feature_catalog()
+    result: dict[str, str] = {}
+    for feature, entry in catalog["features"].items():  # type: ignore[union-attr]
+        scenarios = entry.get("scenarios")
+        if not isinstance(scenarios, dict) or not scenarios:
+            raise ValueError(f"feature {feature} has no scenario mapping")
+        for scenario, requirement in scenarios.items():
+            if (
+                not isinstance(requirement, dict)
+                or set(requirement) != {"lane", "implemented"}
+                or requirement.get("lane") not in {"devel-fast", "devel-scan"}
+                or not isinstance(requirement.get("implemented"), bool)
+            ):
+                raise ValueError(
+                    f"feature {feature} scenario {scenario} has invalid requirements"
+                )
+        for command in entry.get("commands", []):
+            if command in result:
+                raise ValueError(f"command {command} belongs to multiple features")
+            result[command] = feature
+    return result
 
 CONDITIONAL_COMMANDS = {
     "create_web_application_target",
@@ -74,6 +124,32 @@ CONDITIONAL_COMMANDS = {
     "modify_web_application_target",
     "sync_config",
     "verify_credential_store",
+}
+
+# Registered commands that remain discovery-visible but do not have a safe,
+# deterministic live execution path in the public harness. The planner emits
+# them as explicit not-selected entries even when help advertises them.
+UNIMPLEMENTED_DISCOVERY_COMMANDS = {
+    "export_scan_report",
+    "get_license",
+    "get_timezones",
+    "modify_license",
+    "sync_config",
+}
+
+SCAN_CONDITIONAL_COMMANDS = {
+    "export_scan_report",
+    "get_report_applications",
+    "get_report_closed_cves",
+    "get_report_cves",
+    "get_report_errors",
+    "get_report_hosts",
+    "get_report_operating_systems",
+    "get_report_ports",
+    "get_report_tls_certificates",
+    "get_report_vulns",
+    "get_reports",
+    "get_scan_report",
 }
 
 NIGHTLY_COMMANDS = {
@@ -281,10 +357,10 @@ HELPER_WIRE_OVERRIDES = {
 }
 
 EXTRA_HELPERS = {
-    "create_agent_group_task": ("create_task", "excluded-community"),
-    "create_container_image_task": ("create_task", "excluded-community"),
-    "create_container_task": ("create_task", "excluded-community"),
-    "create_oci_image_target_task": ("create_task", "excluded-community"),
+    "create_agent_group_task": ("create_task", "capability-selected"),
+    "create_container_image_task": ("create_task", "capability-selected"),
+    "create_container_task": ("create_task", "capability-selected"),
+    "create_oci_image_target_task": ("create_task", "capability-selected"),
 }
 
 # This disappeared helper cannot be called through a supported canonical
@@ -296,10 +372,19 @@ DIRECT_CLIENT_HELPERS: set[str] = set()
 
 HELPER_DISPOSITION_OVERRIDES = {
     **{name: disposition for name, (_, disposition) in EXTRA_HELPERS.items()},
-    "create_credential_store_credential": "conditional-community",
-    "get_report_export": "conditional-community",
-    "get_report_export_with_opts": "conditional-community",
-    "modify_credential_store_credential": "conditional-community",
+    "create_credential_store_credential": "capability-selected",
+    "get_report_export": "conditional-availability",
+    "get_report_export_with_opts": "conditional-availability",
+    "modify_credential_store_credential": "capability-selected",
+}
+
+HELPER_FEATURE_OVERRIDES = {
+    "create_agent_group_task": "ENABLE_AGENTS",
+    "create_container_image_task": "ENABLE_CONTAINER_SCANNING",
+    "create_container_task": "ENABLE_CONTAINER_SCANNING",
+    "create_oci_image_target_task": "ENABLE_CONTAINER_SCANNING",
+    "create_credential_store_credential": "ENABLE_CREDENTIAL_STORES",
+    "modify_credential_store_credential": "ENABLE_CREDENTIAL_STORES",
 }
 
 
@@ -310,14 +395,18 @@ class Entry:
     disposition: str
     lane: str
     rationale: str
+    requires: tuple[str, ...] = ()
+    implemented: bool = True
 
-    def as_json(self) -> dict[str, str]:
+    def as_json(self) -> dict[str, object]:
         return {
             "name": self.name,
             "wire_command": self.wire_command,
             "disposition": self.disposition,
             "lane": self.lane,
             "rationale": self.rationale,
+            "requires": list(self.requires),
+            "implemented": self.implemented,
         }
 
 
@@ -376,8 +465,10 @@ def typed_helpers(source: Path) -> list[str]:
 
 
 def command_disposition(name: str) -> str:
+    feature_commands = feature_command_map()
+    if name in feature_commands:
+        return "capability-selected"
     classes = [
-        name in EXCLUDED_COMMANDS,
         name in KNOWN_UPSTREAM_BUG_COMMANDS,
         name in CONDITIONAL_COMMANDS,
         name in NIGHTLY_COMMANDS,
@@ -386,26 +477,26 @@ def command_disposition(name: str) -> str:
     if sum(classes) > 1:
         raise ValueError(f"{name} appears in more than one disposition policy")
     if classes[0]:
-        return "excluded-community"
-    if classes[1]:
         return "known-upstream-bug"
+    if classes[1]:
+        return "conditional-availability"
     if classes[2]:
-        return "conditional-community"
-    if classes[3]:
         return "nightly-live"
-    if classes[4]:
+    if classes[3]:
         return "isolated-live"
     return "blocking-live"
 
 
-def lane_for(disposition: str) -> str:
+def lane_for(disposition: str, wire_command: str = "") -> str:
+    if disposition == "conditional-availability" and wire_command in SCAN_CONDITIONAL_COMMANDS:
+        return "devel-scan"
     return {
         "blocking-live": "devel-fast",
         "nightly-live": "devel-scan",
         "isolated-live": "devel-isolated",
         "known-upstream-bug": "none",
-        "conditional-community": "discovery-selected",
-        "excluded-community": "none",
+        "conditional-availability": "devel-fast",
+        "capability-selected": "devel-fast",
     }[disposition]
 
 
@@ -414,6 +505,11 @@ def rationale_for(name: str, disposition: str) -> str:
         return (
             "Advertised typed mutation is discovery-visible but not executed until "
             "the pinned API provides cleanup-safe export reconciliation."
+        )
+    if name in UNIMPLEMENTED_DISCOVERY_COMMANDS:
+        return (
+            "Advertised surface is retained as explicit discovery evidence but is not selected "
+            "without a deterministic public execution path."
         )
     return {
         "blocking-live": "Expected Community capability exercised by the warm-volume blocking lane.",
@@ -424,8 +520,8 @@ def rationale_for(name: str, disposition: str) -> str:
             "closed create_report_config connections in runs 36611076644 and 36665378965; "
             "exact-name reconciliation found no persisted object, so this mutation family is not executed."
         ),
-        "conditional-community": "Availability is decided only by recorded get_version/get_features/help evidence.",
-        "excluded-community": "Explicit issue #118 Community boundary: agent or OCI/container-image capability.",
+        "conditional-availability": "Availability is decided by recorded version, feature, help, and probe evidence.",
+        "capability-selected": "Selection is decided by the deployment contract and feature catalog before mutation.",
     }[disposition]
 
 
@@ -499,6 +595,7 @@ def build_manifest(
 ) -> dict[str, object]:
     commands = command_names(source)
     command_set = set(commands)
+    feature_map = feature_command_map()
     command_entries = []
     for name in commands:
         disposition = command_disposition(name)
@@ -507,8 +604,11 @@ def build_manifest(
                 name=name,
                 wire_command=name,
                 disposition=disposition,
-                lane=lane_for(disposition),
+                lane=lane_for(disposition, name),
                 rationale=rationale_for(name, disposition),
+                requires=(feature_map[name],) if name in feature_map else (),
+                implemented=name not in UNIMPLEMENTED_DISCOVERY_COMMANDS
+                and (name not in feature_map or name in IMPLEMENTED_FEATURE_COMMANDS),
             )
         )
 
@@ -521,8 +621,15 @@ def build_manifest(
                 name=name,
                 wire_command=wire,
                 disposition=disposition,
-                lane=lane_for(disposition),
+                lane=lane_for(disposition, wire),
                 rationale=rationale_for(name, disposition),
+                requires=(HELPER_FEATURE_OVERRIDES[name],)
+                if name in HELPER_FEATURE_OVERRIDES
+                else (feature_map[wire],)
+                if wire in feature_map
+                else (),
+                implemented=wire not in UNIMPLEMENTED_DISCOVERY_COMMANDS
+                and (wire not in feature_map or wire in IMPLEMENTED_FEATURE_COMMANDS),
             )
         )
     helper_entries.sort(key=lambda entry: entry.name)
@@ -531,21 +638,31 @@ def build_manifest(
         previous_helpers or [], helper_names, command_set
     )
 
-    if set(EXCLUDED_COMMANDS) != {
-        entry.name for entry in command_entries if entry.disposition == "excluded-community"
-    }:
-        raise ValueError("hard command exclusions drifted from the issue #118 boundary")
+    if not HISTORICAL_FEATURE_COMMANDS <= set(feature_map):
+        raise ValueError("historical feature commands are missing from the catalog")
     if any(entry.disposition not in DISPOSITIONS for entry in command_entries + helper_entries):
         raise ValueError("unknown disposition")
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "rust_gvm_sha": git_sha(source),
         "registry_count": len(command_entries),
         "typed_helper_count": len(helper_entries),
         "helper_variant_count": sum(name in EXTRA_HELPERS for name in helper_names),
         "replaced_helper_count": sum(item.status == "replaced" for item in migrations),
         "removed_helper_count": sum(item.status == "removed" for item in migrations),
+        "feature_catalog": load_feature_catalog()["features"],
+        "scenarios": [
+            {
+                "name": scenario,
+                "feature": feature,
+                "lane": requirement["lane"],
+                "requires": [feature],
+                "implemented": requirement["implemented"],
+            }
+            for feature, entry in load_feature_catalog()["features"].items()  # type: ignore[union-attr]
+            for scenario, requirement in entry["scenarios"].items()
+        ],
         "commands": [entry.as_json() for entry in command_entries],
         "helpers": [entry.as_json() for entry in helper_entries],
         "helper_migrations": [entry.as_json() for entry in migrations],
@@ -567,7 +684,7 @@ def render_markdown(manifest: dict[str, object]) -> str:
         for disposition in sorted(DISPOSITIONS)
     }
     lines = [
-        "# Generated Community Coverage Manifest",
+        "# Generated Deployment Coverage Manifest",
         "",
         "<!-- Generated by tools/coverage_manifest.py; do not edit manually. -->",
         "",
@@ -591,12 +708,13 @@ def render_markdown(manifest: dict[str, object]) -> str:
             "",
             "## Wire commands",
             "",
-            "| Command | Disposition | Lane |",
-            "|---|---|---|",
+            "| Command | Disposition | Lane | Requirements |",
+            "|---|---|---|---|",
         ]
     )
     lines.extend(
-        f"| `{item['name']}` | `{item['disposition']}` | `{item['lane']}` |"
+        f"| `{item['name']}` | `{item['disposition']}` | `{item['lane']}` | "
+        f"{', '.join(f'`{value}`' for value in item['requires']) or '—'} |"
         for item in commands  # type: ignore[union-attr]
     )
     known_bug_commands = [
@@ -623,12 +741,13 @@ def render_markdown(manifest: dict[str, object]) -> str:
             "",
             "## Public helpers and helper variants",
             "",
-            "| Helper | Wire command | Disposition | Lane |",
-            "|---|---|---|---|",
+            "| Helper | Wire command | Disposition | Lane | Requirements |",
+            "|---|---|---|---|---|",
         ]
     )
     lines.extend(
-        f"| `{item['name']}` | `{item['wire_command']}` | `{item['disposition']}` | `{item['lane']}` |"
+        f"| `{item['name']}` | `{item['wire_command']}` | `{item['disposition']}` | `{item['lane']}` | "
+        f"{', '.join(f'`{value}`' for value in item['requires']) or '—'} |"
         for item in helpers  # type: ignore[union-attr]
     )
     lines.extend(
@@ -660,24 +779,28 @@ def render_rust(manifest: dict[str, object]) -> str:
     command_lines = []
     for item in manifest["commands"]:  # type: ignore[union-attr]
         command_lines.append(
-            "    CoverageEntry { name: %s, wire_command: %s, disposition: Disposition::%s, lane: %s },"
+            "    CoverageEntry { name: %s, wire_command: %s, disposition: Disposition::%s, lane: %s, requires: &[%s], implemented: %s },"
             % (
                 rust_string(item["name"]),
                 rust_string(item["wire_command"]),
                 "".join(part.title() for part in item["disposition"].split("-")),
                 rust_string(item["lane"]),
+                ", ".join(rust_string(value) for value in item["requires"]),
+                str(item["implemented"]).lower(),
             )
         )
     helper_lines = []
     helper_refs = []
     for item in manifest["helpers"]:  # type: ignore[union-attr]
         helper_lines.append(
-            "    CoverageEntry { name: %s, wire_command: %s, disposition: Disposition::%s, lane: %s },"
+            "    CoverageEntry { name: %s, wire_command: %s, disposition: Disposition::%s, lane: %s, requires: &[%s], implemented: %s },"
             % (
                 rust_string(item["name"]),
                 rust_string(item["wire_command"]),
                 "".join(part.title() for part in item["disposition"].split("-")),
                 rust_string(item["lane"]),
+                ", ".join(rust_string(value) for value in item["requires"]),
+                str(item["implemented"]).lower(),
             )
         )
         helper_refs.append(

@@ -1,4 +1,4 @@
-# GVM Community E2E Harness
+# GVM deployment E2E harness
 
 This harness runs the Rust GMP client against a real Greenbone Community container stack over the shared `gvmd.sock` Unix socket.
 
@@ -27,7 +27,7 @@ From the repository root, build the pinned runner and use the lane wrapper:
 docker build -f docker/Dockerfile.runner \
   --build-arg RUST_GVM_SHA=b85443167a9fd642b2d91f6f347db048de5aba9c \
   -t rust-gvm-e2e-runner:ci .
-bash docker/scripts/run-community-lane.sh devel-fast
+bash docker/scripts/run-deployment-lane.sh devel-fast
 ```
 
 The wrapper starts and tunes PostgreSQL before gvmd, applies both socket and

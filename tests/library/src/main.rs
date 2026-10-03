@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, Write};
 use std::process::Command;
@@ -20,6 +21,8 @@ use gvm_connection::{
     GvmConnection, SshAuth, SshConfig, SshConnection, TlsClientIdentity, TlsConfig, TlsConnection,
     UnixSocketConnection,
 };
+use gvm_gmp::commands::agent_groups::*;
+use gvm_gmp::commands::agents::*;
 use gvm_gmp::commands::aggregates::*;
 use gvm_gmp::commands::alerts::*;
 use gvm_gmp::commands::assets::*;
@@ -33,6 +36,7 @@ use gvm_gmp::commands::help::{HelpMode, HelpRequest};
 use gvm_gmp::commands::hosts::*;
 use gvm_gmp::commands::notes::*;
 use gvm_gmp::commands::nvts::*;
+use gvm_gmp::commands::oci_image_targets::*;
 use gvm_gmp::commands::operating_systems::*;
 use gvm_gmp::commands::overrides::*;
 use gvm_gmp::commands::permissions::*;
@@ -81,10 +85,14 @@ use thiserror::Error;
 use tokio::runtime::Builder;
 use tokio::time::{sleep, Instant};
 
+use gvm_community_e2e::capability::{
+    build_plan, parse_feature_evidence, CommandSupport, DeploymentCapabilities, DeploymentContract,
+    Evidence, FeatureCatalog, FixtureDescriptor, PlanDecision, PlanEntryKind, PlanInput,
+    ProbeResult, ProbeState, TestPlan,
+};
 use gvm_community_e2e::runtime::{self, FeatureState, Outcome};
-use gvm_community_e2e::{Disposition, COMMAND_COVERAGE};
-#[cfg(test)]
-use gvm_community_e2e::{HELPER_COVERAGE, HELPER_MIGRATIONS};
+use gvm_community_e2e::HELPER_MIGRATIONS;
+use gvm_community_e2e::{Disposition, COMMAND_COVERAGE, HELPER_COVERAGE};
 
 fn tls_certificate_data() -> Vec<u8> {
     include_bytes!("../../../fixtures/e2e-certificate.pem").to_vec()
@@ -145,44 +153,51 @@ async fn async_main() -> Result<(), AppError> {
         }
         Mode::Fast => {
             let mut tracker = CleanupTracker::new(config.clone());
+            let plan = discover_deployment(&config, mode.lane_name()).await?;
             cleanup_previous_runs(&config).await?;
-            discover_community(&config).await?;
+            run_dynamic_capability_scenarios(&config, &mut tracker, &plan).await?;
             run_typed_read_suite(&config).await?;
             run_config_scanner_lifecycles(&config, &mut tracker).await?;
             run_smoke_suite(&config, &mut tracker).await?;
             run_crud_suite(&config, &mut tracker).await?;
             run_secinfo_suite(&config).await?;
             tracker.cleanup_now().await?;
-            log_line("Community devel-fast lane passed");
+            reconcile_executed_plan(&plan)?;
+            log_line("Deployment devel-fast lane passed");
         }
         Mode::Scan => {
             let mut tracker = CleanupTracker::new(config.clone());
+            let plan = discover_deployment(&config, mode.lane_name()).await?;
             cleanup_previous_runs(&config).await?;
-            discover_community(&config).await?;
             let mut client = connect_client(&config).await?;
-            run_scan_suite(&mut client, &config, &mut tracker).await?;
+            run_scan_suite(&mut client, &config, &mut tracker, Some(&plan)).await?;
             client.disconnect().await?;
             tracker.cleanup_now().await?;
-            log_line("Community devel-scan lane passed");
+            reconcile_executed_plan(&plan)?;
+            log_line("Deployment devel-scan lane passed");
         }
         Mode::Isolated => {
             let mut tracker = CleanupTracker::new(config.clone());
+            let plan = discover_deployment(&config, mode.lane_name()).await?;
             cleanup_previous_runs(&config).await?;
-            discover_community(&config).await?;
             run_isolated_suite(&config, &mut tracker).await?;
             tracker.cleanup_now().await?;
-            log_line("Community devel-isolated lane passed");
+            reconcile_executed_plan(&plan)?;
+            log_line("Deployment devel-isolated lane passed");
         }
         Mode::Transport => {
+            let plan = discover_deployment(&config, mode.lane_name()).await?;
             run_transport_suite(&config).await?;
-            log_line("Community devel-transport lane completed");
+            reconcile_executed_plan(&plan)?;
+            log_line("Deployment devel-transport lane completed");
         }
         Mode::Differential => {
             let mut tracker = CleanupTracker::new(config.clone());
+            let plan = discover_deployment(&config, mode.lane_name()).await?;
             cleanup_previous_runs(&config).await?;
-            discover_community(&config).await?;
             run_differential_suite(&config, &mut tracker).await?;
             tracker.cleanup_now().await?;
+            reconcile_executed_plan(&plan)?;
             log_line("E2E differential suite completed");
         }
         Mode::All => {
@@ -398,6 +413,8 @@ struct CleanupTracker {
     ticket_ids: Vec<String>,
     asset_ids: Vec<String>,
     group_ids: Vec<String>,
+    agent_group_ids: Vec<String>,
+    oci_image_target_ids: Vec<String>,
     permission_ids: Vec<String>,
     report_format_ids: Vec<String>,
     role_ids: Vec<String>,
@@ -444,6 +461,8 @@ impl CleanupTracker {
             ticket_ids: Vec::new(),
             asset_ids: Vec::new(),
             group_ids: Vec::new(),
+            agent_group_ids: Vec::new(),
+            oci_image_target_ids: Vec::new(),
             permission_ids: Vec::new(),
             report_format_ids: Vec::new(),
             role_ids: Vec::new(),
@@ -470,6 +489,8 @@ impl CleanupTracker {
             && self.ticket_ids.is_empty()
             && self.asset_ids.is_empty()
             && self.group_ids.is_empty()
+            && self.agent_group_ids.is_empty()
+            && self.oci_image_target_ids.is_empty()
             && self.permission_ids.is_empty()
             && self.report_format_ids.is_empty()
             && self.role_ids.is_empty()
@@ -537,6 +558,14 @@ impl CleanupTracker {
 
     fn track_group(&mut self, id: &EntityId) {
         self.group_ids.push(id.to_string());
+    }
+
+    fn track_agent_group(&mut self, id: &EntityId) {
+        self.agent_group_ids.push(id.to_string());
+    }
+
+    fn track_oci_image_target(&mut self, id: &EntityId) {
+        self.oci_image_target_ids.push(id.to_string());
     }
 
     fn track_permission(&mut self, id: &EntityId) {
@@ -615,6 +644,28 @@ impl CleanupTracker {
                 .await?;
             log_cleanup_result("delete_target", &target_id, Some(response.status))?;
             self.target_ids.pop();
+        }
+
+        while let Some(oci_target_id) = self.oci_image_target_ids.last().cloned() {
+            let entity_id = parse_entity_id(&oci_target_id)?;
+            let response = client
+                .execute(DeleteOciImageTargetRequest::new(entity_id, true))
+                .await?;
+            log_cleanup_result(
+                "delete_oci_image_target",
+                &oci_target_id,
+                Some(response.status),
+            )?;
+            self.oci_image_target_ids.pop();
+        }
+
+        while let Some(agent_group_id) = self.agent_group_ids.last().cloned() {
+            let entity_id = parse_entity_id(&agent_group_id)?;
+            let response = client
+                .execute(DeleteAgentGroupRequest::new(entity_id, true))
+                .await?;
+            log_cleanup_result("delete_agent_group", &agent_group_id, Some(response.status))?;
+            self.agent_group_ids.pop();
         }
 
         while let Some(config_id) = self.config_ids.last().cloned() {
@@ -802,6 +853,8 @@ impl Drop for CleanupTracker {
         let ticket_ids = self.ticket_ids.clone();
         let asset_ids = self.asset_ids.clone();
         let group_ids = self.group_ids.clone();
+        let agent_group_ids = self.agent_group_ids.clone();
+        let oci_image_target_ids = self.oci_image_target_ids.clone();
         let permission_ids = self.permission_ids.clone();
         let report_format_ids = self.report_format_ids.clone();
         let role_ids = self.role_ids.clone();
@@ -827,6 +880,8 @@ impl Drop for CleanupTracker {
                 ticket_ids,
                 asset_ids,
                 group_ids,
+                agent_group_ids,
+                oci_image_target_ids,
                 permission_ids,
                 report_format_ids,
                 role_ids,
@@ -1148,13 +1203,396 @@ fn assert_cleanup_status(
     )
 }
 
-async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
+fn read_json<T: serde::de::DeserializeOwned>(
+    path_env: &str,
+    fallback: &str,
+) -> Result<T, AppError> {
+    let contents = match env::var(path_env) {
+        Ok(path) if !path.trim().is_empty() => fs::read_to_string(&path).map_err(|error| {
+            AppError::Assertion(format!("failed to read {path_env} at {path}: {error}"))
+        })?,
+        _ => fallback.to_string(),
+    };
+    serde_json::from_str(&contents)
+        .map_err(|error| AppError::Assertion(format!("invalid {path_env}: {error}")))
+}
+
+fn provider_probe(evidence: &gvm_community_e2e::capability::ProviderEvidence) -> ProbeResult {
+    ProbeResult {
+        state: evidence.state,
+        evidence: Evidence {
+            source: "deployment-provider".to_string(),
+            value: format!("{:?}", evidence.state).to_ascii_lowercase(),
+            detail: evidence.detail.clone(),
+        },
+    }
+}
+
+fn probe_wire_command(name: &str) -> Option<&'static str> {
+    match name {
+        "agents" => Some("get_agents"),
+        "oci-image-targets" => Some("get_oci_image_targets"),
+        "credential-stores" => Some("get_credential_stores"),
+        "integration-configs" => Some("get_integration_configs"),
+        "web-application-targets" => Some("get_web_application_targets"),
+        "openvasd-scanner" => Some("get_scanners"),
+        "vt-metadata" => Some("get_nvts"),
+        "jwt-auth" => None,
+        _ => None,
+    }
+}
+
+fn helper_semantic_name(name: &str) -> &str {
+    match name {
+        "get_report_export_with_opts" => "get_report_export",
+        _ => name,
+    }
+}
+
+fn semantic_eligibility(
+    kind: PlanEntryKind,
+    name: &str,
+    wire_command: Option<&str>,
+    version: GmpVersion,
+) -> (bool, String) {
+    let semantic = match kind {
+        PlanEntryKind::Command => name,
+        PlanEntryKind::Helper => helper_semantic_name(name),
+        PlanEntryKind::Scenario => {
+            return (
+                true,
+                format!("scenario has no typed GMP version gate; negotiated GMP {version}"),
+            );
+        }
+    };
+    let minimum = gvm_gmp::capabilities::minimum_version_for_command(semantic)
+        .or_else(|| wire_command.and_then(gvm_gmp::capabilities::minimum_version_for_command));
+    match minimum {
+        Some(minimum) if version < minimum => (
+            false,
+            format!(
+                "typed semantic {semantic} requires GMP {minimum}; negotiated GMP {version}; no wire request is eligible"
+            ),
+        ),
+        Some(minimum) => (
+            true,
+            format!("typed semantic {semantic} requires GMP {minimum}; negotiated GMP {version}"),
+        ),
+        None => (
+            true,
+            format!("typed semantic has no registry minimum; negotiated GMP {version}"),
+        ),
+    }
+}
+
+fn runtime_helper_path(name: &str) -> bool {
+    matches!(
+        name,
+        "authenticate"
+            | "clone_config"
+            | "clone_report_format"
+            | "clone_scanner"
+            | "create_alert"
+            | "create_asset"
+            | "create_config"
+            | "create_credential"
+            | "create_filter"
+            | "create_group"
+            | "create_host"
+            | "create_note"
+            | "create_override"
+            | "create_permission"
+            | "create_port_list"
+            | "create_port_range"
+            | "create_role"
+            | "create_scan_config"
+            | "create_schedule"
+            | "create_tag"
+            | "create_target"
+            | "create_task"
+            | "create_tls_certificate"
+            | "create_user"
+            | "delete_asset"
+            | "delete_config"
+            | "delete_group"
+            | "delete_permission"
+            | "delete_port_range"
+            | "delete_role"
+            | "delete_scanner"
+            | "delete_target"
+            | "describe_auth"
+            | "empty_trashcan"
+            | "get_aggregates"
+            | "get_alert"
+            | "get_alerts"
+            | "get_asset"
+            | "get_assets"
+            | "get_cert_bund_advisories"
+            | "get_cert_bund_advisory"
+            | "get_config"
+            | "get_configs"
+            | "get_cpe"
+            | "get_cpes"
+            | "get_credentials"
+            | "get_cve"
+            | "get_cves"
+            | "get_dfn_cert_advisories"
+            | "get_dfn_cert_advisory"
+            | "get_feed"
+            | "get_feeds"
+            | "get_filter"
+            | "get_filters"
+            | "get_groups"
+            | "get_help"
+            | "get_hosts"
+            | "get_note"
+            | "get_notes"
+            | "get_nvt_families"
+            | "get_nvts"
+            | "get_operating_system_assets"
+            | "get_override"
+            | "get_overrides"
+            | "get_permissions"
+            | "get_policies"
+            | "get_policy"
+            | "get_port_list"
+            | "get_port_lists"
+            | "get_report"
+            | "get_report_applications"
+            | "get_report_closed_cves"
+            | "get_report_configs"
+            | "get_report_cves"
+            | "get_report_errors"
+            | "get_report_export"
+            | "get_report_formats"
+            | "get_report_hosts"
+            | "get_report_operating_systems"
+            | "get_report_ports"
+            | "get_report_tls_certificates"
+            | "get_report_vulns"
+            | "get_results"
+            | "get_roles"
+            | "get_scan_config"
+            | "get_scan_config_nvt"
+            | "get_scan_config_nvts"
+            | "get_scan_configs"
+            | "get_scan_report"
+            | "get_scanner"
+            | "get_scanners"
+            | "get_schedule"
+            | "get_schedules"
+            | "get_settings"
+            | "get_system_reports"
+            | "get_tag"
+            | "get_tags"
+            | "get_target"
+            | "get_targets"
+            | "get_task"
+            | "get_tasks"
+            | "get_tls_certificates"
+            | "get_users"
+            | "get_version"
+            | "get_vulnerabilities"
+            | "get_vulnerability"
+            | "import_report"
+            | "modify_alert"
+            | "modify_asset"
+            | "modify_config"
+            | "modify_credential"
+            | "modify_filter"
+            | "modify_group"
+            | "modify_note"
+            | "modify_override"
+            | "modify_policy_set_comment"
+            | "modify_policy_set_name"
+            | "modify_port_list"
+            | "modify_report_format"
+            | "modify_role"
+            | "modify_scan_config"
+            | "modify_scan_config_set_comment"
+            | "modify_scan_config_set_name"
+            | "modify_scanner"
+            | "modify_schedule"
+            | "modify_tag"
+            | "modify_target"
+            | "modify_task"
+            | "modify_tls_certificate"
+            | "modify_user"
+            | "restore"
+            | "start_task"
+            | "test_alert"
+            | "verify_report_format"
+            | "verify_scanner"
+    )
+}
+
+fn direct_command_runtime_path(name: &str) -> bool {
+    matches!(
+        name,
+        "get_features"
+            | "get_preferences"
+            | "get_resource_names"
+            | "create_agent_group"
+            | "delete_agent_group"
+            | "get_agent_groups"
+            | "get_agents"
+            | "get_credential_stores"
+            | "get_integration_configs"
+            | "get_web_application_targets"
+            | "modify_agent_group"
+            | "create_oci_image_target"
+            | "delete_oci_image_target"
+            | "get_oci_image_targets"
+            | "modify_oci_image_target"
+            | "delete_user"
+            | "delete_alert"
+            | "delete_credential"
+            | "delete_filter"
+            | "delete_note"
+            | "delete_override"
+            | "delete_schedule"
+            | "delete_tag"
+    )
+}
+
+fn runtime_command_path(name: &str) -> bool {
+    direct_command_runtime_path(name)
+        || HELPER_COVERAGE
+            .iter()
+            .any(|entry| entry.wire_command == name && runtime_helper_path(entry.name))
+}
+
+fn plan_inputs(catalog: &FeatureCatalog, version: GmpVersion) -> Vec<PlanInput> {
+    let command_inputs = COMMAND_COVERAGE.iter().map(|entry| {
+        let (semantic_eligible, semantic_evidence) = semantic_eligibility(
+            PlanEntryKind::Command,
+            entry.name,
+            Some(entry.wire_command),
+            version,
+        );
+        PlanInput {
+            kind: PlanEntryKind::Command,
+            name: entry.name.to_string(),
+            lane: entry.lane.to_string(),
+            feature: entry.requires.first().map(|value| (*value).to_string()),
+            wire_command: Some(entry.wire_command.to_string()),
+            command_optional: entry.disposition == Disposition::ConditionalAvailability,
+            implemented: entry.implemented && runtime_command_path(entry.name),
+            semantic_eligible,
+            semantic_evidence,
+        }
+    });
+    let helper_inputs = HELPER_COVERAGE.iter().map(|entry| {
+        let (semantic_eligible, semantic_evidence) = semantic_eligibility(
+            PlanEntryKind::Helper,
+            entry.name,
+            Some(entry.wire_command),
+            version,
+        );
+        PlanInput {
+            kind: PlanEntryKind::Helper,
+            name: entry.name.to_string(),
+            lane: entry.lane.to_string(),
+            feature: entry.requires.first().map(|value| (*value).to_string()),
+            wire_command: Some(entry.wire_command.to_string()),
+            command_optional: entry.disposition == Disposition::ConditionalAvailability,
+            implemented: entry.implemented && runtime_helper_path(entry.name),
+            semantic_eligible,
+            semantic_evidence,
+        }
+    });
+    let migrated_helper_inputs = HELPER_MIGRATIONS.iter().filter_map(|migration| {
+        let command = COMMAND_COVERAGE
+            .iter()
+            .find(|entry| entry.name == migration.wire_command)?;
+        let (semantic_eligible, semantic_evidence) = semantic_eligibility(
+            PlanEntryKind::Helper,
+            migration.name,
+            Some(migration.wire_command),
+            version,
+        );
+        Some(PlanInput {
+            kind: PlanEntryKind::Helper,
+            name: migration.name.to_string(),
+            lane: command.lane.to_string(),
+            feature: None,
+            wire_command: Some(migration.wire_command.to_string()),
+            command_optional: command.disposition == Disposition::ConditionalAvailability,
+            implemented: false,
+            semantic_eligible,
+            semantic_evidence,
+        })
+    });
+    let scenario_inputs = catalog.features.iter().flat_map(|(feature, mapping)| {
+        mapping
+            .scenarios
+            .iter()
+            .map(|(scenario, requirement)| PlanInput {
+                kind: PlanEntryKind::Scenario,
+                name: scenario.clone(),
+                lane: requirement.lane.clone(),
+                feature: Some(feature.clone()),
+                wire_command: None,
+                command_optional: false,
+                implemented: requirement.implemented,
+                semantic_eligible: true,
+                semantic_evidence: format!(
+                    "scenario has no typed GMP version gate; negotiated GMP {version}"
+                ),
+            })
+    });
+    command_inputs
+        .chain(helper_inputs)
+        .chain(migrated_helper_inputs)
+        .chain(scenario_inputs)
+        .collect()
+}
+
+fn validate_selected_inputs(plan: &TestPlan) -> Result<(), String> {
+    let oci_selected = plan.entries.iter().any(|entry| {
+        entry.kind == PlanEntryKind::Scenario
+            && entry.name == "oci-target-lifecycle"
+            && entry.decision == PlanDecision::Selected
+    });
+    if oci_selected
+        && env::var("E2E_OCI_IMAGE_REFERENCE")
+            .ok()
+            .is_none_or(|value| value.trim().is_empty())
+    {
+        return Err(
+            "selected OCI scenario requires non-secret E2E_OCI_IMAGE_REFERENCE before mutation"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan, AppError> {
+    runtime::validate_runtime_images().map_err(AppError::Assertion)?;
+    let contract: DeploymentContract = read_json(
+        "E2E_DEPLOYMENT_CONTRACT_PATH",
+        include_str!("../../../contracts/community-stable.json"),
+    )?;
+    let catalog: FeatureCatalog =
+        serde_json::from_str(include_str!("../../../coverage/feature-catalog.json"))
+            .map_err(|error| AppError::Assertion(format!("invalid feature catalog: {error}")))?;
+    let descriptor: FixtureDescriptor = read_json(
+        "E2E_FIXTURE_DESCRIPTOR_PATH",
+        include_str!("../../../fixtures/community-provider.json"),
+    )?;
+    let deployment_id =
+        env::var("E2E_DEPLOYMENT_ID").unwrap_or_else(|_| "community-stable".to_string());
+    ensure(
+        contract.deployment_id == deployment_id && descriptor.deployment_id == deployment_id,
+        "deployment ID, contract, and fixture descriptor must match",
+    )?;
+
     let mut client = connect_client(config).await?;
     let version_response = client.get_version(GetVersionRequest::new()).await?;
     let version = parse_version_text(&version_response.version)?;
     ensure(
         version >= GmpVersion(22, 4),
-        &format!("unsupported Community GMP version {version}"),
+        &format!("unsupported deployment GMP version {version}"),
     )?;
 
     let auth = client
@@ -1171,24 +1609,23 @@ async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
         "typed text help did not return a nonempty 200 response",
     )?;
 
-    let feature_response = client
-        .execute(gvm_gmp::commands::features::GetFeaturesRequest)
-        .await?;
+    let feature_response = client.send(XmlCommand::new("get_features")).await?;
     ensure(
-        feature_response.status == 200,
-        "typed get_features did not return 200",
+        feature_response.status_code() == Some(200),
+        "raw get_features did not return 200",
     )?;
-    let features: BTreeMap<String, FeatureState> = feature_response
-        .features
-        .into_iter()
-        .map(|feature| {
-            (
-                feature.name,
+    let observed_features =
+        parse_feature_evidence(feature_response.data()).map_err(AppError::Assertion)?;
+    let features: BTreeMap<String, FeatureState> = observed_features
+        .iter()
+        .filter_map(|(name, feature)| {
+            Some((
+                name.clone(),
                 FeatureState {
-                    compiled_in: feature.compiled_in,
-                    enabled: feature.enabled,
+                    compiled_in: feature.compiled_in?,
+                    enabled: feature.enabled?,
                 },
-            )
+            ))
         })
         .collect();
 
@@ -1208,6 +1645,24 @@ async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
         .into_iter()
         .map(|command| canonical_help_command(&command.name))
         .collect();
+    let commands = COMMAND_COVERAGE
+        .iter()
+        .map(|entry| {
+            let advertised =
+                entry.name == "get_features" || help_commands.contains(entry.wire_command);
+            (
+                entry.name.to_string(),
+                CommandSupport {
+                    advertised,
+                    evidence: Evidence {
+                        source: "authenticated-help".to_string(),
+                        value: advertised.to_string(),
+                        detail: format!("wire command {}", entry.wire_command),
+                    },
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     runtime::discovery(
         &version_response.version,
         features.clone(),
@@ -1216,19 +1671,6 @@ async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
     ensure(
         !help_commands.is_empty(),
         "authenticated brief XML help advertised no commands",
-    )?;
-    let required_authenticated_commands = ["get_reports", "get_targets", "get_tasks"];
-    let missing_authenticated_commands = required_authenticated_commands
-        .iter()
-        .filter(|command| !help_commands.contains(**command))
-        .copied()
-        .collect::<Vec<_>>();
-    ensure(
-        missing_authenticated_commands.is_empty(),
-        &format!(
-            "authenticated brief XML help omitted expected Community commands: {}",
-            missing_authenticated_commands.join(", ")
-        ),
     )?;
     let schema_help = client
         .get_help(HelpRequest::new(HelpMode::Schema(
@@ -1260,7 +1702,7 @@ async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
     let mut registry_version_gates = BTreeMap::new();
     for entry in COMMAND_COVERAGE
         .iter()
-        .filter(|entry| entry.disposition == Disposition::ConditionalCommunity)
+        .filter(|entry| entry.disposition == Disposition::ConditionalAvailability)
     {
         let version_available = gvm_gmp::capabilities::command_capability(entry.name)
             .is_some_and(|capability| capability.available_in(version));
@@ -1282,25 +1724,130 @@ async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
     }
 
     runtime::conditional_discovery(conditional_commands.clone(), registry_version_gates.clone());
-    if env_flag("E2E_RECORD_BASELINE") {
-        let path = runtime::write_baseline_candidate(
-            &version_response.version,
-            &features,
-            &help_commands.iter().cloned().collect::<Vec<_>>(),
-            &conditional_commands,
-            &registry_version_gates,
-        )
-        .map_err(AppError::Assertion)?;
-        log_line(&format!("recorded baseline candidate: {}", path.display()));
-    } else {
-        runtime::validate_baseline(
-            &version_response.version,
-            &features,
-            &help_commands.iter().cloned().collect::<Vec<_>>(),
-            &conditional_commands,
-            &registry_version_gates,
-        )
-        .map_err(AppError::Assertion)?;
+    let mut probes = descriptor
+        .probes
+        .iter()
+        .map(|(name, evidence)| (name.clone(), provider_probe(evidence)))
+        .collect::<BTreeMap<_, _>>();
+    for (feature_name, mapping) in &catalog.features {
+        let Some(probe_name) = mapping.probe.as_deref() else {
+            continue;
+        };
+        // A provider may supply out-of-band evidence for probes that cannot be
+        // expressed safely over GMP.  Where a read-only GMP probe exists, run
+        // it directly so caller-supplied metadata cannot outrank observation.
+        if probes.contains_key(probe_name) && probe_wire_command(probe_name).is_none() {
+            continue;
+        }
+        let enabled = observed_features
+            .get(feature_name)
+            .and_then(|feature| feature.enabled)
+            .unwrap_or(false);
+        let result = if !enabled {
+            ProbeResult {
+                state: ProbeState::Unavailable,
+                evidence: Evidence {
+                    source: "get_features".into(),
+                    value: "disabled".into(),
+                    detail: format!("{feature_name} is not enabled"),
+                },
+            }
+        } else if let Some(command) = probe_wire_command(probe_name) {
+            match client.send(XmlCommand::new(command)).await {
+                Ok(response) if response.status_code() == Some(200) => ProbeResult {
+                    state: ProbeState::Ready,
+                    evidence: Evidence {
+                        source: "safe-gmp-probe".into(),
+                        value: "ready".into(),
+                        detail: format!("{command} returned 200"),
+                    },
+                },
+                Ok(response) => ProbeResult {
+                    state: ProbeState::Unhealthy,
+                    evidence: Evidence {
+                        source: "safe-gmp-probe".into(),
+                        value: "unhealthy".into(),
+                        detail: format!("{command} returned {:?}", response.status_code()),
+                    },
+                },
+                Err(error) => ProbeResult {
+                    state: ProbeState::Unhealthy,
+                    evidence: Evidence {
+                        source: "safe-gmp-probe".into(),
+                        value: "unhealthy".into(),
+                        detail: error.to_string(),
+                    },
+                },
+            }
+        } else {
+            ProbeResult {
+                state: ProbeState::Unknown,
+                evidence: Evidence {
+                    source: "deployment-provider".into(),
+                    value: "missing".into(),
+                    detail: format!("provider supplied no {probe_name} evidence"),
+                },
+            }
+        };
+        probes.insert(probe_name.to_string(), result);
+    }
+    let fixtures = descriptor
+        .fixtures
+        .iter()
+        .map(|(name, evidence)| (name.clone(), provider_probe(evidence)))
+        .collect();
+    let capabilities = DeploymentCapabilities {
+        schema_version: 1,
+        deployment_id,
+        gmp_version: Some(version_response.version.clone()),
+        features: observed_features,
+        commands,
+        probes,
+        fixtures,
+    };
+    let plan = match build_plan(
+        &contract,
+        &catalog,
+        &capabilities,
+        lane,
+        plan_inputs(&catalog, version),
+    ) {
+        Ok(plan) => plan,
+        Err(error) => {
+            runtime::publish_planning_failure(&capabilities, &contract, lane, &error)
+                .map_err(AppError::Assertion)?;
+            return Err(AppError::Assertion(error));
+        }
+    };
+    if let Err(error) = validate_selected_inputs(&plan) {
+        runtime::publish_planning_failure(&capabilities, &contract, lane, &error)
+            .map_err(AppError::Assertion)?;
+        return Err(AppError::Assertion(error));
+    }
+    runtime::publish_plan(&capabilities, &contract, &plan).map_err(AppError::Assertion)?;
+
+    record_helper_executions(
+        &["get_version", "authenticate", "get_help"],
+        "deployment discovery executed the typed helper successfully",
+    )?;
+    record_command_execution(
+        "get_features",
+        "deployment discovery executed raw get_features successfully",
+    )?;
+    for (scenario, command) in [
+        ("credential-store-read", "get_credential_stores"),
+        ("integration-read", "get_integration_configs"),
+        ("web-target-read", "get_web_application_targets"),
+    ] {
+        if selected_scenario(&plan, scenario) {
+            record_command_execution(command, "selected safe GMP readiness probe returned 200")?;
+            record_scenario_execution(scenario, "selected safe GMP readiness probe returned 200");
+        }
+    }
+    for scenario in ["openvasd-discovery", "vt-metadata-read"] {
+        if selected_scenario(&plan, scenario) {
+            record_scenario_execution(scenario, "selected safe GMP readiness probe returned 200");
+        }
     }
 
     log_pass(
@@ -1312,6 +1859,235 @@ async fn discover_community(config: &EnvConfig) -> Result<(), AppError> {
             help_commands.len()
         ),
     );
+    client.disconnect().await?;
+    Ok(plan)
+}
+
+fn current_lane() -> Option<String> {
+    runtime::snapshot().map(|report| report.lane)
+}
+
+fn record_command_execution(name: &str, evidence: &str) -> Result<(), AppError> {
+    let entry = COMMAND_COVERAGE
+        .iter()
+        .find(|entry| entry.name == name)
+        .ok_or_else(|| AppError::Assertion(format!("unknown executed command {name}")))?;
+    if runtime_command_path(name) && current_lane().as_deref() == Some(entry.lane) {
+        runtime::record_execution(PlanEntryKind::Command, name, evidence);
+    }
+    Ok(())
+}
+
+fn record_helper_execution(name: &str, evidence: &str) -> Result<(), AppError> {
+    let entry = HELPER_COVERAGE
+        .iter()
+        .find(|entry| entry.name == name)
+        .ok_or_else(|| AppError::Assertion(format!("unknown executed helper {name}")))?;
+    if runtime_helper_path(name) && current_lane().as_deref() == Some(entry.lane) {
+        runtime::record_execution(PlanEntryKind::Helper, name, evidence);
+    }
+    record_command_execution(entry.wire_command, evidence)
+}
+
+fn record_helper_executions(names: &[&str], evidence: &str) -> Result<(), AppError> {
+    for name in names {
+        record_helper_execution(name, evidence)?;
+    }
+    Ok(())
+}
+
+fn record_scenario_execution(name: &str, evidence: &str) {
+    runtime::record_execution(PlanEntryKind::Scenario, name, evidence);
+}
+
+fn reconcile_executed_plan(plan: &TestPlan) -> Result<(), AppError> {
+    runtime::reconcile_plan(plan).map_err(AppError::Assertion)
+}
+
+fn selected_scenario(plan: &TestPlan, name: &str) -> bool {
+    plan.entries.iter().any(|entry| {
+        entry.kind == PlanEntryKind::Scenario
+            && entry.name == name
+            && entry.decision == PlanDecision::Selected
+    })
+}
+
+async fn run_dynamic_capability_scenarios(
+    config: &EnvConfig,
+    tracker: &mut CleanupTracker,
+    plan: &TestPlan,
+) -> Result<(), AppError> {
+    let agents =
+        selected_scenario(plan, "agent-read") || selected_scenario(plan, "agent-group-lifecycle");
+    let oci = selected_scenario(plan, "oci-target-lifecycle");
+    if !agents && !oci {
+        return Ok(());
+    }
+    let mut client = connect_client(config).await?;
+    let auth = client
+        .authenticate(AuthenticateRequest::new(&config.username, &config.password))
+        .await?;
+    ensure(
+        auth.status == 200,
+        "capability scenario authentication failed",
+    )?;
+
+    if agents {
+        let existing = client.execute(GetAgentGroupsRequest::default()).await?;
+        ensure(existing.status == 200, "agent-group preflight read failed")?;
+        for group in existing.items {
+            if is_e2e_owned_value(&group.meta.name) {
+                let deleted = client
+                    .execute(DeleteAgentGroupRequest::new(group.meta.id.clone(), true))
+                    .await?;
+                ensure(
+                    matches!(deleted.status, 200 | 404),
+                    "stale agent-group cleanup failed",
+                )?;
+            }
+        }
+        let response = client.execute(GetAgentsRequest::default()).await?;
+        ensure(response.status == 200, "agent readiness read failed")?;
+        log_pass(
+            "agent-read",
+            &format!(
+                "typed get_agents returned {} agent(s)",
+                response.items.len()
+            ),
+        );
+        let agent_ids = response
+            .items
+            .iter()
+            .take(1)
+            .map(|agent| agent.meta.id.clone())
+            .collect();
+        let mut create =
+            CreateAgentGroupRequest::new(config.name("agent-group"), agent_ids, "0 */6 * * *");
+        create.comment = Some("rust-gvm dynamic capability E2E".to_string());
+        let created = client.execute(create).await?;
+        ensure(
+            created.status == 201,
+            "create_agent_group did not return 201",
+        )?;
+        tracker.track_agent_group(&created.id);
+        let detail = client
+            .execute(GetAgentGroupRequest::new(created.id.clone()))
+            .await?;
+        ensure(
+            detail.status == 200 && detail.items.iter().any(|item| item.meta.id == created.id),
+            "created agent group was not readable",
+        )?;
+        let mut modify = ModifyAgentGroupRequest::new(created.id.clone(), "0 */12 * * *");
+        modify.comment = Some("rust-gvm dynamic capability E2E modified".to_string());
+        let modified = client.execute(modify).await?;
+        ensure(
+            modified.status == 200,
+            "modify_agent_group did not return 200",
+        )?;
+        let deleted = client
+            .execute(DeleteAgentGroupRequest::new(created.id.clone(), true))
+            .await?;
+        ensure(
+            deleted.status == 200,
+            "delete_agent_group did not return 200",
+        )?;
+        tracker.agent_group_ids.pop();
+        log_pass(
+            "agent-group-lifecycle",
+            "create/read/modify/delete completed exactly once",
+        );
+        for command in [
+            "get_agent_groups",
+            "get_agents",
+            "create_agent_group",
+            "modify_agent_group",
+            "delete_agent_group",
+        ] {
+            record_command_execution(command, "agent capability runtime path executed")?;
+        }
+        record_scenario_execution("agent-read", "typed agent read executed successfully");
+        record_scenario_execution(
+            "agent-group-lifecycle",
+            "agent-group create/read/modify/delete runtime path executed",
+        );
+    }
+
+    if oci {
+        let image_reference = env::var("E2E_OCI_IMAGE_REFERENCE")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                AppError::Assertion(
+                    "selected OCI scenario requires non-secret E2E_OCI_IMAGE_REFERENCE".to_string(),
+                )
+            })?;
+        let existing = client.execute(GetOciImageTargetsRequest::default()).await?;
+        ensure(existing.status == 200, "OCI target preflight read failed")?;
+        for target in existing.items {
+            if is_e2e_owned_value(&target.meta.name) {
+                let deleted = client
+                    .execute(DeleteOciImageTargetRequest::new(
+                        target.meta.id.clone(),
+                        true,
+                    ))
+                    .await?;
+                ensure(
+                    matches!(deleted.status, 200 | 404),
+                    "stale OCI target cleanup failed",
+                )?;
+            }
+        }
+        let mut create = CreateOciImageTargetRequest::new(
+            config.name("oci-target"),
+            vec![image_reference.clone()],
+        );
+        create.comment = Some("rust-gvm dynamic capability E2E".to_string());
+        let created = client.execute(create).await?;
+        ensure(
+            created.status == 201,
+            "create_oci_image_target did not return 201",
+        )?;
+        tracker.track_oci_image_target(&created.id);
+        let detail = client
+            .execute(GetOciImageTargetRequest::new(created.id.clone()))
+            .await?;
+        ensure(
+            detail.status == 200 && detail.items.iter().any(|item| item.meta.id == created.id),
+            "created OCI target was not readable",
+        )?;
+        let mut modify = ModifyOciImageTargetRequest::new(created.id.clone());
+        modify.comment = Some("rust-gvm dynamic capability E2E modified".to_string());
+        modify.image_references = vec![image_reference];
+        let modified = client.execute(modify).await?;
+        ensure(
+            modified.status == 200,
+            "modify_oci_image_target did not return 200",
+        )?;
+        let deleted = client
+            .execute(DeleteOciImageTargetRequest::new(created.id.clone(), true))
+            .await?;
+        ensure(
+            deleted.status == 200,
+            "delete_oci_image_target did not return 200",
+        )?;
+        tracker.oci_image_target_ids.pop();
+        log_pass(
+            "oci-target-lifecycle",
+            "create/read/modify/delete completed exactly once",
+        );
+        for command in [
+            "get_oci_image_targets",
+            "create_oci_image_target",
+            "modify_oci_image_target",
+            "delete_oci_image_target",
+        ] {
+            record_command_execution(command, "OCI target runtime path executed")?;
+        }
+        record_scenario_execution(
+            "oci-target-lifecycle",
+            "OCI target create/read/modify/delete runtime path executed",
+        );
+    }
     client.disconnect().await?;
     Ok(())
 }
@@ -1837,6 +2613,7 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
                 request
             })
         );
+        record_helper_execution("get_config", "typed generic config detail executed")?;
     }
     let policies = typed_read!(
         "get_policies(single prerequisite)",
@@ -1850,6 +2627,7 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
             "get_policy(single)",
             client.get_policy(GetPolicyRequest::new(policy.meta.id.clone()))
         );
+        record_helper_execution("get_policy", "typed policy detail executed")?;
     }
 
     let scanners = typed_read!(
@@ -1907,6 +2685,10 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
                 family,
             ))
         );
+        record_helper_execution(
+            "get_scan_config_nvts",
+            "typed scan-config NVT family read executed",
+        )?;
     }
     typed_read!(
         "get_nvt_families",
@@ -1925,6 +2707,7 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
             "get_cve(single)",
             client.get_cve(GetCveRequest::new(&cve.id))
         );
+        record_helper_execution("get_cve", "typed CVE detail executed")?;
     }
     let cpes = typed_read!(
         "get_cpes",
@@ -1938,6 +2721,7 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
             "get_cpe(single)",
             client.get_cpe(GetCpeRequest::new(&cpe.id))
         );
+        record_helper_execution("get_cpe", "typed CPE detail executed")?;
     }
     let cert = typed_read!(
         "get_cert_bund_advisories",
@@ -1951,6 +2735,10 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
             "get_cert_bund_advisory(single)",
             client.get_cert_bund_advisory(GetCertBundAdvisoryRequest::new(&advisory.id))
         );
+        record_helper_execution(
+            "get_cert_bund_advisory",
+            "typed CERT-Bund advisory detail executed",
+        )?;
     }
     let dfn = typed_read!(
         "get_dfn_cert_advisories",
@@ -1964,6 +2752,10 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
             "get_dfn_cert_advisory(single)",
             client.get_dfn_cert_advisory(GetDfnCertAdvisoryRequest::new(&advisory.id))
         );
+        record_helper_execution(
+            "get_dfn_cert_advisory",
+            "typed DFN-CERT advisory detail executed",
+        )?;
     }
     let vulnerabilities = typed_read!(
         "get_vulnerabilities",
@@ -1977,6 +2769,7 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
             "get_vulnerability(single)",
             client.get_vulnerability(GetVulnerabilityRequest::new(&vulnerability.id))
         );
+        record_helper_execution("get_vulnerability", "typed vulnerability detail executed")?;
     }
 
     typed_read!(
@@ -2074,6 +2867,48 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
     ensure(
         targets.status == 200,
         "typed target collection status changed unexpectedly",
+    )?;
+    record_helper_executions(
+        &[
+            "authenticate",
+            "describe_auth",
+            "get_aggregates",
+            "get_alerts",
+            "get_cert_bund_advisories",
+            "get_configs",
+            "get_cpes",
+            "get_credentials",
+            "get_cves",
+            "get_dfn_cert_advisories",
+            "get_feed",
+            "get_feeds",
+            "get_filters",
+            "get_notes",
+            "get_nvt_families",
+            "get_nvts",
+            "get_overrides",
+            "get_policies",
+            "get_port_lists",
+            "get_report_formats",
+            "get_scan_config",
+            "get_scan_config_nvt",
+            "get_scan_configs",
+            "get_scanner",
+            "get_scanners",
+            "get_schedules",
+            "get_settings",
+            "get_system_reports",
+            "get_tags",
+            "get_targets",
+            "get_tasks",
+            "get_vulnerabilities",
+        ],
+        "typed read suite runtime path executed",
+    )?;
+    record_command_execution("get_preferences", "raw preference read executed")?;
+    record_command_execution(
+        "get_resource_names",
+        "canonical resource-name request executed",
     )?;
     client.disconnect().await?;
     Ok(())
@@ -2394,6 +3229,34 @@ async fn run_config_scanner_lifecycles(
         "typed clone/get/modify/verify/trash/restore/delete/failure",
     );
 
+    record_helper_executions(
+        &[
+            "authenticate",
+            "clone_config",
+            "clone_scanner",
+            "create_config",
+            "create_scan_config",
+            "delete_config",
+            "delete_scanner",
+            "get_config",
+            "get_configs",
+            "get_policies",
+            "get_policy",
+            "get_scanner",
+            "get_scanners",
+            "modify_config",
+            "modify_policy_set_comment",
+            "modify_policy_set_name",
+            "modify_scan_config",
+            "modify_scan_config_set_comment",
+            "modify_scan_config_set_name",
+            "modify_scanner",
+            "restore",
+            "verify_scanner",
+        ],
+        "config/scanner lifecycle runtime path executed",
+    )?;
+
     client.disconnect().await?;
     Ok(())
 }
@@ -2497,6 +3360,10 @@ async fn run_isolated_suite(
                     "safe typed get_report_config for deterministically selected existing report config {report_config_id}; report-config mutations remain quarantined"
                 ),
             );
+            record_helper_execution(
+                "get_report_config",
+                "deterministically selected report-config detail executed",
+            )?;
         }
         None => runtime::observe(
             "isolated report config singular read",
@@ -2765,6 +3632,10 @@ async fn run_isolated_suite(
                 .any(|entry| entry.meta.id == operating_system.meta.id),
             "typed singular operating-system asset did not round-trip",
         )?;
+        record_helper_execution(
+            "get_operating_system_asset",
+            "typed operating-system asset detail executed",
+        )?;
     }
     let modify_host = client
         .modify_asset(ModifyAssetRequest::new(
@@ -2947,6 +3818,10 @@ async fn run_isolated_suite(
             "isolated setting",
             &format!("snapshot and restore exact value for {setting_name}"),
         );
+        record_command_execution(
+            "modify_setting",
+            "setting write and exact-value restore both executed",
+        )?;
     } else {
         runtime::observe(
             "isolated setting",
@@ -3037,6 +3912,44 @@ async fn run_isolated_suite(
         "isolated trash",
         "typed restore lifecycles and dedicated empty_trashcan",
     );
+
+    record_helper_executions(
+        &[
+            "clone_report_format",
+            "create_asset",
+            "create_group",
+            "create_host",
+            "create_role",
+            "create_tls_certificate",
+            "create_user",
+            "delete_asset",
+            "delete_group",
+            "delete_permission",
+            "delete_role",
+            "empty_trashcan",
+            "get_asset",
+            "get_assets",
+            "get_groups",
+            "get_hosts",
+            "get_operating_system_assets",
+            "get_permissions",
+            "get_report_configs",
+            "get_roles",
+            "get_tls_certificates",
+            "get_users",
+            "modify_asset",
+            "modify_group",
+            "modify_report_format",
+            "modify_role",
+            "modify_tls_certificate",
+            "modify_user",
+            "restore",
+            "test_alert",
+            "verify_report_format",
+        ],
+        "isolated runtime path executed",
+    )?;
+    record_command_execution("delete_user", "direct user deletion executed")?;
 
     client.disconnect().await?;
     Ok(())
@@ -3301,8 +4214,25 @@ async fn run_smoke_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Re
     log_pass("10", "verify deletion");
 
     if config.run_scan {
-        run_scan_suite(&mut client, config, tracker).await?;
+        run_scan_suite(&mut client, config, tracker, None).await?;
     }
+
+    record_helper_executions(
+        &[
+            "authenticate",
+            "create_target",
+            "delete_target",
+            "get_port_lists",
+            "get_report_formats",
+            "get_scan_configs",
+            "get_scanners",
+            "get_target",
+            "get_version",
+            "modify_target",
+            "restore",
+        ],
+        "smoke runtime path executed",
+    )?;
 
     client.disconnect().await?;
     Ok(())
@@ -3496,6 +4426,7 @@ async fn start_scan_task_once(
         AppError::Assertion("typed start_task response omitted report_id".to_string())
     })?;
     tracker.track_report(&report_id);
+    record_helper_execution("start_task", "scan start mutation executed exactly once")?;
     Ok(report_id)
 }
 
@@ -3503,6 +4434,7 @@ async fn run_scan_suite(
     client: &mut GmpClient<UnixSocketConnection>,
     config: &EnvConfig,
     tracker: &mut CleanupTracker,
+    plan: Option<&TestPlan>,
 ) -> Result<(), AppError> {
     client
         .authenticate(AuthenticateRequest::new(&config.username, &config.password))
@@ -3654,6 +4586,7 @@ async fn run_scan_suite(
             200,
             "stop_task",
         )?;
+        record_helper_execution("stop_task", "scan stop mutation executed")?;
         let stopped = wait_task_state(
             client,
             config,
@@ -3810,6 +4743,7 @@ async fn run_scan_suite(
             "scan result detail",
             &format!("typed deterministic result {selected_result_id}"),
         );
+        record_helper_execution("get_result", "deterministic scan-result detail executed")?;
     } else {
         runtime::observe(
             "scan result detail",
@@ -3843,6 +4777,7 @@ async fn run_scan_suite(
                     concat!("scan report drill-down ", $command),
                     "canonical typed response",
                 );
+                record_helper_execution($command, concat!("typed ", $command, " executed"))?;
             } else {
                 assert_gmp_22_8_rejection(result, $command, negotiated_version)?;
                 runtime::observe(
@@ -3975,6 +4910,10 @@ async fn run_scan_suite(
                 export.bytes.len()
             ),
         );
+        record_helper_execution(
+            "get_report_export",
+            "typed synchronous report export executed and decoded bytes",
+        )?;
     } else {
         assert_gmp_22_8_rejection(synchronous_export, "get_report_export", negotiated_version)?;
         runtime::observe(
@@ -4068,6 +5007,16 @@ async fn run_scan_suite(
             report_id, scan_result_count
         ),
     );
+    record_helper_executions(
+        &["get_report", "get_results", "import_report"],
+        "scan/report runtime path executed",
+    )?;
+    if plan.is_some_and(|plan| selected_scenario(plan, "openvasd-network-scan")) {
+        record_scenario_execution(
+            "openvasd-network-scan",
+            "deterministic network scan runtime path executed",
+        );
+    }
     Ok(())
 }
 
@@ -4078,7 +5027,7 @@ fn conditional_surface_wire_command(surface_name: &str) -> Result<&'static str, 
         .find(|entry| entry.name == surface_name)
     {
         ensure(
-            helper.disposition == Disposition::ConditionalCommunity,
+            helper.disposition == Disposition::ConditionalAvailability,
             &format!("helper {surface_name} must be conditional in the coverage manifest"),
         )?;
         return Ok(helper.wire_command);
@@ -4100,27 +5049,15 @@ fn conditional_surface_wire_command(surface_name: &str) -> Result<&'static str, 
 }
 
 #[cfg(test)]
-fn conditional_helper_semantic_name(helper_name: &str) -> &str {
-    // These public helper variants intentionally share one semantic capability
-    // entry. Keep aliases explicit: helper names are not wire-command names.
-    match helper_name {
-        "get_report_export_with_opts" => "get_report_export",
-        _ => helper_name,
-    }
-}
-
-#[cfg(test)]
 fn conditional_helper_minimum_version(helper_name: &str) -> Result<GmpVersion, AppError> {
     let wire_command = conditional_surface_wire_command(helper_name)?;
-    gvm_gmp::capabilities::minimum_version_for_command(conditional_helper_semantic_name(
-        helper_name,
-    ))
-    .or_else(|| gvm_gmp::capabilities::minimum_version_for_command(wire_command))
-    .ok_or_else(|| {
-        AppError::Assertion(format!(
-            "conditional helper {helper_name} has no semantic capability version gate"
-        ))
-    })
+    gvm_gmp::capabilities::minimum_version_for_command(helper_semantic_name(helper_name))
+        .or_else(|| gvm_gmp::capabilities::minimum_version_for_command(wire_command))
+        .ok_or_else(|| {
+            AppError::Assertion(format!(
+                "conditional helper {helper_name} has no semantic capability version gate"
+            ))
+        })
 }
 
 #[cfg(test)]
@@ -4712,6 +5649,59 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
         "modify/trash/restore/delete alert and verify absent",
     );
 
+    record_helper_executions(
+        &[
+            "authenticate",
+            "create_alert",
+            "create_credential",
+            "create_filter",
+            "create_note",
+            "create_override",
+            "create_port_list",
+            "create_port_range",
+            "create_schedule",
+            "create_tag",
+            "create_target",
+            "create_task",
+            "delete_port_range",
+            "get_alert",
+            "get_alerts",
+            "get_filter",
+            "get_note",
+            "get_nvts",
+            "get_override",
+            "get_port_list",
+            "get_port_lists",
+            "get_scan_configs",
+            "get_scanners",
+            "get_schedule",
+            "get_tag",
+            "get_task",
+            "modify_alert",
+            "modify_credential",
+            "modify_filter",
+            "modify_note",
+            "modify_override",
+            "modify_port_list",
+            "modify_schedule",
+            "modify_tag",
+            "modify_task",
+            "restore",
+        ],
+        "CRUD runtime path executed",
+    )?;
+    for command in [
+        "delete_alert",
+        "delete_credential",
+        "delete_filter",
+        "delete_note",
+        "delete_override",
+        "delete_schedule",
+        "delete_tag",
+    ] {
+        record_command_execution(command, "CRUD delete runtime path executed")?;
+    }
+
     client.disconnect().await?;
     Ok(())
 }
@@ -4794,6 +5784,19 @@ async fn run_secinfo_suite(config: &EnvConfig) -> Result<(), AppError> {
         "expected at least one NVT; VT feed may not be loaded",
     )?;
     log_pass("secinfo 06", &format!("get_nvts ({nvt_count} entries)"));
+
+    record_helper_executions(
+        &[
+            "authenticate",
+            "get_cert_bund_advisories",
+            "get_cpes",
+            "get_cves",
+            "get_dfn_cert_advisories",
+            "get_feeds",
+            "get_nvts",
+        ],
+        "SecInfo runtime path executed",
+    )?;
 
     client.disconnect().await?;
     Ok(())
@@ -5816,6 +6819,10 @@ async fn modify_role_permission_reconciled(
                 "typed permission modify",
                 "response and read-after-write reconciliation confirmed the desired state",
             );
+            record_helper_execution(
+                "modify_permission",
+                "permission modification and read-after-write reconciliation executed",
+            )?;
         }
         PermissionModifyDelivery::Confirmed => {
             return Err(AppError::Assertion(format!(
@@ -5841,6 +6848,10 @@ async fn modify_role_permission_reconciled(
                     "read-after-write reconciliation confirmed the desired state after response loss ({error})"
                 ),
             );
+            record_helper_execution(
+                "modify_permission",
+                "permission response-loss reconciliation proved the executed mutation",
+            )?;
         }
         PermissionModifyDelivery::ConnectionLost(error) => {
             runtime::observe(
@@ -5875,6 +6886,10 @@ async fn create_role_permission(
         "typed permission create",
         "canonical nested subject accepted",
     );
+    record_helper_execution(
+        "create_permission",
+        "canonical permission creation executed",
+    )?;
     Ok(permission.id)
 }
 
@@ -7188,6 +8203,27 @@ mod tests {
             ),
             "live help advertised get_reports; canonical typed get_report_export was rejected locally because GMP 22.7 is below required 22.8; no wire request was sent"
         );
+    }
+
+    #[test]
+    fn gmp_22_7_plan_marks_both_report_export_helpers_semantically_ineligible() {
+        let catalog: FeatureCatalog =
+            serde_json::from_str(include_str!("../../../coverage/feature-catalog.json"))
+                .expect("feature catalog parses");
+        let inputs = plan_inputs(&catalog, GmpVersion(22, 7));
+
+        for helper in ["get_report_export", "get_report_export_with_opts"] {
+            let input = inputs
+                .iter()
+                .find(|input| input.kind == PlanEntryKind::Helper && input.name == helper)
+                .expect("report-export helper is planned");
+            assert!(!input.semantic_eligible);
+            assert!(input.semantic_evidence.contains("requires GMP 22.8"));
+            assert!(input.semantic_evidence.contains("negotiated GMP 22.7"));
+            assert!(input
+                .semantic_evidence
+                .contains("no wire request is eligible"));
+        }
     }
 
     #[test]
