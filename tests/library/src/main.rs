@@ -91,6 +91,7 @@ use gvm_community_e2e::capability::{
     build_plan, classify_live_help_commands, enforce_live_help_parity, parse_feature_evidence,
     CommandSupport, DeploymentCapabilities, DeploymentContract, Evidence, FeatureCatalog,
     FixtureDescriptor, PlanDecision, PlanEntryKind, PlanInput, ProbeResult, ProbeState, TestPlan,
+    DEPLOYMENT_CAPABILITIES_SCHEMA_VERSION,
 };
 use gvm_community_e2e::runtime::{self, FeatureState, Outcome};
 use gvm_community_e2e::HELPER_MIGRATIONS;
@@ -1874,7 +1875,7 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
         .collect::<BTreeMap<_, _>>();
     if let Err(error) = enforce_live_help_parity(&live_help_parity) {
         let capabilities = DeploymentCapabilities {
-            schema_version: 2,
+            schema_version: DEPLOYMENT_CAPABILITIES_SCHEMA_VERSION,
             deployment_id,
             gmp_version: Some(version_response.version.clone()),
             gvmd_version: epss_deployment_evidence
@@ -1998,7 +1999,7 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
         probes.insert(probe_name.to_string(), result);
     }
     let capabilities = DeploymentCapabilities {
-        schema_version: 2,
+        schema_version: DEPLOYMENT_CAPABILITIES_SCHEMA_VERSION,
         deployment_id,
         gmp_version: Some(version_response.version.clone()),
         gvmd_version: epss_deployment_evidence
