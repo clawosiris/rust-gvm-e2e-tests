@@ -2954,23 +2954,27 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
         "get_scan_config_nvt(single preferences/count)",
         client.get_scan_config_nvt(GetScanConfigNvtRequest::new(nvts.items[0].oid.clone()))
     );
-    if let Some(family) = nvts.items[0].family.as_deref() {
-        typed_read!(
-            "get_scan_config_nvts(public helper)",
-            client.get_scan_config_nvts(GetScanConfigNvtsRequest::new(
-                configs.items[0].meta.id.clone(),
-                family,
-            ))
-        );
-        record_helper_execution(
-            "get_scan_config_nvts",
-            "typed scan-config NVT family read executed",
-        )?;
-    }
-    typed_read!(
+    let nvt_families = typed_read!(
         "get_nvt_families",
         client.get_nvt_families(GetNvtFamiliesRequest::new())
     );
+    let family = first_nonempty(nvt_families.items.iter().map(|item| item.name.as_str()))
+        .ok_or_else(|| {
+            AppError::Assertion(
+                "warm-volume baseline requires at least one named NVT family".to_string(),
+            )
+        })?;
+    typed_read!(
+        "get_scan_config_nvts(public helper)",
+        client.get_scan_config_nvts(GetScanConfigNvtsRequest::new(
+            configs.items[0].meta.id.clone(),
+            family,
+        ))
+    );
+    record_helper_execution(
+        "get_scan_config_nvts",
+        "typed scan-config NVT family read executed",
+    )?;
 
     let cves = typed_read!(
         "get_cves",
@@ -3041,13 +3045,18 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
             ..Default::default()
         })
     );
-    if let Some(vulnerability) = vulnerabilities.items.first() {
-        typed_read!(
-            "get_vulnerability(single)",
-            client.get_vulnerability(GetVulnerabilityRequest::new(&vulnerability.id))
-        );
-        record_helper_execution("get_vulnerability", "typed vulnerability detail executed")?;
-    }
+    let vulnerability_probe_id = first_nonempty(
+        vulnerabilities
+            .items
+            .iter()
+            .map(|vulnerability| vulnerability.id.as_str()),
+    )
+    .unwrap_or(&nvt_oid);
+    typed_read!(
+        "get_vulnerability(single)",
+        client.get_vulnerability(GetVulnerabilityRequest::new(vulnerability_probe_id))
+    );
+    record_helper_execution("get_vulnerability", "typed vulnerability detail executed")?;
 
     typed_read!(
         "get_alerts",
@@ -8444,6 +8453,10 @@ fn ensure(condition: bool, message: &str) -> Result<(), AppError> {
     }
 }
 
+fn first_nonempty<'a>(values: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    values.into_iter().find(|value| !value.trim().is_empty())
+}
+
 fn log_pass(step: &str, label: &str) {
     runtime::pass(step, label);
     log_line(&format!("[pass] {step} {label}"));
@@ -8481,6 +8494,16 @@ mod tests {
                 .expect("canonical request should encode"),
         )
         .expect("canonical request should be UTF-8")
+    }
+
+    #[test]
+    fn fixture_selector_skips_empty_values_and_allows_a_deterministic_fallback() {
+        assert_eq!(first_nonempty(["", "  ", "General"]), Some("General"));
+        assert_eq!(first_nonempty(["", "\t"]), None);
+        assert_eq!(
+            first_nonempty([""]).unwrap_or("1.3.6.1.4.1.25623.1.0.1"),
+            "1.3.6.1.4.1.25623.1.0.1"
+        );
     }
 
     #[derive(Debug)]
