@@ -64,6 +64,7 @@ IMPLEMENTED_FEATURE_COMMANDS = {
 
 FEATURE_CATALOG_PATH = ROOT / "coverage/feature-catalog.json"
 LIVE_HELP_ALLOWLIST_PATH = ROOT / "coverage/live-help-allowlist.json"
+EPSS_REGRESSION_PATH = ROOT / "fixtures/epss-result-regression.json"
 
 
 def load_feature_catalog() -> dict[str, object]:
@@ -71,6 +72,29 @@ def load_feature_catalog() -> dict[str, object]:
     if catalog.get("schema_version") != 1 or not isinstance(catalog.get("features"), dict):
         raise ValueError("feature catalog must use schema_version 1 and contain features")
     return catalog
+
+
+def load_epss_regression() -> dict[str, object]:
+    regression = json.loads(EPSS_REGRESSION_PATH.read_text(encoding="utf-8"))
+    required = {
+        "schema_version",
+        "upstream_pull_request",
+        "fixed_source_revision",
+        "known_affected_release",
+        "probes",
+    }
+    if set(regression) != required or regression["schema_version"] != 1:
+        raise ValueError("EPSS regression fixture must use schema_version 1 and exact fields")
+    probes = regression["probes"]
+    expected_fields = [
+        "epss_score",
+        "epss_percentile",
+        "max_epss_score",
+        "max_epss_percentile",
+    ]
+    if not isinstance(probes, list) or [probe.get("field") for probe in probes] != expected_fields:
+        raise ValueError("EPSS regression fixture must contain the four ordered gvmd fields")
+    return regression
 
 
 def load_live_help_allowlist() -> list[dict[str, str]]:
@@ -546,6 +570,12 @@ def lane_for(disposition: str, wire_command: str = "") -> str:
 
 
 def rationale_for(name: str, disposition: str) -> str:
+    if name == "get_results":
+        return (
+            "Nightly scan-linked result coverage includes read-only filter and sort probes for "
+            "epss_score, epss_percentile, max_epss_score, and max_epss_percentile, with a "
+            "same-connection health assertion and exact gvmd source/release disposition."
+        )
     if name in {"export_scan_report", "get_report_exports", "download_report_export"}:
         return (
             "Help-gated asynchronous scan-report export lifecycle coverage; creation, "
@@ -718,7 +748,7 @@ def build_manifest(
         raise ValueError("unknown disposition")
 
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "rust_gvm_sha": git_sha(source),
         "registry_count": len(command_entries),
         "typed_helper_count": len(helper_entries),
@@ -727,6 +757,7 @@ def build_manifest(
         "removed_helper_count": sum(item.status == "removed" for item in migrations),
         "live_help_allowlist_count": len(live_help_allowlist),
         "live_help_allowlist": live_help_allowlist,
+        "regressions": {"gvmd-epss-result-filter-sort": load_epss_regression()},
         "feature_catalog": load_feature_catalog()["features"],
         "scenarios": [
             {
@@ -754,6 +785,7 @@ def render_markdown(manifest: dict[str, object]) -> str:
     helpers = manifest["helpers"]
     migrations = manifest["helper_migrations"]
     live_help_allowlist = manifest["live_help_allowlist"]
+    epss = manifest["regressions"]["gvmd-epss-result-filter-sort"]
     counts = {
         disposition: sum(
             item["disposition"] == disposition for item in commands  # type: ignore[index]
@@ -795,6 +827,28 @@ def render_markdown(manifest: dict[str, object]) -> str:
     lines.extend(
         f"| `{item['name']}` | {item['rationale']} | `{item['evidence_source']}`: {item['evidence_detail']} |"
         for item in live_help_allowlist  # type: ignore[union-attr]
+    )
+    lines.extend(
+        [
+            "",
+            "## Focused gvmd regressions",
+            "",
+            "### EPSS result filter/sort server-abort regression",
+            "",
+            f"- upstream fix: [{epss['upstream_pull_request']}]({epss['upstream_pull_request']}) at exact source `{epss['fixed_source_revision']}`",
+            f"- known affected Community release: `{epss['known_affected_release']}`",
+            "- lane: `devel-scan`; fixture: the deterministic scan-linked report; requests are read-only",
+            "- each request is followed on the same authenticated connection by `get_version`",
+            "- the exact affected release may emit `known-upstream-bug` on a proved connection abort; it never emits pass for that failure",
+            "- the fixed source and every unclassified deployment must return a normal GMP response and keep the connection usable",
+            "",
+            "| Field | Filter expression | Sort expression |",
+            "|---|---|---|",
+        ]
+    )
+    lines.extend(
+        f"| `{probe['field']}` | `{probe['filter_expression']}` | `{probe['sort_expression']}` |"
+        for probe in epss["probes"]
     )
     lines.extend(
         [

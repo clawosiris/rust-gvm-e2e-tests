@@ -49,6 +49,16 @@ on:
         required: true
         type: string
         default: stable
+      gvmd-version:
+        description: Optional gvmd-only image tag for source-specific regression qualification
+        required: false
+        type: string
+        default: ""
+      gvmd-image:
+        description: Optional full gvmd image reference (overrides gvmd-version)
+        required: false
+        type: string
+        default: ""
       clean:
         description: Explicitly destroy the selected lane volumes first
         required: false
@@ -68,6 +78,8 @@ env:
   RUNNER_IMAGE_NAME: rust-gvm-e2e-runner
   RUNNER_IMAGE_TAG: ci
   RUST_GVM_SHA: 8ea68a82636974256b2c198ea24a5aa26262b659
+  GVMD_VERSION: ${{ inputs.gvmd-version }}
+  GVMD_IMAGE: ${{ inputs.gvmd-image }}
 
 jobs:
   resolve-refs:

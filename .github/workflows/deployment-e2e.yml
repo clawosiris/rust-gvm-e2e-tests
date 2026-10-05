@@ -47,6 +47,16 @@ on:
         required: false
         type: string
         default: stable
+      gvmd-image-version:
+        description: Optional gvmd-only image version or tag for source-specific qualification
+        required: false
+        type: string
+        default: ""
+      gvmd-image:
+        description: Optional full gvmd image reference (overrides gvmd-image-version)
+        required: false
+        type: string
+        default: ""
       scan-target-host:
         description: Deterministic provider-owned network scan target
         required: false
@@ -208,6 +218,8 @@ jobs:
       E2E_RUST_GVM_SHA: ${{ inputs.rust-gvm-ref }}
       E2E_CLEAN_VOLUMES: ${{ inputs.clean && '1' || '0' }}
       GVM_VERSION: ${{ inputs.runtime-image-version }}
+      GVMD_VERSION: ${{ inputs.gvmd-image-version }}
+      GVMD_IMAGE: ${{ inputs.gvmd-image }}
       COMPOSE_FILE: ${{ inputs.compose-files }}
       E2E_SCAN_TARGET_HOST: ${{ inputs.scan-target-host }}
       E2E_OCI_IMAGE_REFERENCE: ${{ inputs.oci-image-reference }}

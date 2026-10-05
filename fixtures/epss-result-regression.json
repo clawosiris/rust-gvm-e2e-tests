@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "upstream_pull_request": "https://github.com/greenbone/gvmd/pull/3163",
+  "fixed_source_revision": "471b7745697af0ee0804212c74f5040f30c6c3d7",
+  "known_affected_release": "26.40.2",
+  "probes": [
+    {
+      "field": "epss_score",
+      "filter_expression": "epss_score>0",
+      "sort_expression": "sort=epss_score"
+    },
+    {
+      "field": "epss_percentile",
+      "filter_expression": "epss_percentile>0",
+      "sort_expression": "sort=epss_percentile"
+    },
+    {
+      "field": "max_epss_score",
+      "filter_expression": "max_epss_score>0",
+      "sort_expression": "sort=max_epss_score"
+    },
+    {
+      "field": "max_epss_percentile",
+      "filter_expression": "max_epss_percentile>0",
+      "sort_expression": "sort=max_epss_percentile"
+    }
+  ]
+}

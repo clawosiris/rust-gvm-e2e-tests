@@ -179,6 +179,9 @@ pub struct DeploymentCapabilities {
     pub schema_version: u32,
     pub deployment_id: String,
     pub gmp_version: Option<String>,
+    pub gvmd_version: Option<String>,
+    pub gvmd_source_revision: Option<String>,
+    pub gvmd_image_digest: Option<String>,
     #[serde(default)]
     pub live_help_parity: LiveHelpParity,
     #[serde(default)]
@@ -777,6 +780,9 @@ mod tests {
             schema_version: 1,
             deployment_id: "test".into(),
             gmp_version: Some("22.7".into()),
+            gvmd_version: None,
+            gvmd_source_revision: None,
+            gvmd_image_digest: None,
             live_help_parity: LiveHelpParity::default(),
             features: BTreeMap::from([("ENABLE_AGENTS".into(), feature)]),
             commands: BTreeMap::from([(
