@@ -3,7 +3,7 @@ FROM rust:1.89
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 ENV PATH="/usr/local/cargo/bin:${PATH}"
 
-ARG RUST_GVM_SHA=8ea68a82636974256b2c198ea24a5aa26262b659
+ARG RUST_GVM_SHA=cd4689cab8875ea1a0d7b35cd5a5038416f0e8e0
 ARG GVM_ROOLS_REF=main
 
 LABEL org.opencontainers.image.source="https://github.com/clawosiris/rust-gvm-e2e-tests" \

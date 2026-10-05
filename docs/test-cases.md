@@ -20,10 +20,28 @@ The blocking warm-volume lane validates:
 - target/task and the ordinary Community resource CRUD smoke, including a real
   syslog alert rather than an unconditional omission;
 - authentication and deleted-resource error semantics;
+- issue #715 typed validation/error coverage: typed `get_info` NVT OID
+  filtering; supplementary local empty-password typed-builder rejection plus a
+  raw empty-password request to live gvmd that must return `GvmError::Server`
+  status 400 with `Authentication failed`; typed invalid `get_settings`
+  sort-field status-200 fallback followed by same-session health; and malformed
+  note severity/active GMP 400 responses with `Error in severity specification`
+  and `Error in active specification`, followed by same-session health. The
+  note payloads use raw `XmlCommand` only for values the typed builders
+  intentionally cannot represent;
 - gvm-rools CLI framing, raw XML, authentication failure, and socket failure.
 
 The lane performs namespaced stale-run cleanup before assertions and a second,
 dependency-ordered cleanup on success or unwind.
+
+Issue #715 also has deterministic Unix-socket server-error coverage. A raw
+`XmlCommand` sends an empty-password `authenticate` request and must receive
+`GvmError::Server` status 400 with `Authentication failed`; the same connection
+then completes `get_version` and valid authentication. The `stop_task` error
+path likewise requires `GvmError::Server` status 400 with `Internal error
+stopping task` and same-session `get_version`, without creating a live failure
+fixture. It deliberately does not cover the later stop-task return-code enum
+change.
 
 ## `devel-scan`
 

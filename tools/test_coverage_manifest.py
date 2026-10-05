@@ -215,6 +215,26 @@ class CoveragePolicyTests(unittest.TestCase):
             MANIFEST.rationale_for("get_results", "nightly-live"),
         )
 
+    def test_issue_715_validation_fixture_covers_live_and_socket_cases(self):
+        fixture = MANIFEST.load_issue_715_validation()
+        self.assertEqual(fixture["issue"], 715)
+        self.assertEqual(
+            fixture["rust_gvm_sha"],
+            "cd4689cab8875ea1a0d7b35cd5a5038416f0e8e0",
+        )
+        self.assertEqual(
+            [case["command"] for case in fixture["live_cases"]],
+            ["get_info", "authenticate", "get_settings", "create_note, modify_note"],
+        )
+        self.assertEqual(
+            [case["command"] for case in fixture["socket_cases"]],
+            ["authenticate", "stop_task"],
+        )
+        self.assertIn("Raw XmlCommand", fixture["socket_cases"][0]["assertion"])
+        self.assertIn("Authentication failed", fixture["socket_cases"][0]["assertion"])
+        self.assertIn("Internal error stopping task", fixture["socket_cases"][1]["assertion"])
+        self.assertIn("return-code enum", fixture["excluded"])
+
     def test_disappeared_facade_is_replaced_when_wire_command_remains(self):
         migrations = MANIFEST.classify_helper_migrations(
             [{"name": "get_targets", "wire_command": "get_targets"}],

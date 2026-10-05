@@ -7,10 +7,10 @@ publish = false
 
 [dependencies]
 base64 = "0.23"
-gvm-client = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "8ea68a82636974256b2c198ea24a5aa26262b659" }
-gvm-connection = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "8ea68a82636974256b2c198ea24a5aa26262b659", features = ["ssh", "tls"] }
-gvm-gmp = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "8ea68a82636974256b2c198ea24a5aa26262b659" }
-gvm-protocol = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "8ea68a82636974256b2c198ea24a5aa26262b659" }
+gvm-client = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "cd4689cab8875ea1a0d7b35cd5a5038416f0e8e0" }
+gvm-connection = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "cd4689cab8875ea1a0d7b35cd5a5038416f0e8e0", features = ["ssh", "tls"] }
+gvm-gmp = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "cd4689cab8875ea1a0d7b35cd5a5038416f0e8e0" }
+gvm-protocol = { git = "https://github.com/greenbone-hive/rust-gvm.git", rev = "cd4689cab8875ea1a0d7b35cd5a5038416f0e8e0" }
 quick-xml = "0.42"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
