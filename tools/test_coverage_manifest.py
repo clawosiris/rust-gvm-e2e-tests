@@ -194,6 +194,27 @@ class CoveragePolicyTests(unittest.TestCase):
             MANIFEST.rationale_for("export_audit_report", "conditional-availability"),
         )
 
+    def test_epss_regression_fixture_and_generated_documentation_are_complete(self):
+        regression = MANIFEST.load_epss_regression()
+        self.assertEqual(regression["known_affected_release"], "26.40.2")
+        self.assertEqual(
+            regression["fixed_source_revision"],
+            "471b7745697af0ee0804212c74f5040f30c6c3d7",
+        )
+        self.assertEqual(
+            [probe["field"] for probe in regression["probes"]],
+            [
+                "epss_score",
+                "epss_percentile",
+                "max_epss_score",
+                "max_epss_percentile",
+            ],
+        )
+        self.assertIn(
+            "same-connection health assertion",
+            MANIFEST.rationale_for("get_results", "nightly-live"),
+        )
+
     def test_disappeared_facade_is_replaced_when_wire_command_remains(self):
         migrations = MANIFEST.classify_helper_migrations(
             [{"name": "get_targets", "wire_command": "get_targets"}],

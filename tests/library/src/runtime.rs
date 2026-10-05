@@ -64,6 +64,10 @@ pub struct RunReport {
     pub finished_unix_seconds: Option<u64>,
     pub rust_gvm_sha: String,
     pub gvm_image_tag: String,
+    pub gvmd_image_tag: String,
+    pub gvmd_version: Option<String>,
+    pub gvmd_source_revision: Option<String>,
+    pub gvmd_image_digest: Option<String>,
     pub gmp_version: Option<String>,
     pub runtime_images: Vec<RuntimeImage>,
     pub command_dispositions: BTreeMap<String, usize>,
@@ -127,7 +131,7 @@ impl RunReport {
             });
         }
         Self {
-            schema_version: 3,
+            schema_version: 4,
             run_id: run_id.to_string(),
             deployment_id: env::var("E2E_DEPLOYMENT_ID")
                 .unwrap_or_else(|_| "community-stable".to_string()),
@@ -139,6 +143,12 @@ impl RunReport {
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| RUST_GVM_SHA.to_string()),
             gvm_image_tag: env::var("GVM_VERSION").unwrap_or_else(|_| "stable".to_string()),
+            gvmd_image_tag: nonempty_env("GVMD_VERSION")
+                .or_else(|| nonempty_env("GVM_VERSION"))
+                .unwrap_or_else(|| "stable".to_string()),
+            gvmd_version: nonempty_env("E2E_GVMD_VERSION"),
+            gvmd_source_revision: nonempty_env("E2E_GVMD_SOURCE_REVISION"),
+            gvmd_image_digest: nonempty_env("E2E_GVMD_IMAGE_DIGEST"),
             gmp_version: None,
             runtime_images: read_runtime_images(),
             command_dispositions: disposition_counts(COMMAND_COVERAGE),
@@ -165,6 +175,10 @@ impl RunReport {
             *self.outcome_counts.entry(key).or_default() += 1;
         }
     }
+}
+
+fn nonempty_env(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.trim().is_empty())
 }
 
 fn read_runtime_images() -> Vec<RuntimeImage> {

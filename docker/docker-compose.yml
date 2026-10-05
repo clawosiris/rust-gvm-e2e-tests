@@ -188,7 +188,7 @@ services:
         condition: service_started
 
   gvmd:
-    image: registry.community.greenbone.net/community/gvmd:${GVM_VERSION:-stable}
+    image: ${GVMD_IMAGE:-registry.community.greenbone.net/community/gvmd:${GVMD_VERSION:-${GVM_VERSION:-stable}}}
     restart: on-failure
     volumes:
       - gvmd-data:/var/lib/gvm
@@ -250,6 +250,12 @@ services:
       E2E_RUN_ID: ${E2E_RUN_ID:-}
       E2E_RESULTS_PATH: ${E2E_RESULTS_PATH:-}
       E2E_RUNTIME_IMAGES_PATH: ${E2E_RUNTIME_IMAGES_PATH:-}
+      E2E_GVMD_VERSION: ${E2E_GVMD_VERSION:-}
+      E2E_GVMD_SOURCE_REVISION: ${E2E_GVMD_SOURCE_REVISION:-}
+      E2E_GVMD_IMAGE_DIGEST: ${E2E_GVMD_IMAGE_DIGEST:-}
+      E2E_GVMD_SOURCE_SPECIFIC_IMAGE: ${E2E_GVMD_SOURCE_SPECIFIC_IMAGE:-}
+      GVMD_VERSION: ${GVMD_VERSION:-}
+      GVMD_IMAGE: ${GVMD_IMAGE:-}
       E2E_RUST_GVM_SHA: ${E2E_RUST_GVM_SHA:-}
       E2E_DEPLOYMENT_ID: ${E2E_DEPLOYMENT_ID:-community-stable}
       E2E_DEPLOYMENT_CONTRACT_PATH: ${E2E_DEPLOYMENT_CONTRACT_PATH:-/workspace/contracts/community-stable.json}

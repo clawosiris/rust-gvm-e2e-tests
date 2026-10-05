@@ -228,6 +228,18 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
             'PGCTLTIMEOUT: "${E2E_POSTGRES_BOOTSTRAP_TIMEOUT_SECS:-600}"',
             COMPOSE_FILE.read_text(encoding="utf-8"),
         )
+        self.assertIn(
+            "${GVMD_IMAGE:-registry.community.greenbone.net/community/gvmd:${GVMD_VERSION:-${GVM_VERSION:-stable}}}",
+            COMPOSE_FILE.read_text(encoding="utf-8"),
+        )
+        for evidence in (
+            "E2E_GVMD_VERSION",
+            "E2E_GVMD_SOURCE_REVISION",
+            "E2E_GVMD_IMAGE_DIGEST",
+            "E2E_GVMD_SOURCE_SPECIFIC_IMAGE",
+        ):
+            self.assertIn(evidence, lane_script)
+        self.assertIn("--external-gvmd-provenance", lane_script)
         self.assertNotIn('--project-directory "$(pwd)"', lane_script)
         self.assertIn("validate_compose_workspace.py", workflow)
         self.assertIn("--expected-workspace \"$(pwd -P)\"", workflow)

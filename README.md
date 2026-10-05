@@ -128,6 +128,17 @@ delete are not executed against Community stable pending
 [the test cases](docs/test-cases.md#devel-isolated) and the generated inventory
 for the exact reproducibility evidence.
 
+The scan lane separately qualifies the read-only gvmd EPSS result filter/sort
+regression for all four EPSS fields. `GVMD_VERSION` may select an exact
+gvmd-only Community tag without changing the other component tags;
+`GVMD_IMAGE` accepts a full source-specific reference such as
+`ghcr.io/greenbone/gvmd:pr-3163` and takes precedence. Artifacts record the
+executable gvmd release, immutable image digest, source revision when the image
+publishes it, and each same-connection health outcome; see the generated
+coverage inventory and [test cases](docs/test-cases.md#devel-scan).
+Source-specific overrides fail closed unless the image publishes an exact
+`org.opencontainers.image.revision` commit SHA.
+
 ## Validation
 
 ```bash

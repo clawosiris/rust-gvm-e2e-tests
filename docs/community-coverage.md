@@ -30,6 +30,24 @@ These exact command names are advertised by reviewed live deployment evidence bu
 | Command | Rationale | Evidence |
 |---|---|---|
 
+## Focused gvmd regressions
+
+### EPSS result filter/sort server-abort regression
+
+- upstream fix: [https://github.com/greenbone/gvmd/pull/3163](https://github.com/greenbone/gvmd/pull/3163) at exact source `471b7745697af0ee0804212c74f5040f30c6c3d7`
+- known affected Community release: `26.40.2`
+- lane: `devel-scan`; fixture: the deterministic scan-linked report; requests are read-only
+- each request is followed on the same authenticated connection by `get_version`
+- the exact affected release may emit `known-upstream-bug` on a proved connection abort; it never emits pass for that failure
+- the fixed source and every unclassified deployment must return a normal GMP response and keep the connection usable
+
+| Field | Filter expression | Sort expression |
+|---|---|---|
+| `epss_score` | `epss_score>0` | `sort=epss_score` |
+| `epss_percentile` | `epss_percentile>0` | `sort=epss_percentile` |
+| `max_epss_score` | `max_epss_score>0` | `sort=max_epss_score` |
+| `max_epss_percentile` | `max_epss_percentile>0` | `sort=max_epss_percentile` |
+
 ## Wire commands
 
 | Command | Disposition | Lane | Requirements |

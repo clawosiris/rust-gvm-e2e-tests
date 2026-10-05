@@ -63,6 +63,15 @@ if [[ "${provider}" == "external" ]]; then
   [[ -S "${socket_path}" ]] || { echo "external gvmd socket is not a socket: ${socket_path}" >&2; exit 1; }
   [[ -f "${runtime_images_path}" ]] || { echo "external runtime image descriptor is missing: ${runtime_images_path}" >&2; exit 1; }
   cp "${runtime_images_path}" "artifacts/${deployment_id}-${lane}-runtime-images.json"
+  external_gvmd_provenance="$(python3 tools/runtime_images.py --external-gvmd-provenance "${runtime_images_path}")"
+  export E2E_GVMD_VERSION="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' <<< "${external_gvmd_provenance}")"
+  export E2E_GVMD_SOURCE_REVISION="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["source_revision"])' <<< "${external_gvmd_provenance}")"
+  export E2E_GVMD_IMAGE_DIGEST="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' <<< "${external_gvmd_provenance}")"
+  if [[ "$(python3 -c 'import json,sys; print(int(json.load(sys.stdin)["source_specific_image"]))' <<< "${external_gvmd_provenance}")" == "1" ]]; then
+    export E2E_GVMD_SOURCE_SPECIFIC_IMAGE=1
+  else
+    export E2E_GVMD_SOURCE_SPECIFIC_IMAGE=0
+  fi
   external_run=(docker run --rm \
     --mount "type=bind,src=$(pwd),dst=/workspace" \
     --mount "type=bind,src=${socket_path},dst=/run/external-gvmd/gvmd.sock,readonly" \
@@ -70,6 +79,9 @@ if [[ "${provider}" == "external" ]]; then
     -e E2E_DEPLOYMENT_CONTRACT_PATH -e E2E_FIXTURE_DESCRIPTOR_PATH -e E2E_RESULTS_PATH \
     -e E2E_CAPABILITY_SNAPSHOT_PATH -e E2E_TEST_PLAN_PATH -e E2E_CONTRACT_ARTIFACT_PATH \
     -e E2E_RUNTIME_IMAGES_PATH -e E2E_RUST_GVM_SHA -e E2E_TASK_PROGRESS_TIMEOUT_SECS \
+    -e E2E_GVMD_VERSION -e E2E_GVMD_SOURCE_REVISION -e E2E_GVMD_IMAGE_DIGEST \
+    -e E2E_GVMD_SOURCE_SPECIFIC_IMAGE \
+    -e GVMD_VERSION -e GVMD_IMAGE \
     -e E2E_REPORT_EXPORT_TIMEOUT_SECS -e E2E_REPORT_EXPORT_POLL_INTERVAL_SECS \
     -e E2E_READINESS_TIMEOUT_SECS -e E2E_READINESS_POLL_INTERVAL_SECS \
     -e E2E_READINESS_MAX_RECONNECTS -e E2E_SCAN_TARGET_HOST -e E2E_OCI_IMAGE_REFERENCE \
@@ -125,6 +137,27 @@ runtime_image_args=()
 for file in "${compose_files[@]}"; do runtime_image_args+=(--compose-file "${file}"); done
 python3 tools/runtime_images.py "${runtime_image_args[@]}" \
   --output "artifacts/${deployment_id}-${lane}-runtime-images.json"
+gvmd_version_output="$(deployment_compose exec -T gvmd gvmd --version)"
+export E2E_GVMD_VERSION="$(awk '{ for (field = 1; field <= NF; field++) if ($field ~ /^[0-9]+\.[0-9]+\.[0-9]+$/) { print $field; exit } }' <<< "${gvmd_version_output}")"
+gvmd_image_id="$(deployment_compose images --quiet gvmd)"
+export E2E_GVMD_SOURCE_REVISION="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${gvmd_image_id}")"
+if [[ "${E2E_GVMD_SOURCE_REVISION}" == "<no value>" ]]; then
+  export E2E_GVMD_SOURCE_REVISION=""
+fi
+export E2E_GVMD_IMAGE_DIGEST="$(python3 -c 'import json,sys; rows=json.load(open(sys.argv[1])); print(next((row.get("digest", "") for row in rows if row.get("service") == "gvmd"), ""))' "artifacts/${deployment_id}-${lane}-runtime-images.json")"
+if [[ -n "${GVMD_IMAGE:-}" ]]; then
+  export E2E_GVMD_SOURCE_SPECIFIC_IMAGE=1
+else
+  export E2E_GVMD_SOURCE_SPECIFIC_IMAGE=0
+fi
+[[ "${E2E_GVMD_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "could not capture exact gvmd release from: ${gvmd_version_output}" >&2; exit 1; }
+[[ -n "${E2E_GVMD_IMAGE_DIGEST}" ]] || { echo "could not capture exact gvmd image digest" >&2; exit 1; }
+if [[ -n "${E2E_GVMD_SOURCE_REVISION}" ]]; then
+  [[ "${E2E_GVMD_SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]] || { echo "gvmd image source revision is not an exact commit SHA" >&2; exit 1; }
+elif [[ "${E2E_GVMD_SOURCE_SPECIFIC_IMAGE}" == "1" ]]; then
+  echo "source-specific GVMD_IMAGE must publish org.opencontainers.image.revision" >&2
+  exit 1
+fi
 deployment_compose --profile runner run --rm -T --no-deps --entrypoint "" rust-gvm-e2e \
   gvm-community-e2e --lane "${lane}"
 if [[ "${lane}" == "devel-fast" ]]; then

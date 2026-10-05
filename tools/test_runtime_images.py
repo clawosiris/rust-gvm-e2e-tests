@@ -72,6 +72,47 @@ class RuntimeImagesTests(unittest.TestCase):
             "unmatched-container",
         )
 
+    def test_external_gvmd_provenance_accepts_only_a_complete_canonical_row(self):
+        row = {
+            "service": "gvmd",
+            "repository": "registry.community.greenbone.net/community/gvmd",
+            "version": "26.40.2",
+            "digest": "registry.community.greenbone.net/community/gvmd@sha256:" + "a" * 64,
+        }
+        self.assertEqual(
+            MODULE.external_gvmd_provenance([row]),
+            {
+                "version": "26.40.2",
+                "source_revision": "",
+                "digest": "registry.community.greenbone.net/community/gvmd@sha256:" + "a" * 64,
+                "source_specific_image": False,
+            },
+        )
+
+    def test_external_gvmd_provenance_requires_revision_for_source_specific_image(self):
+        row = {
+            "service": "gvmd",
+            "repository": "ghcr.io/greenbone/gvmd",
+            "version": "26.40.2",
+            "digest": "ghcr.io/greenbone/gvmd@sha256:" + "b" * 64,
+        }
+        with self.assertRaisesRegex(ValueError, "source-specific"):
+            MODULE.external_gvmd_provenance([row])
+        row["source_revision"] = "c" * 40
+        self.assertTrue(MODULE.external_gvmd_provenance([row])["source_specific_image"])
+
+    def test_external_gvmd_provenance_rejects_missing_or_ambiguous_gvmd_rows(self):
+        with self.assertRaisesRegex(ValueError, "exactly one gvmd"):
+            MODULE.external_gvmd_provenance([])
+        row = {
+            "service": "gvmd",
+            "repository": "registry.community.greenbone.net/community/gvmd",
+            "version": "26.40.2",
+            "digest": "sha256:" + "d" * 64,
+        }
+        with self.assertRaisesRegex(ValueError, "exactly one gvmd"):
+            MODULE.external_gvmd_provenance([row, row.copy()])
+
 
 if __name__ == "__main__":
     unittest.main()
