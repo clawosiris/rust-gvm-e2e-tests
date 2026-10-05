@@ -11,6 +11,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::LiveHelpAllowlistEntry;
 
+/// Schema version for deployment capability snapshots.
+///
+/// Optional provenance fields are additive, so they remain compatible with the
+/// original snapshot schema consumed by [`build_plan`].
+pub const DEPLOYMENT_CAPABILITIES_SCHEMA_VERSION: u32 = 1;
+
 /// The deployment's policy for an observed capability or fixture.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -501,7 +507,10 @@ pub fn build_plan(
     lane: &str,
     inputs: impl IntoIterator<Item = PlanInput>,
 ) -> Result<TestPlan, String> {
-    if contract.schema_version != 1 || catalog.schema_version != 1 || snapshot.schema_version != 1 {
+    if contract.schema_version != 1
+        || catalog.schema_version != 1
+        || snapshot.schema_version != DEPLOYMENT_CAPABILITIES_SCHEMA_VERSION
+    {
         return Err("unsupported capability schema version".to_string());
     }
     if contract.deployment_id != snapshot.deployment_id {
@@ -777,7 +786,7 @@ mod tests {
         probe: ProbeState,
     ) -> DeploymentCapabilities {
         DeploymentCapabilities {
-            schema_version: 1,
+            schema_version: DEPLOYMENT_CAPABILITIES_SCHEMA_VERSION,
             deployment_id: "test".into(),
             gmp_version: Some("22.7".into()),
             gvmd_version: None,
@@ -821,6 +830,36 @@ mod tests {
             features: BTreeMap::from([("ENABLE_AGENTS".into(), requirement)]),
             fixtures: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn capability_snapshot_v1_with_additive_provenance_builds_a_plan() {
+        assert_eq!(DEPLOYMENT_CAPABILITIES_SCHEMA_VERSION, 1);
+        let mut observed = snapshot(
+            ObservedFeature {
+                compiled_in: Some(true),
+                enabled: Some(true),
+                evidence: vec![evidence("get_features")],
+            },
+            true,
+            ProbeState::Ready,
+        );
+        observed.gvmd_version = Some("26.40.2".into());
+        observed.gvmd_source_revision = Some("471b7745697af0ee0804212c74f5040f30c6c3d7".into());
+        observed.gvmd_image_digest =
+            Some("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into());
+
+        let plan = build_plan(
+            &contract(Requirement::Optional, false),
+            &catalog(),
+            &observed,
+            "devel-fast",
+            [input()],
+        )
+        .expect("v1 discovery snapshot with additive provenance must be plannable");
+
+        assert_eq!(observed.schema_version, 1);
+        assert_eq!(plan.schema_version, 1);
     }
 
     fn input() -> PlanInput {
