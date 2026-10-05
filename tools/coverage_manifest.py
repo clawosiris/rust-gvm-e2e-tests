@@ -112,7 +112,7 @@ def load_issue_715_validation() -> dict[str, object]:
         raise ValueError("issue #715 validation fixture must use schema_version 1 and exact fields")
     if regression["issue"] != 715:
         raise ValueError("issue #715 validation fixture must identify issue 715")
-    if regression["rust_gvm_sha"] != "cd4689cab8875ea1a0d7b35cd5a5038416f0e8e0":
+    if regression["rust_gvm_sha"] != "3039246a1835954287ddbe5817f067addb4a059e":
         raise ValueError("issue #715 validation fixture must pin the reviewed rust-gvm SHA")
     expected_live_cases = [
         ("get_info NVT OID filtering", "get_info"),

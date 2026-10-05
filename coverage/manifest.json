@@ -1,6 +1,6 @@
 {
   "schema_version": 4,
-  "rust_gvm_sha": "cd4689cab8875ea1a0d7b35cd5a5038416f0e8e0",
+  "rust_gvm_sha": "3039246a1835954287ddbe5817f067addb4a059e",
   "registry_count": 164,
   "typed_helper_count": 267,
   "helper_variant_count": 4,
@@ -40,7 +40,7 @@
     "issue-715-validation-error-layer": {
       "schema_version": 1,
       "issue": 715,
-      "rust_gvm_sha": "cd4689cab8875ea1a0d7b35cd5a5038416f0e8e0",
+      "rust_gvm_sha": "3039246a1835954287ddbe5817f067addb4a059e",
       "live_cases": [
         {
           "name": "get_info NVT OID filtering",

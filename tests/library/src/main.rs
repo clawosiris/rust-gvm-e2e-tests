@@ -8912,6 +8912,67 @@ mod tests {
     }
 
     #[test]
+    fn issue_715_help_discovery_normalizes_report_export_command_names() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("report-export-help-normalization");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![vec![
+                        ("get_version", Some(VERSION_RESPONSE)),
+                        ("authenticate", Some(AUTH_RESPONSE)),
+                        (
+                            "help",
+                            Some(
+                                r#"<help_response status="200" status_text="OK"><schema format="XML"><command><name> EXPORT_SCAN_REPORT </name></command></schema></help_response>"#,
+                            ),
+                        ),
+                        (
+                            "export_scan_report",
+                            Some(
+                                r#"<export_scan_report_response status="201" status_text="OK, resource created" id="export-id"/>"#,
+                            ),
+                        ),
+                    ]],
+                ));
+                let config = socket_test_config(&path);
+                let mut client = connect_and_authenticate(&config).await;
+
+                client
+                    .discover_commands()
+                    .await
+                    .expect("help discovery should parse");
+                assert_eq!(
+                    client.command_support("export_scan_report"),
+                    gvm_client::CommandSupport::Supported
+                );
+                let response = client
+                    .export_scan_report(ExportScanReportRequest::new(
+                        EntityId::new("report-id").expect("valid report ID"),
+                    ))
+                    .await
+                    .expect("normalized discovery should permit the typed export");
+                assert_eq!(response.status, 201);
+
+                let commands = server.await.expect("scripted server");
+                assert_eq!(
+                    commands,
+                    [
+                        "get_version",
+                        "authenticate",
+                        "help",
+                        "export_scan_report"
+                    ]
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
+    }
+
+    #[test]
     fn issue_715_nvt_oid_filter_selects_the_executed_info_list_helper() {
         assert!(runtime_helper_path("get_info_list"));
         assert!(!runtime_helper_path("get_nvt"));

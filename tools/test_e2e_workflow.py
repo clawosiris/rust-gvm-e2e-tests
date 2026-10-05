@@ -19,7 +19,7 @@ WAIT_SCRIPT = Path(__file__).parents[1] / "docker/scripts/wait-ready.sh"
 COMPOSE_FILE = Path(__file__).parents[1] / "docker/docker-compose.yml"
 CARGO_MANIFEST = Path(__file__).parents[1] / "tests/library/Cargo.toml"
 LOCKFILE = Path(__file__).parents[1] / "Cargo.lock"
-SUPPORTED_RUST_GVM_SHA = "cd4689cab8875ea1a0d7b35cd5a5038416f0e8e0"
+SUPPORTED_RUST_GVM_SHA = "3039246a1835954287ddbe5817f067addb4a059e"
 SELF_HOSTED_LANES = {
     "devel-fast",
     "devel-scan",

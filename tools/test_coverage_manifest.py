@@ -220,7 +220,7 @@ class CoveragePolicyTests(unittest.TestCase):
         self.assertEqual(fixture["issue"], 715)
         self.assertEqual(
             fixture["rust_gvm_sha"],
-            "cd4689cab8875ea1a0d7b35cd5a5038416f0e8e0",
+            "3039246a1835954287ddbe5817f067addb4a059e",
         )
         self.assertEqual(
             [case["command"] for case in fixture["live_cases"]],
