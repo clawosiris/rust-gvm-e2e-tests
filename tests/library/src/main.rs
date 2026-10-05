@@ -3045,18 +3045,49 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
             ..Default::default()
         })
     );
-    let vulnerability_probe_id = first_nonempty(
-        vulnerabilities
-            .items
-            .iter()
-            .map(|vulnerability| vulnerability.id.as_str()),
-    )
-    .unwrap_or(&nvt_oid);
-    typed_read!(
-        "get_vulnerability(single)",
-        client.get_vulnerability(GetVulnerabilityRequest::new(vulnerability_probe_id))
-    );
-    record_helper_execution("get_vulnerability", "typed vulnerability detail executed")?;
+    if let Some(vulnerability) = vulnerabilities.items.first() {
+        typed_read!(
+            "get_vulnerability(single)",
+            client.get_vulnerability(GetVulnerabilityRequest::new(&vulnerability.id))
+        );
+        record_helper_execution("get_vulnerability", "typed vulnerability detail executed")?;
+    } else {
+        match client
+            .get_vulnerability(GetVulnerabilityRequest::new(&nvt_oid))
+            .await
+        {
+            Err(GvmError::Server {
+                status: 404,
+                message,
+            }) if message.starts_with("Failed to find vuln '") => {}
+            Err(error) => {
+                return Err(AppError::Assertion(format!(
+                    "fixture-absent get_vulnerability returned unexpected server error: {error}"
+                )));
+            }
+            Ok(_) => {
+                return Err(AppError::Assertion(
+                    "fixture-absent get_vulnerability unexpectedly found an NVT OID as a vulnerability"
+                        .to_string(),
+                ));
+            }
+        }
+        let vulnerability_health = client.get_version(GetVersionRequest::new()).await?;
+        assert_typed_status(
+            vulnerability_health.status,
+            &vulnerability_health.status_text,
+            200,
+            "get_vulnerability fixture-absent same-session get_version",
+        )?;
+        log_pass(
+            "typed get_vulnerability(single absent fixture)",
+            "typed GMP 404 followed by same-session get_version",
+        );
+        record_helper_execution(
+            "get_vulnerability",
+            "typed vulnerability detail returned the expected fixture-absent 404 and preserved the session",
+        )?;
+    }
 
     typed_read!(
         "get_alerts",
@@ -8497,13 +8528,9 @@ mod tests {
     }
 
     #[test]
-    fn fixture_selector_skips_empty_values_and_allows_a_deterministic_fallback() {
+    fn fixture_selector_skips_empty_values() {
         assert_eq!(first_nonempty(["", "  ", "General"]), Some("General"));
         assert_eq!(first_nonempty(["", "\t"]), None);
-        assert_eq!(
-            first_nonempty([""]).unwrap_or("1.3.6.1.4.1.25623.1.0.1"),
-            "1.3.6.1.4.1.25623.1.0.1"
-        );
     }
 
     #[derive(Debug)]
