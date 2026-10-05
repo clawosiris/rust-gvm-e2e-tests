@@ -85,7 +85,7 @@ jobs:
   resolve-refs:
     name: Resolve exact component revisions
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 60
     outputs:
       rust-gvm-ref: ${{ steps.refs.outputs.rust-gvm-ref }}
       rust-gvm-sha: ${{ steps.refs.outputs.rust-gvm-sha }}
@@ -127,7 +127,7 @@ jobs:
     name: Community coverage inventory
     needs: resolve-refs
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       RESOLVED_RUST_GVM_SHA: ${{ needs.resolve-refs.outputs.rust-gvm-sha }}
     steps:
@@ -166,7 +166,7 @@ jobs:
     name: Build Community runner
     needs: [resolve-refs, inventory]
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     outputs:
       rust-gvm-ref: ${{ steps.refs.outputs.rust-gvm-ref }}
       rust-gvm-sha: ${{ steps.refs.outputs.rust-gvm-sha }}
