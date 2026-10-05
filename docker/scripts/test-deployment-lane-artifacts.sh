@@ -4,6 +4,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/deployment-lane-artifacts.sh"
 source "${script_dir}/postgres-bootstrap.sh"
+source "${script_dir}/scanner-readiness.sh"
 
 expected=$'acme-ci-devel-fast-runtime-images.json\nacme-ci-devel-fast-capability-snapshot.json\nacme-ci-devel-fast-deployment-contract.json\nacme-ci-devel-fast-test-plan.json\nacme-ci-devel-fast-test-results.json\nacme-ci-devel-fast-provider.log'
 [[ "$(deployment_lane_artifact_paths acme-ci devel-fast)" == "${expected}" ]]
@@ -54,3 +55,26 @@ if wait_for_postgres_bootstrap 2>"${bootstrap_error_log}"; then
 fi
 [[ "${bootstrap_attempts}" -eq 3 ]]
 grep -Fq 'did not become available for bootstrap tuning within 5s' "${bootstrap_error_log}"
+
+scanner_health_state=starting
+scanner_health_sleeps=()
+deployment_compose() {
+  [[ "$1" == "ps" && "$2" == "-q" && "$3" == "vulnerability-tests" ]]
+  printf '%s\n' scanner-container
+}
+docker() {
+  [[ "$1" == "inspect" && "$4" == "scanner-container" ]]
+  printf '%s\n' "${scanner_health_state}"
+}
+sleep() {
+  scanner_health_sleeps+=("$1")
+  scanner_health_state=healthy
+}
+wait_for_compose_service_health vulnerability-tests 5 2
+[[ "${scanner_health_sleeps[*]}" == "2" ]]
+
+if wait_for_compose_service_health vulnerability-tests nope 2 2>"${bootstrap_error_log}"; then
+  echo "invalid scanner health timeout unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -Fq 'service health timeout must be a positive integer' "${bootstrap_error_log}"

@@ -66,6 +66,10 @@ test-plan failure, and lane-result JSON artifacts.
 Ordinary fast and scan jobs intentionally reuse warm feed volumes. Initializing
 a fresh feed can consume most of the shared 21,000-second readiness budget. Volume
 deletion happens only with the explicit `clean` workflow input.
+Readiness waits for the vulnerability-test data container to finish copying,
+allows OSPd a bounded stabilization interval to load the copied VTs, and then
+requires authenticated scan-config plus SCAP/CPE/CERT queries to succeed before
+any lane starts.
 
 Before checkout, each self-hosted lane loads the run's already-built runner
 image from runner-temporary storage and uses that exact image as root to restore

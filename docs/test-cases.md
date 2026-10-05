@@ -5,6 +5,12 @@ typed public client surface. See [community-coverage.md](community-coverage.md)
 for every command/helper and its disposition. The generated file must never be
 edited by hand.
 
+All Compose lanes first require the vulnerability-test data container to finish
+copying and give OSPd a bounded VT-loading interval. Authenticated GMP readiness
+then requires scan configs and SCAP/CPE/CERT data before lane-specific tests can
+begin, preventing scan evidence from being collected against an uninitialized
+scanner.
+
 ## `devel-fast`
 
 The blocking warm-volume lane validates:
