@@ -13,8 +13,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::capability::{
-    reconcile, DeploymentCapabilities, DeploymentContract, ExecutionResult, PlanEntryKind,
-    TerminalOutcome, TestPlan,
+    reconcile, DeploymentCapabilities, DeploymentContract, ExecutionResult, LiveHelpParity,
+    PlanEntryKind, TerminalOutcome, TestPlan,
 };
 use crate::{Disposition, COMMAND_COVERAGE, HELPER_COVERAGE, RUST_GVM_SHA};
 
@@ -71,6 +71,7 @@ pub struct RunReport {
     pub outcome_counts: BTreeMap<String, usize>,
     pub features: BTreeMap<String, FeatureState>,
     pub help_commands: Vec<String>,
+    pub live_help_parity: LiveHelpParity,
     pub conditional_commands: BTreeMap<String, bool>,
     pub registry_version_gates: BTreeMap<String, bool>,
     pub observations: Vec<Observation>,
@@ -126,7 +127,7 @@ impl RunReport {
             });
         }
         Self {
-            schema_version: 2,
+            schema_version: 3,
             run_id: run_id.to_string(),
             deployment_id: env::var("E2E_DEPLOYMENT_ID")
                 .unwrap_or_else(|_| "community-stable".to_string()),
@@ -145,6 +146,7 @@ impl RunReport {
             outcome_counts: BTreeMap::new(),
             features: BTreeMap::new(),
             help_commands: Vec::new(),
+            live_help_parity: LiveHelpParity::default(),
             conditional_commands: BTreeMap::new(),
             registry_version_gates: BTreeMap::new(),
             observations,
@@ -281,6 +283,7 @@ pub fn discovery(
     gmp_version: &str,
     features: BTreeMap<String, FeatureState>,
     mut help_commands: Vec<String>,
+    live_help_parity: LiveHelpParity,
 ) {
     help_commands.sort();
     help_commands.dedup();
@@ -288,6 +291,7 @@ pub fn discovery(
         report.gmp_version = Some(gmp_version.to_string());
         report.features = features;
         report.help_commands = help_commands;
+        report.live_help_parity = live_help_parity;
     });
 }
 
@@ -390,6 +394,47 @@ pub fn publish_planning_failure(
             "deployment_id": capabilities.deployment_id,
             "lane": lane,
             "planning_error": error,
+            "entries": [],
+        }),
+    )
+}
+
+/// Preserve exhaustive authenticated live-help evidence when reverse parity
+/// blocks discovery before any cleanup or mutation can begin.
+pub fn publish_discovery_failure(
+    capabilities: &DeploymentCapabilities,
+    contract: &DeploymentContract,
+    lane: &str,
+    error: &str,
+) -> Result<(), String> {
+    let snapshot_path = env::var("E2E_CAPABILITY_SNAPSHOT_PATH").unwrap_or_else(|_| {
+        format!(
+            "/workspace/artifacts/{}-{lane}-capability-snapshot.json",
+            capabilities.deployment_id
+        )
+    });
+    let contract_path = env::var("E2E_CONTRACT_ARTIFACT_PATH").unwrap_or_else(|_| {
+        format!(
+            "/workspace/artifacts/{}-{lane}-deployment-contract.json",
+            capabilities.deployment_id
+        )
+    });
+    let plan_path = env::var("E2E_TEST_PLAN_PATH").unwrap_or_else(|_| {
+        format!(
+            "/workspace/artifacts/{}-{lane}-test-plan.json",
+            capabilities.deployment_id
+        )
+    });
+    write_json(Path::new(&snapshot_path), capabilities)?;
+    write_json(Path::new(&contract_path), contract)?;
+    write_json(
+        Path::new(&plan_path),
+        &serde_json::json!({
+            "schema_version": 1,
+            "deployment_id": capabilities.deployment_id,
+            "lane": lane,
+            "discovery_error": error,
+            "live_help_parity": capabilities.live_help_parity,
             "entries": [],
         }),
     )

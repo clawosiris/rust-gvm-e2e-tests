@@ -6,6 +6,14 @@ runtime-image provenance. The harness discovers GMP version, raw `get_features`
 attributes, authenticated help, and safe probes before it performs preflight
 cleanup or any scenario mutation.
 
+Authenticated help is also a reverse-parity boundary. Its complete brief-XML
+command set is classified against the generated rust-gvm/E2E command inventory
+and the reviewed exact-name allowlist. An advertised name in neither set fails
+discovery before preflight cleanup; the capability snapshot, failed test-plan
+artifact, and lane result retain the sorted unknown command list. Allowlist
+entries are exact command names with individual rationale and evidence—wildcard
+or family exclusions are invalid policy.
+
 ## Contract semantics
 
 Contracts use schema version 1. `required` must resolve to ready; missing,

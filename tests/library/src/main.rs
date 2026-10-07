@@ -86,13 +86,13 @@ use tokio::runtime::Builder;
 use tokio::time::{sleep, Instant};
 
 use gvm_community_e2e::capability::{
-    build_plan, parse_feature_evidence, CommandSupport, DeploymentCapabilities, DeploymentContract,
-    Evidence, FeatureCatalog, FixtureDescriptor, PlanDecision, PlanEntryKind, PlanInput,
-    ProbeResult, ProbeState, TestPlan,
+    build_plan, classify_live_help_commands, enforce_live_help_parity, parse_feature_evidence,
+    CommandSupport, DeploymentCapabilities, DeploymentContract, Evidence, FeatureCatalog,
+    FixtureDescriptor, PlanDecision, PlanEntryKind, PlanInput, ProbeResult, ProbeState, TestPlan,
 };
 use gvm_community_e2e::runtime::{self, FeatureState, Outcome};
 use gvm_community_e2e::HELPER_MIGRATIONS;
-use gvm_community_e2e::{Disposition, COMMAND_COVERAGE, HELPER_COVERAGE};
+use gvm_community_e2e::{Disposition, COMMAND_COVERAGE, HELPER_COVERAGE, LIVE_HELP_ALLOWLIST};
 
 fn tls_certificate_data() -> Vec<u8> {
     include_bytes!("../../../fixtures/e2e-certificate.pem").to_vec()
@@ -1645,6 +1645,13 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
         .into_iter()
         .map(|command| canonical_help_command(&command.name))
         .collect();
+    let modeled_commands = COMMAND_COVERAGE
+        .iter()
+        .map(|entry| entry.wire_command.to_string())
+        .collect::<BTreeSet<_>>();
+    let live_help_parity =
+        classify_live_help_commands(&help_commands, &modeled_commands, LIVE_HELP_ALLOWLIST)
+            .map_err(AppError::Assertion)?;
     let commands = COMMAND_COVERAGE
         .iter()
         .map(|entry| {
@@ -1667,6 +1674,7 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
         &version_response.version,
         features.clone(),
         help_commands.iter().cloned().collect(),
+        live_help_parity.clone(),
     );
     ensure(
         !help_commands.is_empty(),
@@ -1698,6 +1706,43 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
         help_commands.iter().cloned().collect::<Vec<_>>().join(",")
     ));
 
+    let provider_probes = descriptor
+        .probes
+        .iter()
+        .map(|(name, evidence)| (name.clone(), provider_probe(evidence)))
+        .collect::<BTreeMap<_, _>>();
+    let fixtures = descriptor
+        .fixtures
+        .iter()
+        .map(|(name, evidence)| (name.clone(), provider_probe(evidence)))
+        .collect::<BTreeMap<_, _>>();
+    if let Err(error) = enforce_live_help_parity(&live_help_parity) {
+        let capabilities = DeploymentCapabilities {
+            schema_version: 1,
+            deployment_id,
+            gmp_version: Some(version_response.version.clone()),
+            live_help_parity,
+            features: observed_features,
+            commands,
+            probes: provider_probes,
+            fixtures,
+        };
+        runtime::observe("live-help-reverse-parity", Outcome::Fail, &error);
+        runtime::publish_discovery_failure(&capabilities, &contract, lane, &error)
+            .map_err(AppError::Assertion)?;
+        return Err(AppError::Assertion(error));
+    }
+    runtime::observe(
+        "live-help-reverse-parity",
+        Outcome::Pass,
+        &format!(
+            "classified all {} advertised commands: {} modeled, {} exact-name allowlisted, 0 unknown",
+            live_help_parity.advertised_commands.len(),
+            live_help_parity.modeled_commands.len(),
+            live_help_parity.allowlisted_commands.len()
+        ),
+    );
+
     let mut conditional_commands = BTreeMap::new();
     let mut registry_version_gates = BTreeMap::new();
     for entry in COMMAND_COVERAGE
@@ -1724,11 +1769,7 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
     }
 
     runtime::conditional_discovery(conditional_commands.clone(), registry_version_gates.clone());
-    let mut probes = descriptor
-        .probes
-        .iter()
-        .map(|(name, evidence)| (name.clone(), provider_probe(evidence)))
-        .collect::<BTreeMap<_, _>>();
+    let mut probes = provider_probes;
     for (feature_name, mapping) in &catalog.features {
         let Some(probe_name) = mapping.probe.as_deref() else {
             continue;
@@ -1791,15 +1832,11 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
         };
         probes.insert(probe_name.to_string(), result);
     }
-    let fixtures = descriptor
-        .fixtures
-        .iter()
-        .map(|(name, evidence)| (name.clone(), provider_probe(evidence)))
-        .collect();
     let capabilities = DeploymentCapabilities {
         schema_version: 1,
         deployment_id,
         gmp_version: Some(version_response.version.clone()),
+        live_help_parity,
         features: observed_features,
         commands,
         probes,
