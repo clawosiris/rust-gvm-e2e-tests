@@ -198,27 +198,13 @@ mod tests {
     #[test]
     fn registry_and_manifest_are_exactly_equal() {
         validate_compiled_manifest().expect("compiled manifest must match dependency registry");
-        assert_eq!(COMMAND_COVERAGE.len(), 158);
+        assert_eq!(COMMAND_COVERAGE.len(), 164);
     }
 
     #[test]
     fn live_help_allowlist_is_exact_reviewed_and_disjoint_from_modeled_commands() {
         validate_compiled_manifest().expect("compiled live-help policy must be valid");
-        assert_eq!(LIVE_HELP_ALLOWLIST.len(), 6);
-        assert_eq!(
-            LIVE_HELP_ALLOWLIST
-                .iter()
-                .map(|entry| entry.name)
-                .collect::<Vec<_>>(),
-            [
-                "cancel_report_export",
-                "download_report_export",
-                "export_audit_report",
-                "export_delta_audit_report",
-                "export_delta_scan_report",
-                "get_report_exports",
-            ]
-        );
+        assert!(LIVE_HELP_ALLOWLIST.is_empty());
     }
 
     #[test]
@@ -277,7 +263,7 @@ mod tests {
     #[test]
     fn all_public_helpers_remain_compile_referenced() {
         compile_enforce_public_helper_surface();
-        assert_eq!(HELPER_COVERAGE.len(), 261);
+        assert_eq!(HELPER_COVERAGE.len(), 267);
     }
 
     #[test]
