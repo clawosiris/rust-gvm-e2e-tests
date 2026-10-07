@@ -1,6 +1,6 @@
 {
   "schema_version": 4,
-  "rust_gvm_sha": "8ea68a82636974256b2c198ea24a5aa26262b659",
+  "rust_gvm_sha": "3039246a1835954287ddbe5817f067addb4a059e",
   "registry_count": 164,
   "typed_helper_count": 267,
   "helper_variant_count": 4,
@@ -36,6 +36,46 @@
           "sort_expression": "sort=max_epss_percentile"
         }
       ]
+    },
+    "issue-715-validation-error-layer": {
+      "schema_version": 1,
+      "issue": 715,
+      "rust_gvm_sha": "3039246a1835954287ddbe5817f067addb4a059e",
+      "live_cases": [
+        {
+          "name": "get_info NVT OID filtering",
+          "command": "get_info",
+          "assertion": "A typed NVT get_info list request with an oid=... filter returns exactly the selected NVT identity."
+        },
+        {
+          "name": "empty-password live server rejection",
+          "command": "authenticate",
+          "assertion": "Supplementary typed-builder coverage rejects an empty password locally; a raw empty-password request to live gvmd then returns GvmError::Server status 400 with Authentication failed before same-connection get_version and valid authentication."
+        },
+        {
+          "name": "get_settings invalid sort field",
+          "command": "get_settings",
+          "assertion": "A typed invalid sort field returns a normal GMP status 200 response through gvmd's validated fallback, and same-session get_version succeeds."
+        },
+        {
+          "name": "note validation server errors",
+          "command": "create_note, modify_note",
+          "assertion": "Malformed severity and active values return GvmError::Server status 400 with Error in severity specification and Error in active specification respectively; raw XML is used only because these malformed values have no typed-builder representation, then same-session get_version succeeds."
+        }
+      ],
+      "socket_cases": [
+        {
+          "name": "empty-password authentication server error",
+          "command": "authenticate",
+          "assertion": "Raw XmlCommand sends an empty password; GMP returns GvmError::Server status 400 with Authentication failed, then same-connection get_version and valid authentication succeed."
+        },
+        {
+          "name": "stop_task server error propagation",
+          "command": "stop_task",
+          "assertion": "A deterministic Unix-socket script returns GvmError::Server status 400 with Internal error stopping task and proves same-session get_version remains usable."
+        }
+      ],
+      "excluded": "The later stop-task return-code enum change is intentionally not covered."
     }
   },
   "feature_catalog": {

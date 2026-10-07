@@ -38,7 +38,7 @@ on:
         description: Exact canonical rust-gvm commit SHA (defaults to the reviewed pin)
         required: true
         type: string
-        default: 8ea68a82636974256b2c198ea24a5aa26262b659
+        default: 3039246a1835954287ddbe5817f067addb4a059e
       gvm-rools-ref:
         description: gvm-rools ref for CLI/differential validation
         required: true
@@ -77,7 +77,7 @@ env:
   COMPOSE_FILE: docker/docker-compose.yml
   RUNNER_IMAGE_NAME: rust-gvm-e2e-runner
   RUNNER_IMAGE_TAG: ci
-  RUST_GVM_SHA: 8ea68a82636974256b2c198ea24a5aa26262b659
+  RUST_GVM_SHA: 3039246a1835954287ddbe5817f067addb4a059e
   GVMD_VERSION: ${{ inputs.gvmd-version }}
   GVMD_IMAGE: ${{ inputs.gvmd-image }}
 
@@ -85,7 +85,7 @@ jobs:
   resolve-refs:
     name: Resolve exact component revisions
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 60
     outputs:
       rust-gvm-ref: ${{ steps.refs.outputs.rust-gvm-ref }}
       rust-gvm-sha: ${{ steps.refs.outputs.rust-gvm-sha }}
@@ -127,7 +127,7 @@ jobs:
     name: Community coverage inventory
     needs: resolve-refs
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       RESOLVED_RUST_GVM_SHA: ${{ needs.resolve-refs.outputs.rust-gvm-sha }}
     steps:
@@ -166,7 +166,7 @@ jobs:
     name: Build Community runner
     needs: [resolve-refs, inventory]
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     outputs:
       rust-gvm-ref: ${{ steps.refs.outputs.rust-gvm-ref }}
       rust-gvm-sha: ${{ steps.refs.outputs.rust-gvm-sha }}

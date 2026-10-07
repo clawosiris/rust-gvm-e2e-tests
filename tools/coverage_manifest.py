@@ -65,6 +65,7 @@ IMPLEMENTED_FEATURE_COMMANDS = {
 FEATURE_CATALOG_PATH = ROOT / "coverage/feature-catalog.json"
 LIVE_HELP_ALLOWLIST_PATH = ROOT / "coverage/live-help-allowlist.json"
 EPSS_REGRESSION_PATH = ROOT / "fixtures/epss-result-regression.json"
+ISSUE_715_VALIDATION_PATH = ROOT / "fixtures/issue-715-validation.json"
 
 
 def load_feature_catalog() -> dict[str, object]:
@@ -94,6 +95,63 @@ def load_epss_regression() -> dict[str, object]:
     ]
     if not isinstance(probes, list) or [probe.get("field") for probe in probes] != expected_fields:
         raise ValueError("EPSS regression fixture must contain the four ordered gvmd fields")
+    return regression
+
+
+def load_issue_715_validation() -> dict[str, object]:
+    regression = json.loads(ISSUE_715_VALIDATION_PATH.read_text(encoding="utf-8"))
+    required = {
+        "schema_version",
+        "issue",
+        "rust_gvm_sha",
+        "live_cases",
+        "socket_cases",
+        "excluded",
+    }
+    if set(regression) != required or regression["schema_version"] != 1:
+        raise ValueError("issue #715 validation fixture must use schema_version 1 and exact fields")
+    if regression["issue"] != 715:
+        raise ValueError("issue #715 validation fixture must identify issue 715")
+    if regression["rust_gvm_sha"] != "3039246a1835954287ddbe5817f067addb4a059e":
+        raise ValueError("issue #715 validation fixture must pin the reviewed rust-gvm SHA")
+    expected_live_cases = [
+        ("get_info NVT OID filtering", "get_info"),
+        ("empty-password live server rejection", "authenticate"),
+        ("get_settings invalid sort field", "get_settings"),
+        ("note validation server errors", "create_note, modify_note"),
+    ]
+    live_cases = regression["live_cases"]
+    if not isinstance(live_cases, list) or [
+        (case.get("name"), case.get("command")) for case in live_cases if isinstance(case, dict)
+    ] != expected_live_cases:
+        raise ValueError("issue #715 validation fixture must contain the four ordered live cases")
+    if any(
+        not isinstance(case, dict)
+        or set(case) != {"name", "command", "assertion"}
+        or not all(isinstance(value, str) and value for value in case.values())
+        for case in live_cases
+    ):
+        raise ValueError("issue #715 live cases must contain exact nonempty fields")
+    expected_socket_cases = [
+        ("empty-password authentication server error", "authenticate"),
+        ("stop_task server error propagation", "stop_task"),
+    ]
+    socket_cases = regression["socket_cases"]
+    if not isinstance(socket_cases, list) or [
+        (case.get("name"), case.get("command"))
+        for case in socket_cases
+        if isinstance(case, dict)
+    ] != expected_socket_cases:
+        raise ValueError("issue #715 validation fixture must contain the two ordered socket cases")
+    if any(
+        not isinstance(case, dict)
+        or set(case) != {"name", "command", "assertion"}
+        or not all(isinstance(value, str) and value for value in case.values())
+        for case in socket_cases
+    ):
+        raise ValueError("issue #715 socket cases must contain exact nonempty fields")
+    if not isinstance(regression["excluded"], str) or not regression["excluded"]:
+        raise ValueError("issue #715 validation fixture must state its exclusion")
     return regression
 
 
@@ -757,7 +815,10 @@ def build_manifest(
         "removed_helper_count": sum(item.status == "removed" for item in migrations),
         "live_help_allowlist_count": len(live_help_allowlist),
         "live_help_allowlist": live_help_allowlist,
-        "regressions": {"gvmd-epss-result-filter-sort": load_epss_regression()},
+        "regressions": {
+            "gvmd-epss-result-filter-sort": load_epss_regression(),
+            "issue-715-validation-error-layer": load_issue_715_validation(),
+        },
         "feature_catalog": load_feature_catalog()["features"],
         "scenarios": [
             {
@@ -786,6 +847,7 @@ def render_markdown(manifest: dict[str, object]) -> str:
     migrations = manifest["helper_migrations"]
     live_help_allowlist = manifest["live_help_allowlist"]
     epss = manifest["regressions"]["gvmd-epss-result-filter-sort"]
+    issue_715 = manifest["regressions"]["issue-715-validation-error-layer"]
     counts = {
         disposition: sum(
             item["disposition"] == disposition for item in commands  # type: ignore[index]
@@ -849,6 +911,39 @@ def render_markdown(manifest: dict[str, object]) -> str:
     lines.extend(
         f"| `{probe['field']}` | `{probe['filter_expression']}` | `{probe['sort_expression']}` |"
         for probe in epss["probes"]
+    )
+    lines.extend(
+        [
+            "",
+            "### Issue #715 typed validation/error layer",
+            "",
+            f"- reviewed rust-gvm source: `{issue_715['rust_gvm_sha']}`",
+            "- the live cases execute in `devel-fast` without creating an unsafe fixture; the local empty-password check is supplementary typed-builder coverage and raw XML verifies gvmd's source-shaped rejection",
+            "- deterministic Unix-socket scripts preserve exact source-shaped messages for client error propagation; each error path proves same-connection recovery",
+            f"- exclusion: {issue_715['excluded']}",
+            "",
+            "#### Live cases",
+            "",
+            "| Case | Command | Assertion |",
+            "|---|---|---|",
+        ]
+    )
+    lines.extend(
+        f"| {case['name']} | `{case['command']}` | {case['assertion']} |"
+        for case in issue_715["live_cases"]
+    )
+    lines.extend(
+        [
+            "",
+            "#### Deterministic Unix-socket cases",
+            "",
+            "| Case | Command | Assertion |",
+            "|---|---|---|",
+        ]
+    )
+    lines.extend(
+        f"| {case['name']} | `{case['command']}` | {case['assertion']} |"
+        for case in issue_715["socket_cases"]
     )
     lines.extend(
         [
