@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "baselines/**"
+      - "contracts/**"
       - "coverage/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -50,11 +51,6 @@ on:
         default: stable
       clean:
         description: Explicitly destroy the selected lane volumes first
-        required: false
-        type: boolean
-        default: false
-      record-baseline:
-        description: Write an observed candidate baseline artifact
         required: false
         type: boolean
         default: false
@@ -148,7 +144,11 @@ jobs:
           cargo clippy --workspace --all-targets --locked -- -D warnings
           bash -n docker/scripts/*.sh tests/cli/*.sh
           bash docker/scripts/test-community-lane-artifacts.sh
+          bash docker/scripts/test-deployment-lane-artifacts.sh
           docker compose -f "${COMPOSE_FILE}" config --quiet
+          python3 tools/validate_compose_workspace.py \
+            --compose-file "${COMPOSE_FILE}" \
+            --expected-workspace "$(pwd -P)"
 
   build-runner:
     name: Build Community runner
@@ -209,7 +209,6 @@ jobs:
       GVM_VERSION: ${{ needs.build-runner.outputs.gvm-version }}
       E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
       E2E_CLEAN_VOLUMES: ${{ inputs.clean && '1' || '0' }}
-      E2E_RECORD_BASELINE: ${{ inputs['record-baseline'] && '1' || '0' }}
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -240,7 +239,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           clean: false
-      - run: bash docker/scripts/run-community-lane.sh devel-fast
+      - run: bash docker/scripts/run-deployment-lane.sh devel-fast
       - if: failure()
         run: docker compose -f "${COMPOSE_FILE}" logs --tail=250 gvmd ospd-openvas openvasd pg-gvm
       - if: always()
@@ -264,7 +263,6 @@ jobs:
       GVM_VERSION: ${{ needs.build-runner.outputs.gvm-version }}
       E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
       E2E_CLEAN_VOLUMES: ${{ inputs.clean && '1' || '0' }}
-      E2E_RECORD_BASELINE: ${{ inputs['record-baseline'] && '1' || '0' }}
       E2E_TASK_PROGRESS_TIMEOUT_SECS: 1800
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -296,7 +294,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           clean: false
-      - run: bash docker/scripts/run-community-lane.sh devel-scan
+      - run: bash docker/scripts/run-deployment-lane.sh devel-scan
       - if: failure()
         run: docker compose -f "${COMPOSE_FILE}" logs --tail=350 gvmd ospd-openvas openvasd pg-gvm scan-fixture
       - if: always()
@@ -321,7 +319,6 @@ jobs:
       GVM_VERSION: ${{ needs.build-runner.outputs.gvm-version }}
       E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
       E2E_CLEAN_VOLUMES: ${{ inputs.clean && '1' || '0' }}
-      E2E_RECORD_BASELINE: ${{ inputs['record-baseline'] && '1' || '0' }}
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -352,7 +349,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           clean: false
-      - run: bash docker/scripts/run-community-lane.sh devel-isolated
+      - run: bash docker/scripts/run-deployment-lane.sh devel-isolated
       - if: failure()
         run: COMPOSE_PROJECT_NAME=rust-gvm-e2e-isolated docker compose -f "${COMPOSE_FILE}" logs --tail=350 gvmd pg-gvm
       - if: always()
@@ -421,7 +418,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           clean: false
-      - run: bash docker/scripts/run-community-lane.sh devel-transport
+      - run: bash docker/scripts/run-deployment-lane.sh devel-transport
       - if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -471,7 +468,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           clean: false
-      - run: bash docker/scripts/run-community-lane.sh differential
+      - run: bash docker/scripts/run-deployment-lane.sh differential
       - if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

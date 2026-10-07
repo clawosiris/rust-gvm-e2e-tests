@@ -101,6 +101,8 @@ services:
     image: registry.community.greenbone.net/community/pg-gvm:${GVM_VERSION:-stable}
     restart: on-failure:10
     stop_grace_period: 5m
+    environment:
+      PGCTLTIMEOUT: "${E2E_POSTGRES_BOOTSTRAP_TIMEOUT_SECS:-600}"
     volumes:
       - psql-data:/var/lib/postgresql
       - psql-socket:/var/run/postgresql
@@ -249,9 +251,15 @@ services:
       E2E_RESULTS_PATH: ${E2E_RESULTS_PATH:-}
       E2E_RUNTIME_IMAGES_PATH: ${E2E_RUNTIME_IMAGES_PATH:-}
       E2E_RUST_GVM_SHA: ${E2E_RUST_GVM_SHA:-}
-      E2E_RECORD_BASELINE: ${E2E_RECORD_BASELINE:-0}
+      E2E_DEPLOYMENT_ID: ${E2E_DEPLOYMENT_ID:-community-stable}
+      E2E_DEPLOYMENT_CONTRACT_PATH: ${E2E_DEPLOYMENT_CONTRACT_PATH:-/workspace/contracts/community-stable.json}
+      E2E_FIXTURE_DESCRIPTOR_PATH: ${E2E_FIXTURE_DESCRIPTOR_PATH:-/workspace/fixtures/community-provider.json}
+      E2E_CAPABILITY_SNAPSHOT_PATH: ${E2E_CAPABILITY_SNAPSHOT_PATH:-}
+      E2E_TEST_PLAN_PATH: ${E2E_TEST_PLAN_PATH:-}
+      E2E_CONTRACT_ARTIFACT_PATH: ${E2E_CONTRACT_ARTIFACT_PATH:-}
       E2E_ISOLATED: ${E2E_ISOLATED:-0}
       E2E_SCAN_TARGET_HOST: ${E2E_SCAN_TARGET_HOST:-scan-fixture}
+      E2E_OCI_IMAGE_REFERENCE: ${E2E_OCI_IMAGE_REFERENCE:-}
       E2E_TASK_PROGRESS_TIMEOUT_SECS: ${E2E_TASK_PROGRESS_TIMEOUT_SECS:-900}
       E2E_READINESS_TIMEOUT_SECS: ${E2E_READINESS_TIMEOUT_SECS:-21000}
       E2E_READINESS_POLL_INTERVAL_SECS: ${E2E_READINESS_POLL_INTERVAL_SECS:-30}

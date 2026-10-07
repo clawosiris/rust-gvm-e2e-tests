@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Greenbone AG
 
-//! Structured lane results and recorded Community runtime evidence.
+//! Structured lane results and deployment capability artifacts.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -12,6 +12,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::capability::{
+    reconcile, DeploymentCapabilities, DeploymentContract, ExecutionResult, PlanEntryKind,
+    TerminalOutcome, TestPlan,
+};
 use crate::{Disposition, COMMAND_COVERAGE, HELPER_COVERAGE, RUST_GVM_SHA};
 
 static REPORT: OnceLock<Mutex<RunReport>> = OnceLock::new();
@@ -54,6 +58,7 @@ pub struct RuntimeImage {
 pub struct RunReport {
     pub schema_version: u32,
     pub run_id: String,
+    pub deployment_id: String,
     pub lane: String,
     pub started_unix_seconds: u64,
     pub finished_unix_seconds: Option<u64>,
@@ -69,6 +74,7 @@ pub struct RunReport {
     pub conditional_commands: BTreeMap<String, bool>,
     pub registry_version_gates: BTreeMap<String, bool>,
     pub observations: Vec<Observation>,
+    pub plan_results: Vec<ExecutionResult>,
 }
 
 /// Recorded `get_features` state.
@@ -76,20 +82,6 @@ pub struct RunReport {
 pub struct FeatureState {
     pub compiled_in: bool,
     pub enabled: bool,
-}
-
-/// Pinned Community baseline checked into the repository.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CommunityBaseline {
-    pub schema_version: u32,
-    pub qualification: String,
-    pub gvm_image_tag: String,
-    pub gmp_version: String,
-    pub rust_gvm_sha: String,
-    pub features: BTreeMap<String, FeatureState>,
-    pub help_commands: Vec<String>,
-    pub conditional_commands: BTreeMap<String, bool>,
-    pub registry_version_gates: BTreeMap<String, bool>,
 }
 
 fn now() -> u64 {
@@ -115,26 +107,6 @@ impl RunReport {
         let mut observations = Vec::new();
         for entry in COMMAND_COVERAGE
             .iter()
-            .filter(|entry| entry.disposition == Disposition::ExcludedCommunity)
-        {
-            observations.push(Observation {
-                name: format!("command:{}", entry.name),
-                outcome: Outcome::Excluded,
-                evidence: "issue #118 explicit Community edition boundary".to_string(),
-            });
-        }
-        for entry in HELPER_COVERAGE
-            .iter()
-            .filter(|entry| entry.disposition == Disposition::ExcludedCommunity)
-        {
-            observations.push(Observation {
-                name: format!("helper:{}", entry.name),
-                outcome: Outcome::Excluded,
-                evidence: "issue #118 explicit Community edition boundary".to_string(),
-            });
-        }
-        for entry in COMMAND_COVERAGE
-            .iter()
             .filter(|entry| entry.disposition == Disposition::KnownUpstreamBug)
         {
             observations.push(Observation {
@@ -154,12 +126,17 @@ impl RunReport {
             });
         }
         Self {
-            schema_version: 1,
+            schema_version: 2,
             run_id: run_id.to_string(),
+            deployment_id: env::var("E2E_DEPLOYMENT_ID")
+                .unwrap_or_else(|_| "community-stable".to_string()),
             lane: lane.to_string(),
             started_unix_seconds: now(),
             finished_unix_seconds: None,
-            rust_gvm_sha: env::var("E2E_RUST_GVM_SHA").unwrap_or_else(|_| RUST_GVM_SHA.to_string()),
+            rust_gvm_sha: env::var("E2E_RUST_GVM_SHA")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| RUST_GVM_SHA.to_string()),
             gvm_image_tag: env::var("GVM_VERSION").unwrap_or_else(|_| "stable".to_string()),
             gmp_version: None,
             runtime_images: read_runtime_images(),
@@ -171,6 +148,7 @@ impl RunReport {
             conditional_commands: BTreeMap::new(),
             registry_version_gates: BTreeMap::new(),
             observations,
+            plan_results: Vec::new(),
         }
     }
 
@@ -198,6 +176,44 @@ fn read_runtime_images() -> Vec<RuntimeImage> {
         .ok()
         .and_then(|contents| serde_json::from_str(&contents).ok())
         .unwrap_or_default()
+}
+
+/// Fail closed when a provider claims runtime provenance but supplies invalid evidence.
+pub fn validate_runtime_images() -> Result<(), String> {
+    let path = env::var("E2E_RUNTIME_IMAGES_PATH").map_err(|_| {
+        "E2E_RUNTIME_IMAGES_PATH is required for deployment-lane provenance".to_string()
+    })?;
+    if path.trim().is_empty() {
+        return Err(
+            "E2E_RUNTIME_IMAGES_PATH is required for deployment-lane provenance".to_string(),
+        );
+    }
+    let contents = fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read runtime image evidence at {path}: {error}"))?;
+    let images: Vec<RuntimeImage> = serde_json::from_str(&contents)
+        .map_err(|error| format!("invalid runtime image evidence at {path}: {error}"))?;
+    validate_runtime_image_rows(&images, &path)
+}
+
+fn validate_runtime_image_rows(images: &[RuntimeImage], source: &str) -> Result<(), String> {
+    if images.is_empty() {
+        return Err(format!("runtime image evidence at {source} is empty"));
+    }
+    let mut services = std::collections::BTreeSet::new();
+    for image in images {
+        if image.service.trim().is_empty() || image.digest.trim().is_empty() {
+            return Err(format!(
+                "runtime image evidence at {source} has an empty service or digest"
+            ));
+        }
+        if !services.insert(image.service.clone()) {
+            return Err(format!(
+                "runtime image evidence at {source} repeats service {}",
+                image.service
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Start the process-global lane report.
@@ -236,6 +252,30 @@ pub fn observe(name: &str, outcome: Outcome, evidence: &str) {
     });
 }
 
+/// Record one terminal result at the exact runtime path that produced it.
+pub fn record_terminal(kind: PlanEntryKind, name: &str, outcome: TerminalOutcome, evidence: &str) {
+    with_report(|report| {
+        if report
+            .plan_results
+            .iter()
+            .any(|result| result.kind == kind && result.name == name && result.outcome == outcome)
+        {
+            return;
+        }
+        report.plan_results.push(ExecutionResult {
+            kind,
+            name: name.to_string(),
+            outcome,
+            evidence: evidence.to_string(),
+        });
+    });
+}
+
+/// Record successful completion by an exact command/helper/scenario path.
+pub fn record_execution(kind: PlanEntryKind, name: &str, evidence: &str) {
+    record_terminal(kind, name, TerminalOutcome::Pass, evidence);
+}
+
 /// Store typed discovery evidence in the report.
 pub fn discovery(
     gmp_version: &str,
@@ -269,6 +309,103 @@ pub fn snapshot() -> Option<RunReport> {
         .and_then(|report| report.lock().ok().map(|report| report.clone()))
 }
 
+fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let payload = serde_json::to_string_pretty(value).map_err(|error| error.to_string())?;
+    fs::write(path, format!("{payload}\n")).map_err(|error| error.to_string())
+}
+
+/// Publish discovery, reviewed contract, and deterministic plan before mutation.
+pub fn publish_plan(
+    capabilities: &DeploymentCapabilities,
+    contract: &DeploymentContract,
+    plan: &TestPlan,
+) -> Result<(), String> {
+    let snapshot_path = env::var("E2E_CAPABILITY_SNAPSHOT_PATH").unwrap_or_else(|_| {
+        format!(
+            "/workspace/artifacts/{}-{}-capability-snapshot.json",
+            capabilities.deployment_id, plan.lane
+        )
+    });
+    let contract_path = env::var("E2E_CONTRACT_ARTIFACT_PATH").unwrap_or_else(|_| {
+        format!(
+            "/workspace/artifacts/{}-{}-deployment-contract.json",
+            capabilities.deployment_id, plan.lane
+        )
+    });
+    let plan_path = env::var("E2E_TEST_PLAN_PATH").unwrap_or_else(|_| {
+        format!(
+            "/workspace/artifacts/{}-{}-test-plan.json",
+            capabilities.deployment_id, plan.lane
+        )
+    });
+    write_json(Path::new(&snapshot_path), capabilities)?;
+    write_json(Path::new(&contract_path), contract)?;
+    write_json(Path::new(&plan_path), plan)?;
+    for entry in &plan.entries {
+        if entry.decision == crate::capability::PlanDecision::NotSelected {
+            observe(
+                &format!("{:?}:{}", entry.kind, entry.name),
+                Outcome::NotSelected,
+                &entry.evidence,
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Preserve discovery and the blocking planner error when no executable plan exists.
+pub fn publish_planning_failure(
+    capabilities: &DeploymentCapabilities,
+    contract: &DeploymentContract,
+    lane: &str,
+    error: &str,
+) -> Result<(), String> {
+    let snapshot_path = env::var("E2E_CAPABILITY_SNAPSHOT_PATH").unwrap_or_else(|_| {
+        format!(
+            "/workspace/artifacts/{}-{lane}-capability-snapshot.json",
+            capabilities.deployment_id
+        )
+    });
+    let contract_path = env::var("E2E_CONTRACT_ARTIFACT_PATH").unwrap_or_else(|_| {
+        format!(
+            "/workspace/artifacts/{}-{lane}-deployment-contract.json",
+            capabilities.deployment_id
+        )
+    });
+    let plan_path = env::var("E2E_TEST_PLAN_PATH").unwrap_or_else(|_| {
+        format!(
+            "/workspace/artifacts/{}-{lane}-test-plan.json",
+            capabilities.deployment_id
+        )
+    });
+    write_json(Path::new(&snapshot_path), capabilities)?;
+    write_json(Path::new(&contract_path), contract)?;
+    write_json(
+        Path::new(&plan_path),
+        &serde_json::json!({
+            "schema_version": 1,
+            "deployment_id": capabilities.deployment_id,
+            "lane": lane,
+            "planning_error": error,
+            "entries": [],
+        }),
+    )
+}
+
+/// Reconcile exact terminal results and retain them in the result artifact.
+pub fn reconcile_plan(plan: &TestPlan) -> Result<(), String> {
+    let mut results = snapshot()
+        .ok_or_else(|| "structured result recorder is not initialized".to_string())?
+        .plan_results;
+    results.sort_by(|left, right| (left.kind, &left.name).cmp(&(right.kind, &right.name)));
+    reconcile(plan, &results)?;
+    with_report(|report| report.plan_results = results);
+    Ok(())
+}
+
 /// Finalize and write the report to the configured artifact path.
 pub fn write() -> Result<PathBuf, String> {
     let report = REPORT
@@ -278,7 +415,10 @@ pub fn write() -> Result<PathBuf, String> {
         .lock()
         .map_err(|_| "structured result recorder lock is poisoned".to_string())?;
     report.finish();
-    let default = format!("/workspace/artifacts/community-e2e-{}.json", report.lane);
+    let default = format!(
+        "/workspace/artifacts/{}-{}-test-results.json",
+        report.deployment_id, report.lane
+    );
     let path = PathBuf::from(
         env::var("E2E_RESULTS_PATH")
             .ok()
@@ -288,106 +428,8 @@ pub fn write() -> Result<PathBuf, String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let payload = serde_json::to_string_pretty(&*report).map_err(|error| error.to_string())?;
-    fs::write(&path, format!("{payload}\n")).map_err(|error| error.to_string())?;
+    write_json(&path, &*report)?;
     Ok(path)
-}
-
-/// Load the checked-in baseline.
-pub fn baseline() -> Result<CommunityBaseline, String> {
-    serde_json::from_str(include_str!("../../../baselines/community-stable.json"))
-        .map_err(|error| error.to_string())
-}
-
-fn normalized_help_commands(commands: &[String]) -> Vec<String> {
-    let mut commands = commands.to_vec();
-    commands.sort();
-    commands.dedup();
-    commands
-}
-
-/// Compare typed discovery with the pinned baseline.
-pub fn validate_baseline(
-    gmp_version: &str,
-    features: &BTreeMap<String, FeatureState>,
-    help_commands: &[String],
-    conditional_commands: &BTreeMap<String, bool>,
-    registry_version_gates: &BTreeMap<String, bool>,
-) -> Result<(), String> {
-    let expected = baseline()?;
-    let image_tag = env::var("GVM_VERSION").unwrap_or_else(|_| "stable".to_string());
-    if expected.gvm_image_tag != image_tag {
-        return Err(format!(
-            "baseline image tag mismatch: expected {}, observed {image_tag}",
-            expected.gvm_image_tag
-        ));
-    }
-    if expected.rust_gvm_sha != RUST_GVM_SHA {
-        return Err(format!(
-            "baseline rust-gvm mismatch: expected {}, compiled {RUST_GVM_SHA}",
-            expected.rust_gvm_sha
-        ));
-    }
-    if expected.gmp_version != gmp_version {
-        return Err(format!(
-            "baseline GMP version changed: expected {}, observed {gmp_version}",
-            expected.gmp_version
-        ));
-    }
-    if !expected.features.is_empty() && expected.features != *features {
-        return Err(format!(
-            "advertised feature baseline changed: expected {:?}, observed {features:?}",
-            expected.features
-        ));
-    }
-    if normalized_help_commands(&expected.help_commands) != normalized_help_commands(help_commands)
-    {
-        return Err(format!(
-            "advertised help baseline changed: expected {:?}, observed {help_commands:?}",
-            expected.help_commands
-        ));
-    }
-    if expected.conditional_commands != *conditional_commands {
-        return Err(format!(
-            "conditional command availability changed: expected {:?}, observed {conditional_commands:?}",
-            expected.conditional_commands
-        ));
-    }
-    if expected.registry_version_gates != *registry_version_gates {
-        return Err(format!(
-            "registry version-gate diagnostics changed: expected {:?}, observed {registry_version_gates:?}",
-            expected.registry_version_gates
-        ));
-    }
-    Ok(())
-}
-
-/// Write an observed candidate baseline during an explicit recording run.
-pub fn write_baseline_candidate(
-    gmp_version: &str,
-    features: &BTreeMap<String, FeatureState>,
-    help_commands: &[String],
-    conditional_commands: &BTreeMap<String, bool>,
-    registry_version_gates: &BTreeMap<String, bool>,
-) -> Result<PathBuf, String> {
-    let baseline = CommunityBaseline {
-        schema_version: 1,
-        qualification: "observed-candidate-unreviewed".to_string(),
-        gvm_image_tag: env::var("GVM_VERSION").unwrap_or_else(|_| "stable".to_string()),
-        gmp_version: gmp_version.to_string(),
-        rust_gvm_sha: RUST_GVM_SHA.to_string(),
-        features: features.clone(),
-        help_commands: help_commands.to_vec(),
-        conditional_commands: conditional_commands.clone(),
-        registry_version_gates: registry_version_gates.clone(),
-    };
-    let path = Path::new("/workspace/artifacts/community-baseline-candidate.json");
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let payload = serde_json::to_string_pretty(&baseline).map_err(|error| error.to_string())?;
-    fs::write(path, format!("{payload}\n")).map_err(|error| error.to_string())?;
-    Ok(path.to_path_buf())
 }
 
 #[cfg(test)]
@@ -458,57 +500,25 @@ mod tests {
     }
 
     #[test]
-    fn checked_in_baseline_parses() {
-        let parsed = baseline().expect("baseline parses");
-        assert_eq!(parsed.schema_version, 1);
-        assert_eq!(
-            parsed.qualification,
-            "pending-live-revalidation-for-issue-148"
-        );
-        assert_eq!(parsed.gvm_image_tag, "stable");
-        assert_eq!(parsed.help_commands.len(), 135);
-        assert!(parsed
-            .help_commands
-            .iter()
-            .any(|name| name == "get_audit_report"));
-        assert!(parsed.help_commands.iter().any(|name| name == "get_tasks"));
-        for command in [
-            "cancel_report_export",
-            "download_report_export",
-            "export_audit_report",
-            "export_delta_audit_report",
-            "export_delta_scan_report",
-            "export_scan_report",
-            "get_audit_report_hosts",
-            "get_report_exports",
-        ] {
-            assert!(
-                parsed.help_commands.iter().any(|name| name == command),
-                "stable baseline is missing {command}"
-            );
-        }
-        assert_eq!(
-            parsed.conditional_commands.get("get_report_hosts"),
-            Some(&true)
-        );
-        assert_eq!(parsed.conditional_commands.get("sync_config"), Some(&true));
-        assert_eq!(
-            parsed.registry_version_gates.get("get_report_hosts"),
-            Some(&false)
-        );
-        assert_eq!(
-            parsed.registry_version_gates.get("sync_config"),
-            Some(&true)
-        );
-    }
-
-    #[test]
-    fn help_baseline_comparison_is_order_independent() {
-        let observed = vec!["get_nvt_families".to_string(), "get_nvts".to_string()];
-        let recorded = vec!["get_nvts".to_string(), "get_nvt_families".to_string()];
-        assert_eq!(
-            normalized_help_commands(&observed),
-            normalized_help_commands(&recorded)
-        );
+    fn runtime_image_provenance_is_nonempty_complete_and_unique() {
+        let valid = [RuntimeImage {
+            service: "gvmd".to_string(),
+            repository: "registry.example/gvmd".to_string(),
+            tag: "stable".to_string(),
+            digest: "sha256:abc".to_string(),
+        }];
+        validate_runtime_image_rows(&valid, "unit").expect("valid provenance");
+        assert!(validate_runtime_image_rows(&[], "unit").is_err());
+        let duplicate = [valid[0].clone(), valid[0].clone()];
+        assert!(validate_runtime_image_rows(&duplicate, "unit")
+            .unwrap_err()
+            .contains("repeats service"));
+        let incomplete = [RuntimeImage {
+            digest: String::new(),
+            ..valid[0].clone()
+        }];
+        assert!(validate_runtime_image_rows(&incomplete, "unit")
+            .unwrap_err()
+            .contains("empty service or digest"));
     }
 }

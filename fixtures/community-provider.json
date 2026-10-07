@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "deployment_id": "community-stable",
+  "fixtures": {
+    "network_scan_target": {
+      "state": "ready",
+      "detail": "repository-owned scan-fixture service"
+    },
+    "agent_endpoint": {
+      "state": "unavailable",
+      "detail": "not provisioned by the Community Compose provider"
+    },
+    "oci_registry": {
+      "state": "unavailable",
+      "detail": "not provisioned by the Community Compose provider"
+    },
+    "credential_store": {
+      "state": "unavailable",
+      "detail": "not provisioned by the Community Compose provider"
+    },
+    "export_integration": {
+      "state": "unavailable",
+      "detail": "not provisioned by the Community Compose provider"
+    },
+    "web_scanner": {
+      "state": "unavailable",
+      "detail": "not provisioned by the Community Compose provider"
+    },
+    "jwt_endpoint": {
+      "state": "unavailable",
+      "detail": "not provisioned by the Community Compose provider"
+    }
+  }
+}
