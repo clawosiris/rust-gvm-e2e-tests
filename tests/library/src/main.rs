@@ -2510,6 +2510,16 @@ fn feed_database_unavailable(error: &GvmError, database: &str) -> bool {
     )
 }
 
+fn missing_observed_vulnerability(error: &GvmError) -> bool {
+    matches!(
+        error,
+        GvmError::Server {
+            status: 404,
+            message,
+        } if message.starts_with("Failed to find vuln '") && message.ends_with('\'')
+    )
+}
+
 async fn wait_ready(config: &EnvConfig) -> Result<(), AppError> {
     let mut protocol_client = connect_client(config).await?;
     let version = protocol_client.version();
@@ -2949,10 +2959,26 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
             ..Default::default()
         })
     );
-    typed_read!(
-        "get_vulnerability(single NVT)",
-        client.get_vulnerability(GetVulnerabilityRequest::new(&nvts.items[0].oid))
-    );
+    match client
+        .get_vulnerability(GetVulnerabilityRequest::new(&nvts.items[0].oid))
+        .await
+    {
+        Ok(response) => {
+            ensure(
+                response.status == 200,
+                "typed get_vulnerability(single NVT) did not return status 200",
+            )?;
+            log_pass(
+                "typed get_vulnerability(single NVT)",
+                "real-gvmd response parsed",
+            );
+        }
+        Err(error) if missing_observed_vulnerability(&error) => log_pass(
+            "typed get_vulnerability(single NVT)",
+            "exact missing observed-vulnerability rejection preserved",
+        ),
+        Err(error) => return Err(error.into()),
+    }
     record_helper_execution("get_vulnerability", "typed vulnerability detail executed")?;
 
     typed_read!(
@@ -8300,6 +8326,26 @@ mod tests {
             classify_gvm_readiness_error(other),
             ReadinessFailure::Fatal(_)
         ));
+    }
+
+    #[test]
+    fn missing_observed_vulnerability_requires_the_exact_typed_rejection() {
+        let missing = GvmError::Server {
+            status: 404,
+            message: "Failed to find vuln '1.3.6.1.4.1.25623.1.0.117946'".to_string(),
+        };
+        let wrong_status = GvmError::Server {
+            status: 400,
+            message: "Failed to find vuln '1.3.6.1.4.1.25623.1.0.117946'".to_string(),
+        };
+        let unrelated = GvmError::Server {
+            status: 404,
+            message: "Failed to find task 'task-id'".to_string(),
+        };
+
+        assert!(missing_observed_vulnerability(&missing));
+        assert!(!missing_observed_vulnerability(&wrong_status));
+        assert!(!missing_observed_vulnerability(&unrelated));
     }
 
     #[test]
