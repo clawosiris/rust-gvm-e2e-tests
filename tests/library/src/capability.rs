@@ -606,9 +606,12 @@ pub fn build_plan(
         } else {
             match &input.feature {
                 None => match input.wire_command.as_deref() {
-                    Some("get_features") => (
+                    // gvmd implements these discovery commands but omits them from
+                    // authenticated brief help. Both still execute and must pass
+                    // their direct live assertions before any mutation begins.
+                    Some("get_features" | "get_resource_names") => (
                         PlanDecision::Selected,
-                        "feature discovery command is validated directly".to_string(),
+                        "discovery command is validated directly".to_string(),
                     ),
                     Some(command)
                         if snapshot
@@ -815,6 +818,75 @@ mod tests {
             features: BTreeMap::from([("ENABLE_AGENTS".into(), requirement)]),
             fixtures: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn discovery_commands_omitted_from_brief_help_are_validated_directly() {
+        let observed = snapshot(
+            ObservedFeature {
+                compiled_in: Some(true),
+                enabled: Some(false),
+                evidence: vec![evidence("get_features")],
+            },
+            false,
+            ProbeState::Unavailable,
+        );
+        let direct_input = |kind, name: &str, wire_command: &str| PlanInput {
+            kind,
+            name: name.into(),
+            lane: "devel-fast".into(),
+            feature: None,
+            wire_command: Some(wire_command.into()),
+            command_optional: false,
+            implemented: true,
+            semantic_eligible: true,
+            semantic_evidence: "eligible".into(),
+        };
+
+        let plan = build_plan(
+            &contract(Requirement::Optional, false),
+            &catalog(),
+            &observed,
+            "devel-fast",
+            [
+                direct_input(PlanEntryKind::Command, "get_features", "get_features"),
+                direct_input(
+                    PlanEntryKind::Command,
+                    "get_resource_names",
+                    "get_resource_names",
+                ),
+                direct_input(
+                    PlanEntryKind::Helper,
+                    "get_resource_name",
+                    "get_resource_names",
+                ),
+                direct_input(
+                    PlanEntryKind::Helper,
+                    "get_resource_names",
+                    "get_resource_names",
+                ),
+            ],
+        )
+        .expect("directly validated discovery commands must not depend on brief help");
+
+        assert!(plan.entries.iter().all(|entry| {
+            entry.decision == PlanDecision::Selected
+                && entry.evidence == "discovery command is validated directly"
+        }));
+
+        let error = build_plan(
+            &contract(Requirement::Optional, false),
+            &catalog(),
+            &observed,
+            "devel-fast",
+            [direct_input(
+                PlanEntryKind::Command,
+                "get_version",
+                "get_version",
+            )],
+        )
+        .expect_err("ordinary required commands must still fail closed");
+        assert!(error.contains("required lane command get_version is not advertised"));
     }
 
     fn input() -> PlanInput {
