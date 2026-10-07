@@ -49,6 +49,12 @@ for example `docker/docker-compose.yml:provider/deploy/e2e-overlay.yml`.
 
 `external` never starts, stops, cleans, or logs the external deployment. Its
 descriptor supplies an absolute Unix socket and a JSON runtime-image descriptor.
+For `devel-scan`, the descriptor's `gvmd` row must include the exact numeric
+`version` and immutable `digest`. Only the canonical
+`registry.community.greenbone.net/community/gvmd` repository can receive the
+reviewed 26.40.2 baseline disposition; every other repository is
+source-specific and must also include an exact `source_revision`. These values
+drive and document the EPSS regression disposition.
 The caller supplies credentials through `GVM_ADMIN_USER` and `GVM_ADMIN_PASS`;
 the values are propagated by environment name and are not written to artifacts.
 The runner performs the same authenticated socket/feed readiness check before

@@ -90,6 +90,21 @@ before tasks, targets, and supporting resources. A concrete report returned by
 typed 404 as idempotent success when task/report lifecycle processing already
 removed it.
 
+The scan-linked report also drives the focused
+[greenbone/gvmd#3163](https://github.com/greenbone/gvmd/pull/3163) EPSS
+server-abort regression. The lane sends one filter and one sort request for
+each of `epss_score`, `epss_percentile`, `max_epss_score`, and
+`max_epss_percentile`; every read is followed by `get_version` on the same
+authenticated connection. Exact gvmd release, source revision when published
+by the image, and immutable image digest are included in the capability and
+result artifacts. A proved abort on the known pre-fix Community 26.40.2
+baseline is recorded per request as `known-upstream-bug`, never as a pass, and
+the lane reconnects only to run the next independent read. Source
+`471b7745697af0ee0804212c74f5040f30c6c3d7` (the exact PR head) and all
+unclassified deployments must return normal GMP responses and keep the
+connection usable. The deterministic policy and request matrix live in
+`fixtures/epss-result-regression.json`; no report-config mutation is involved.
+
 The fixture being a container does not make this container-image scanning.
 No OCI target is created or required.
 

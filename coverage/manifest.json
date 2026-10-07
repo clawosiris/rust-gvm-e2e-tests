@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "rust_gvm_sha": "8ea68a82636974256b2c198ea24a5aa26262b659",
   "registry_count": 164,
   "typed_helper_count": 267,
@@ -8,6 +8,36 @@
   "removed_helper_count": 1,
   "live_help_allowlist_count": 0,
   "live_help_allowlist": [],
+  "regressions": {
+    "gvmd-epss-result-filter-sort": {
+      "schema_version": 1,
+      "upstream_pull_request": "https://github.com/greenbone/gvmd/pull/3163",
+      "fixed_source_revision": "471b7745697af0ee0804212c74f5040f30c6c3d7",
+      "known_affected_release": "26.40.2",
+      "probes": [
+        {
+          "field": "epss_score",
+          "filter_expression": "epss_score>0",
+          "sort_expression": "sort=epss_score"
+        },
+        {
+          "field": "epss_percentile",
+          "filter_expression": "epss_percentile>0",
+          "sort_expression": "sort=epss_percentile"
+        },
+        {
+          "field": "max_epss_score",
+          "filter_expression": "max_epss_score>0",
+          "sort_expression": "sort=max_epss_score"
+        },
+        {
+          "field": "max_epss_percentile",
+          "filter_expression": "max_epss_percentile>0",
+          "sort_expression": "sort=max_epss_percentile"
+        }
+      ]
+    }
+  },
   "feature_catalog": {
     "ENABLE_AGENTS": {
       "commands": [
@@ -1188,7 +1218,7 @@
       "wire_command": "get_results",
       "disposition": "nightly-live",
       "lane": "devel-scan",
-      "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane.",
+      "rationale": "Nightly scan-linked result coverage includes read-only filter and sort probes for epss_score, epss_percentile, max_epss_score, and max_epss_percentile, with a same-connection health assertion and exact gvmd source/release disposition.",
       "requires": [],
       "implemented": true
     },
@@ -3433,7 +3463,7 @@
       "wire_command": "get_results",
       "disposition": "nightly-live",
       "lane": "devel-scan",
-      "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane.",
+      "rationale": "Nightly scan-linked result coverage includes read-only filter and sort probes for epss_score, epss_percentile, max_epss_score, and max_epss_percentile, with a same-connection health assertion and exact gvmd source/release disposition.",
       "requires": [],
       "implemented": true
     },

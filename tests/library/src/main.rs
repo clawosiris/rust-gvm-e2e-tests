@@ -18,8 +18,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use gvm_client::{parse_version_text, GmpClient, GvmError};
 use gvm_connection::{
-    GvmConnection, SshAuth, SshConfig, SshConnection, TlsClientIdentity, TlsConfig, TlsConnection,
-    UnixSocketConnection,
+    ConnectionError, GvmConnection, SshAuth, SshConfig, SshConnection, TlsClientIdentity,
+    TlsConfig, TlsConnection, UnixSocketConnection,
 };
 use gvm_gmp::commands::agent_groups::*;
 use gvm_gmp::commands::agents::*;
@@ -81,6 +81,7 @@ use gvm_gmp::{
 use gvm_protocol::{Response, XmlCommand};
 use quick_xml::events::Event;
 use quick_xml::Reader;
+use serde::Deserialize;
 use serde_json::Value;
 use thiserror::Error;
 use tokio::runtime::Builder;
@@ -90,6 +91,7 @@ use gvm_community_e2e::capability::{
     build_plan, classify_live_help_commands, enforce_live_help_parity, parse_feature_evidence,
     CommandSupport, DeploymentCapabilities, DeploymentContract, Evidence, FeatureCatalog,
     FixtureDescriptor, PlanDecision, PlanEntryKind, PlanInput, ProbeResult, ProbeState, TestPlan,
+    DEPLOYMENT_CAPABILITIES_SCHEMA_VERSION,
 };
 use gvm_community_e2e::runtime::{self, FeatureState, Outcome};
 use gvm_community_e2e::HELPER_MIGRATIONS;
@@ -1852,11 +1854,20 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
         help_commands.iter().cloned().collect::<Vec<_>>().join(",")
     ));
 
-    let provider_probes = descriptor
+    let mut provider_probes = descriptor
         .probes
         .iter()
         .map(|(name, evidence)| (name.clone(), provider_probe(evidence)))
         .collect::<BTreeMap<_, _>>();
+    let epss_deployment_evidence = if lane == "devel-scan" {
+        provider_probes.insert(
+            "gvmd-epss-result-filter-sort-policy".to_string(),
+            epss_regression_capability_probe()?,
+        );
+        Some(EpssDeploymentEvidence::from_env()?)
+    } else {
+        None
+    };
     let fixtures = descriptor
         .fixtures
         .iter()
@@ -1864,9 +1875,18 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
         .collect::<BTreeMap<_, _>>();
     if let Err(error) = enforce_live_help_parity(&live_help_parity) {
         let capabilities = DeploymentCapabilities {
-            schema_version: 1,
+            schema_version: DEPLOYMENT_CAPABILITIES_SCHEMA_VERSION,
             deployment_id,
             gmp_version: Some(version_response.version.clone()),
+            gvmd_version: epss_deployment_evidence
+                .as_ref()
+                .map(|evidence| evidence.gvmd_version.clone()),
+            gvmd_source_revision: epss_deployment_evidence
+                .as_ref()
+                .and_then(|evidence| evidence.gvmd_source_revision.clone()),
+            gvmd_image_digest: epss_deployment_evidence
+                .as_ref()
+                .map(|evidence| evidence.gvmd_image_digest.clone()),
             live_help_parity,
             features: observed_features,
             commands,
@@ -1979,9 +1999,18 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
         probes.insert(probe_name.to_string(), result);
     }
     let capabilities = DeploymentCapabilities {
-        schema_version: 1,
+        schema_version: DEPLOYMENT_CAPABILITIES_SCHEMA_VERSION,
         deployment_id,
         gmp_version: Some(version_response.version.clone()),
+        gvmd_version: epss_deployment_evidence
+            .as_ref()
+            .map(|evidence| evidence.gvmd_version.clone()),
+        gvmd_source_revision: epss_deployment_evidence
+            .as_ref()
+            .and_then(|evidence| evidence.gvmd_source_revision.clone()),
+        gvmd_image_digest: epss_deployment_evidence
+            .as_ref()
+            .map(|evidence| evidence.gvmd_image_digest.clone()),
         live_help_parity,
         features: observed_features,
         commands,
@@ -4485,6 +4514,321 @@ fn task_links_report(task: &Task, report_id: &EntityId) -> bool {
             .is_some_and(|report| report.id == *report_id)
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct EpssRegressionFixture {
+    schema_version: u32,
+    upstream_pull_request: String,
+    fixed_source_revision: String,
+    known_affected_release: String,
+    probes: Vec<EpssFieldProbe>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct EpssFieldProbe {
+    field: String,
+    filter_expression: String,
+    sort_expression: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EpssExpectedDisposition {
+    KnownAffectedBaseline,
+    FixedSourceMustPass,
+    UnclassifiedMustPass,
+}
+
+impl EpssExpectedDisposition {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::KnownAffectedBaseline => "known-affected-baseline",
+            Self::FixedSourceMustPass => "fixed-source-must-pass",
+            Self::UnclassifiedMustPass => "unclassified-must-pass",
+        }
+    }
+
+    const fn accepts_connection_abort(self) -> bool {
+        matches!(self, Self::KnownAffectedBaseline)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct EpssDeploymentEvidence {
+    gvmd_version: String,
+    gvmd_source_revision: Option<String>,
+    gvmd_image_digest: String,
+    source_specific_image: bool,
+}
+
+impl EpssDeploymentEvidence {
+    fn from_env() -> Result<Self, AppError> {
+        let gvmd_version = env::var("E2E_GVMD_VERSION")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                AppError::Assertion(
+                    "E2E_GVMD_VERSION is required for EPSS regression provenance".to_string(),
+                )
+            })?;
+        ensure(
+            parse_release_triplet(&gvmd_version).is_some(),
+            "E2E_GVMD_VERSION must be an exact numeric release triplet",
+        )?;
+        let gvmd_source_revision = env::var("E2E_GVMD_SOURCE_REVISION")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        if let Some(revision) = &gvmd_source_revision {
+            ensure(
+                revision.len() == 40
+                    && revision
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                "E2E_GVMD_SOURCE_REVISION must be an exact lowercase commit SHA",
+            )?;
+        }
+        let gvmd_image_digest = env::var("E2E_GVMD_IMAGE_DIGEST")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                AppError::Assertion(
+                    "E2E_GVMD_IMAGE_DIGEST is required for EPSS regression provenance".to_string(),
+                )
+            })?;
+        let source_specific_image = match env::var("E2E_GVMD_SOURCE_SPECIFIC_IMAGE").ok().as_deref()
+        {
+            Some("0") => false,
+            Some("1") => true,
+            _ => {
+                return Err(AppError::Assertion(
+                    "E2E_GVMD_SOURCE_SPECIFIC_IMAGE must be 0 or 1 for EPSS regression provenance"
+                        .to_string(),
+                ));
+            }
+        };
+        Ok(Self {
+            gvmd_version,
+            gvmd_source_revision,
+            gvmd_image_digest,
+            source_specific_image,
+        })
+    }
+
+    fn detail(&self, fixture: &EpssRegressionFixture) -> String {
+        format!(
+            "gvmd release {}; source revision {}; image digest {}; source-specific image {}; upstream {}; fixed source {}",
+            self.gvmd_version,
+            self.gvmd_source_revision
+                .as_deref()
+                .unwrap_or("unavailable"),
+            self.gvmd_image_digest,
+            self.source_specific_image,
+            fixture.upstream_pull_request,
+            fixture.fixed_source_revision
+        )
+    }
+}
+
+fn parse_release_triplet(version: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = version.split('.');
+    let triplet = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
+    parts.next().is_none().then_some(triplet)
+}
+
+fn epss_regression_fixture() -> Result<EpssRegressionFixture, AppError> {
+    let fixture: EpssRegressionFixture = serde_json::from_str(include_str!(
+        "../../../fixtures/epss-result-regression.json"
+    ))?;
+    ensure(
+        fixture.schema_version == 1,
+        "unsupported EPSS regression fixture schema",
+    )?;
+    ensure(
+        fixture.probes.len() == 4,
+        "EPSS regression fixture must define exactly four fields",
+    )?;
+    Ok(fixture)
+}
+
+fn epss_expected_disposition(
+    fixture: &EpssRegressionFixture,
+    evidence: &EpssDeploymentEvidence,
+) -> EpssExpectedDisposition {
+    if evidence.gvmd_source_revision.as_deref() == Some(fixture.fixed_source_revision.as_str()) {
+        EpssExpectedDisposition::FixedSourceMustPass
+    } else if evidence.gvmd_version == fixture.known_affected_release
+        && !evidence.source_specific_image
+    {
+        EpssExpectedDisposition::KnownAffectedBaseline
+    } else {
+        EpssExpectedDisposition::UnclassifiedMustPass
+    }
+}
+
+fn epss_regression_capability_probe() -> Result<ProbeResult, AppError> {
+    let fixture = epss_regression_fixture()?;
+    let evidence = EpssDeploymentEvidence::from_env()?;
+    let disposition = epss_expected_disposition(&fixture, &evidence);
+    let state = match disposition {
+        EpssExpectedDisposition::KnownAffectedBaseline => ProbeState::Unavailable,
+        EpssExpectedDisposition::FixedSourceMustPass => ProbeState::Ready,
+        EpssExpectedDisposition::UnclassifiedMustPass => ProbeState::Unknown,
+    };
+    Ok(ProbeResult {
+        state,
+        evidence: Evidence {
+            source: "gvmd-release-source-image".to_string(),
+            value: disposition.label().to_string(),
+            detail: format!(
+                "four fields [{}], each filtered and sorted through get_results; {}; expected outcome: {}",
+                fixture
+                    .probes
+                    .iter()
+                    .map(|probe| probe.field.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+                evidence.detail(&fixture),
+                if disposition.accepts_connection_abort() {
+                    "an exact server-abort is recorded as known-upstream-bug, never pass"
+                } else {
+                    "every request must return GMP 200 and preserve the same authenticated connection"
+                }
+            ),
+        },
+    })
+}
+
+fn epss_results_request(report_id: &EntityId, expression: &str) -> GetResultsRequest {
+    GetResultsRequest {
+        filter_string: Some(format!("report_id={report_id} {expression} rows=-1")),
+        details: Some(false),
+        get_counts: Some(true),
+        ..Default::default()
+    }
+}
+
+fn epss_error_is_connection_abort(error: &GvmError) -> bool {
+    matches!(
+        error,
+        GvmError::Connection(ConnectionError::ReadFailed(error))
+            if matches!(
+                error.kind(),
+                io::ErrorKind::UnexpectedEof
+                    | io::ErrorKind::ConnectionAborted
+                    | io::ErrorKind::ConnectionReset
+            )
+    )
+}
+
+fn epss_health_confirms_lost_connection(error: &GvmError) -> bool {
+    matches!(error, GvmError::Connection(ConnectionError::NotConnected))
+}
+
+async fn run_epss_result_regression(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    report_id: &EntityId,
+) -> Result<(), AppError> {
+    let fixture = epss_regression_fixture()?;
+    let evidence = EpssDeploymentEvidence::from_env()?;
+    let disposition = epss_expected_disposition(&fixture, &evidence);
+    let deployment_detail = evidence.detail(&fixture);
+
+    for probe in &fixture.probes {
+        for (operation, expression) in [
+            ("filter", probe.filter_expression.as_str()),
+            ("sort", probe.sort_expression.as_str()),
+        ] {
+            let observation = format!("epss:get_results:{}:{operation}", probe.field);
+            let request_result = client
+                .get_results(epss_results_request(report_id, expression))
+                .await;
+            let health_result = client.get_version(GetVersionRequest::new()).await;
+            let request_connection_abort = request_result
+                .as_ref()
+                .is_err_and(epss_error_is_connection_abort);
+            let health_confirms_lost_connection = health_result
+                .as_ref()
+                .is_err_and(epss_health_confirms_lost_connection);
+            let connection_abort_proved =
+                request_connection_abort && health_confirms_lost_connection;
+
+            match (&request_result, &health_result) {
+                (Ok(response), Ok(version)) => {
+                    assert_typed_status(response.status, &response.status_text, 200, &observation)?;
+                    ensure(
+                        version.version == client.version().to_string(),
+                        &format!(
+                            "{observation} connection-health probe changed GMP version from {} to {}",
+                            client.version(), version.version
+                        ),
+                    )?;
+                    runtime::observe(
+                        &observation,
+                        Outcome::Pass,
+                        &format!(
+                            "normal GMP 200 with {} result(s); same authenticated connection returned get_version {}; expression `{expression}`; policy {}; {deployment_detail}",
+                            response.items.len(),
+                            version.version,
+                            disposition.label()
+                        ),
+                    );
+                    log_line(&format!(
+                        "[pass] {observation} normal response and same-connection health probe"
+                    ));
+                    continue;
+                }
+                _ if disposition.accepts_connection_abort() && connection_abort_proved => {
+                    let request_evidence = request_result
+                        .as_ref()
+                        .map(|response| format!("GMP status {}", response.status))
+                        .unwrap_or_else(|error| error.to_string());
+                    let health_evidence = health_result
+                        .as_ref()
+                        .map(|version| format!("unexpectedly returned GMP {}", version.version))
+                        .unwrap_or_else(|error| error.to_string());
+                    runtime::observe(
+                        &observation,
+                        Outcome::KnownUpstreamBug,
+                        &format!(
+                            "greenbone/gvmd#3163 pre-fix server-abort reproduced; request outcome: {request_evidence}; same-connection get_version outcome: {health_evidence}; expression `{expression}`; policy {}; {deployment_detail}",
+                            disposition.label()
+                        ),
+                    );
+                    log_line(&format!(
+                        "[known-upstream-bug] {observation} connection aborted; reconnecting for the next independent probe"
+                    ));
+                    *client = reconnect_authenticated(
+                        config,
+                        Duration::from_secs(config.task_progress_timeout_secs),
+                    )
+                    .await?;
+                    client.discover_commands().await?;
+                }
+                _ => {
+                    let request_evidence = request_result
+                        .as_ref()
+                        .map(|response| format!("GMP status {}", response.status))
+                        .unwrap_or_else(|error| error.to_string());
+                    let health_evidence = health_result
+                        .as_ref()
+                        .map(|version| format!("GMP {}", version.version))
+                        .unwrap_or_else(|error| error.to_string());
+                    return Err(AppError::Assertion(format!(
+                        "{observation} violated EPSS regression policy {}: request outcome: {request_evidence}; same-connection get_version outcome: {health_evidence}; expression `{expression}`; {deployment_detail}",
+                        disposition.label()
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn scan_report_results_request(report_id: &EntityId) -> GetResultsRequest {
     GetResultsRequest {
         filter_string: Some(format!("report_id={report_id} rows=-1")),
@@ -5584,6 +5928,8 @@ async fn run_scan_suite(
         "scan report results",
         &format!("typed report_id filter returned {scan_result_count} scan-linked result(s)"),
     );
+
+    run_epss_result_regression(client, config, &report_id).await?;
 
     if let Some(selected_result) = select_deterministic_scan_result(&scan_results) {
         let selected_result_id = selected_result.meta.id.clone();
@@ -8975,6 +9321,105 @@ mod tests {
             xml,
             r#"<get_results details="0" filter="report_id=scan-report-id rows=-1" get_counts="1"/>"#
         );
+    }
+
+    #[test]
+    fn epss_regression_fixture_routes_all_four_fields_through_filter_and_sort() {
+        let fixture = epss_regression_fixture().expect("EPSS regression fixture parses");
+        assert_eq!(
+            fixture
+                .probes
+                .iter()
+                .map(|probe| probe.field.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "epss_score",
+                "epss_percentile",
+                "max_epss_score",
+                "max_epss_percentile",
+            ]
+        );
+        let report_id = EntityId::new("epss-report-id").expect("valid report id");
+        for probe in &fixture.probes {
+            let filter_xml =
+                request_xml(&epss_results_request(&report_id, &probe.filter_expression));
+            assert_eq!(
+                filter_xml,
+                format!(
+                    r#"<get_results details="0" filter="report_id=epss-report-id {}&gt;0 rows=-1" get_counts="1"/>"#,
+                    probe.field
+                )
+            );
+            let sort_xml = request_xml(&epss_results_request(&report_id, &probe.sort_expression));
+            assert_eq!(
+                sort_xml,
+                format!(
+                    r#"<get_results details="0" filter="report_id=epss-report-id sort={} rows=-1" get_counts="1"/>"#,
+                    probe.field
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn epss_disposition_accepts_abort_only_for_exact_known_affected_release() {
+        let fixture = epss_regression_fixture().expect("EPSS regression fixture parses");
+        let evidence = |version: &str, revision: Option<&str>| EpssDeploymentEvidence {
+            gvmd_version: version.to_string(),
+            gvmd_source_revision: revision.map(ToString::to_string),
+            gvmd_image_digest: "registry.example/gvmd@sha256:exact".to_string(),
+            source_specific_image: false,
+        };
+
+        let affected = epss_expected_disposition(&fixture, &evidence("26.40.2", None));
+        assert_eq!(affected, EpssExpectedDisposition::KnownAffectedBaseline);
+        assert!(affected.accepts_connection_abort());
+
+        let fixed = epss_expected_disposition(
+            &fixture,
+            &evidence("26.40.2", Some(&fixture.fixed_source_revision)),
+        );
+        assert_eq!(fixed, EpssExpectedDisposition::FixedSourceMustPass);
+        assert!(!fixed.accepts_connection_abort());
+
+        let source_specific_unknown = EpssDeploymentEvidence {
+            source_specific_image: true,
+            ..evidence("26.40.2", Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+        };
+        assert_eq!(
+            epss_expected_disposition(&fixture, &source_specific_unknown),
+            EpssExpectedDisposition::UnclassifiedMustPass
+        );
+
+        let unclassified = epss_expected_disposition(&fixture, &evidence("26.40.3", None));
+        assert_eq!(unclassified, EpssExpectedDisposition::UnclassifiedMustPass);
+        assert!(!unclassified.accepts_connection_abort());
+    }
+
+    #[test]
+    fn epss_known_bug_requires_a_read_side_server_abort_and_dead_same_session() {
+        let eof = GvmError::Connection(ConnectionError::ReadFailed(io::Error::from(
+            io::ErrorKind::UnexpectedEof,
+        )));
+        let reset = GvmError::Connection(ConnectionError::ReadFailed(io::Error::from(
+            io::ErrorKind::ConnectionReset,
+        )));
+        let timeout = GvmError::Timeout(Duration::from_secs(1));
+        let not_connected = GvmError::Connection(ConnectionError::NotConnected);
+
+        assert!(epss_error_is_connection_abort(&eof));
+        assert!(epss_error_is_connection_abort(&reset));
+        assert!(!epss_error_is_connection_abort(&timeout));
+        assert!(epss_health_confirms_lost_connection(&not_connected));
+        assert!(!epss_health_confirms_lost_connection(&eof));
+    }
+
+    #[test]
+    fn epss_release_parser_rejects_tags_and_partial_versions() {
+        assert_eq!(parse_release_triplet("26.40.2"), Some((26, 40, 2)));
+        for invalid in ["stable", "v26.40.2", "26.40", "26.40.2-dev", "26.40.2.1"] {
+            assert_eq!(parse_release_triplet(invalid), None, "{invalid}");
+        }
     }
 
     #[test]
