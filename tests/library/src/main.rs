@@ -2860,23 +2860,25 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
         "get_scan_config_nvt(single preferences/count)",
         client.get_scan_config_nvt(GetScanConfigNvtRequest::new(nvts.items[0].oid.clone()))
     );
-    if let Some(family) = nvts.items[0].family.as_deref() {
-        typed_read!(
-            "get_scan_config_nvts(public helper)",
-            client.get_scan_config_nvts(GetScanConfigNvtsRequest::new(
-                configs.items[0].meta.id.clone(),
-                family,
-            ))
-        );
-        record_helper_execution(
-            "get_scan_config_nvts",
-            "typed scan-config NVT family read executed",
-        )?;
-    }
-    typed_read!(
+    let nvt_families = typed_read!(
         "get_nvt_families",
         client.get_nvt_families(GetNvtFamiliesRequest::new())
     );
+    ensure(
+        !nvt_families.items.is_empty(),
+        "warm-volume baseline requires at least one typed NVT family",
+    )?;
+    typed_read!(
+        "get_scan_config_nvts(public helper)",
+        client.get_scan_config_nvts(GetScanConfigNvtsRequest::new(
+            configs.items[0].meta.id.clone(),
+            &nvt_families.items[0].name,
+        ))
+    );
+    record_helper_execution(
+        "get_scan_config_nvts",
+        "typed scan-config NVT family read executed",
+    )?;
 
     let cves = typed_read!(
         "get_cves",
@@ -2940,20 +2942,18 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
             "typed DFN-CERT advisory detail executed",
         )?;
     }
-    let vulnerabilities = typed_read!(
+    typed_read!(
         "get_vulnerabilities",
         client.get_vulnerabilities(GetVulnsRequest {
             filter_string: Some("rows=1 first=1".to_string()),
             ..Default::default()
         })
     );
-    if let Some(vulnerability) = vulnerabilities.items.first() {
-        typed_read!(
-            "get_vulnerability(single)",
-            client.get_vulnerability(GetVulnerabilityRequest::new(&vulnerability.id))
-        );
-        record_helper_execution("get_vulnerability", "typed vulnerability detail executed")?;
-    }
+    typed_read!(
+        "get_vulnerability(single NVT)",
+        client.get_vulnerability(GetVulnerabilityRequest::new(&nvts.items[0].oid))
+    );
+    record_helper_execution("get_vulnerability", "typed vulnerability detail executed")?;
 
     typed_read!(
         "get_alerts",
