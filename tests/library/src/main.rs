@@ -1492,6 +1492,7 @@ fn runtime_helper_path(name: &str) -> bool {
             | "get_groups"
             | "get_help"
             | "get_hosts"
+            | "get_info_list"
             | "get_note"
             | "get_notes"
             | "get_nvt_families"
@@ -2765,9 +2766,60 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
     log_pass("typed authentication failure", "non-2xx server error");
 
     let mut client = connect_client(config).await?;
+    let rejected = client
+        .authenticate(AuthenticateRequest::new(&config.username, ""))
+        .await;
+    ensure(
+        matches!(
+            rejected,
+            Err(GvmError::Request(gvm_gmp::GmpRequestError::InvalidField {
+                field: "password",
+                ..
+            }))
+        ),
+        "empty-password authentication did not return the typed password validation error",
+    )?;
+    let mut empty_password = XmlCommand::new("authenticate");
+    let credentials = empty_password.add_element("credentials");
+    credentials.add_child_with_text("username", &config.username);
+    credentials.add_child_with_text("password", "");
+    match client.call(empty_password).await {
+        Err(GvmError::Server {
+            status: 400,
+            message,
+        }) if message == "Authentication failed" => {}
+        Err(error) => {
+            return Err(AppError::Assertion(format!(
+                "empty-password authentication returned unexpected server error: {error}"
+            )));
+        }
+        Ok(_) => {
+            return Err(AppError::Assertion(
+                "empty-password authentication unexpectedly succeeded".to_string(),
+            ));
+        }
+    }
+    let pre_auth_version = client.get_version(GetVersionRequest::new()).await?;
+    assert_typed_status(
+        pre_auth_version.status,
+        &pre_auth_version.status_text,
+        200,
+        "get_version after empty-password authentication rejection",
+    )?;
     client
         .authenticate(AuthenticateRequest::new(&config.username, &config.password))
         .await?;
+    let post_auth_version = client.get_version(GetVersionRequest::new()).await?;
+    assert_typed_status(
+        post_auth_version.status,
+        &post_auth_version.status_text,
+        200,
+        "get_version after empty-password authentication rejection",
+    )?;
+    log_pass(
+        "typed empty-password authentication",
+        "local validation plus live GMP 400 Authentication failed, same-connection get_version, and valid authentication",
+    );
 
     macro_rules! typed_read {
         ($name:literal, $future:expr) => {{
@@ -2894,6 +2946,19 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
     ensure(
         !nvts.items.is_empty(),
         "warm-volume baseline requires at least one typed NVT",
+    )?;
+    let nvt_oid = nvts.items[0].oid.clone();
+    let mut oid_filtered_nvt_request = GetInfoListRequest::new(GenericInfoType::Nvt);
+    oid_filtered_nvt_request.filter_string = Some(format!("oid={nvt_oid}"));
+    let oid_filtered_nvts = typed_read!(
+        "get_info(NVT oid filter)",
+        client.get_info_list(oid_filtered_nvt_request)
+    );
+    ensure(
+        oid_filtered_nvts.items.len() == 1
+            && oid_filtered_nvts.items[0].id == nvt_oid
+            && oid_filtered_nvts.items[0].info_type == "NVT",
+        "get_info NVT OID filtering did not return exactly the requested NVT identity",
     )?;
     typed_read!(
         "get_scan_config_nvt(single preferences/count)",
@@ -3070,6 +3135,29 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
         "get_settings",
         client.get_settings(GetSettingsRequest::new())
     );
+    let invalid_sort = client
+        .get_settings(GetSettingsRequest {
+            sort_field: Some("rust-gvm-e2e-invalid-sort-field".to_string()),
+            ..GetSettingsRequest::new()
+        })
+        .await?;
+    assert_typed_status(
+        invalid_sort.status,
+        &invalid_sort.status_text,
+        200,
+        "get_settings with an invalid sort field",
+    )?;
+    let settings_health = client.get_version(GetVersionRequest::new()).await?;
+    assert_typed_status(
+        settings_health.status,
+        &settings_health.status_text,
+        200,
+        "get_version after invalid get_settings sort field",
+    )?;
+    log_pass(
+        "typed get_settings invalid sort field",
+        "validated fallback returned GMP 200 followed by same-session get_version",
+    );
     typed_read!(
         "get_system_reports",
         client.get_system_reports(GetSystemReportsRequest {
@@ -3122,6 +3210,7 @@ async fn run_typed_read_suite(config: &EnvConfig) -> Result<(), AppError> {
             "get_feeds",
             "get_filters",
             "get_notes",
+            "get_info_list",
             "get_nvt_families",
             "get_nvts",
             "get_overrides",
@@ -6699,6 +6788,69 @@ async fn run_crud_suite(config: &EnvConfig, tracker: &mut CleanupTracker) -> Res
     tracker.track_note(&note_id);
     log_pass("crud 21", &format!("create note ({note_id})"));
 
+    let mut invalid_create_note = XmlCommand::new("create_note");
+    invalid_create_note
+        .add_element("nvt")
+        .set_attribute("oid", &nvt_oid);
+    invalid_create_note.add_element_with_text("text", &config.name("invalid-note-severity"));
+    invalid_create_note.add_element_with_text("severity", "not-a-severity");
+    match client.call(invalid_create_note).await {
+        Err(GvmError::Server {
+            status: 400,
+            message,
+        }) if message == "Error in severity specification" => {}
+        Ok(response) => {
+            let id = response.id().ok_or_else(|| {
+                AppError::Assertion(
+                    "invalid create_note severity unexpectedly succeeded without an ID".to_string(),
+                )
+            })?;
+            let id = EntityId::new(id).map_err(|error| {
+                AppError::Assertion(format!(
+                    "invalid create_note severity unexpectedly succeeded with invalid ID: {error}"
+                ))
+            })?;
+            tracker.track_note(&id);
+            return Err(AppError::Assertion(format!(
+                "invalid create_note severity unexpectedly created note {id}"
+            )));
+        }
+        Err(error) => return Err(error.into()),
+    }
+
+    let invalid_modify_note = XmlCommand::new("modify_note")
+        .attribute("note_id", note_id.as_str())
+        .child_with_text("text", &config.name("invalid-note-active"))
+        .child_with_text("active", "not-an-active-value");
+    let invalid_modify_note = client.call(invalid_modify_note).await;
+    match invalid_modify_note {
+        Err(GvmError::Server {
+            status: 400,
+            message,
+        }) if message == "Error in active specification" => {}
+        Err(error) => {
+            return Err(AppError::Assertion(format!(
+                "invalid modify_note active value returned unexpected server error: {error}"
+            )));
+        }
+        Ok(_) => {
+            return Err(AppError::Assertion(
+                "invalid modify_note active value unexpectedly succeeded".to_string(),
+            ));
+        }
+    }
+    let note_error_health = client.get_version(GetVersionRequest::new()).await?;
+    assert_typed_status(
+        note_error_health.status,
+        &note_error_health.status_text,
+        200,
+        "get_version after invalid note requests",
+    )?;
+    log_pass(
+        "crud note validation errors",
+        "typed GMP 400 Error in severity specification and Error in active specification followed by same-session get_version",
+    );
+
     let get_note_resp = client
         .get_note(GetNoteRequest::new(note_id.clone()))
         .await?;
@@ -8441,6 +8593,8 @@ mod tests {
         "<version>22.7</version></get_version_response>"
     );
     const AUTH_RESPONSE: &str = r#"<authenticate_response status="200" status_text="OK"/>"#;
+    const EMPTY_PASSWORD_AUTH_RESPONSE: &str =
+        r#"<authenticate_response status="400" status_text="Authentication failed"/>"#;
     const RUNNING_TASK_RESPONSE: &str = concat!(
         r#"<get_tasks_response status="200" status_text="OK">"#,
         r#"<task id="task-id"><name>Task</name><status>Running</status></task>"#,
@@ -8465,6 +8619,8 @@ mod tests {
     );
     const MISSING_REPORT_RESPONSE: &str =
         r#"<delete_report_response status="404" status_text="Failed to find report"/>"#;
+    const STOP_TASK_BAD_REQUEST_RESPONSE: &str =
+        r#"<stop_task_response status="400" status_text="Internal error stopping task"/>"#;
     const MODIFIED_PERMISSION_RESPONSE: &str = concat!(
         r#"<get_permissions_response status="200" status_text="OK">"#,
         r#"<permission id="permission-id"><name>get_tasks</name>"#,
@@ -8746,6 +8902,192 @@ mod tests {
                         .count(),
                     1,
                     "the scan flow must never deliver start_task twice"
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
+    }
+
+    #[test]
+    fn issue_715_help_discovery_normalizes_report_export_command_names() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("report-export-help-normalization");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![vec![
+                        ("get_version", Some(VERSION_RESPONSE)),
+                        ("authenticate", Some(AUTH_RESPONSE)),
+                        (
+                            "help",
+                            Some(
+                                r#"<help_response status="200" status_text="OK"><schema format="XML"><command><name> EXPORT_SCAN_REPORT </name></command></schema></help_response>"#,
+                            ),
+                        ),
+                        (
+                            "export_scan_report",
+                            Some(
+                                r#"<export_scan_report_response status="201" status_text="OK, resource created" id="export-id"/>"#,
+                            ),
+                        ),
+                    ]],
+                ));
+                let config = socket_test_config(&path);
+                let mut client = connect_and_authenticate(&config).await;
+
+                client
+                    .discover_commands()
+                    .await
+                    .expect("help discovery should parse");
+                assert_eq!(
+                    client.command_support("export_scan_report"),
+                    gvm_client::CommandSupport::Supported
+                );
+                let response = client
+                    .export_scan_report(ExportScanReportRequest::new(
+                        EntityId::new("report-id").expect("valid report ID"),
+                    ))
+                    .await
+                    .expect("normalized discovery should permit the typed export");
+                assert_eq!(response.status, 201);
+
+                let commands = server.await.expect("scripted server");
+                assert_eq!(
+                    commands,
+                    [
+                        "get_version",
+                        "authenticate",
+                        "help",
+                        "export_scan_report"
+                    ]
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
+    }
+
+    #[test]
+    fn issue_715_nvt_oid_filter_selects_the_executed_info_list_helper() {
+        assert!(runtime_helper_path("get_info_list"));
+        assert!(!runtime_helper_path("get_nvt"));
+    }
+
+    #[test]
+    fn empty_password_authentication_server_error_keeps_the_connection_usable() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("empty-password-server-error");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![vec![
+                        ("get_version", Some(VERSION_RESPONSE)),
+                        ("authenticate", Some(EMPTY_PASSWORD_AUTH_RESPONSE)),
+                        ("get_version", Some(VERSION_RESPONSE)),
+                        ("authenticate", Some(AUTH_RESPONSE)),
+                        ("get_version", Some(VERSION_RESPONSE)),
+                    ]],
+                ));
+                let config = socket_test_config(&path);
+                let mut client = connect_client(&config).await.expect("connect test client");
+                let mut empty_password = XmlCommand::new("authenticate");
+                let credentials = empty_password.add_element("credentials");
+                credentials.add_child_with_text("username", &config.username);
+                credentials.add_child_with_text("password", "");
+                assert_eq!(
+                    gvm_protocol::Request::to_bytes(&empty_password),
+                    b"<authenticate><credentials><username>admin</username><password></password></credentials></authenticate>"
+                );
+
+                let rejected = client.call(empty_password).await;
+                assert!(matches!(
+                    rejected,
+                    Err(GvmError::Server {
+                        status: 400,
+                        message,
+                    }) if message == "Authentication failed"
+                ));
+
+                let health_before_authentication = client
+                    .get_version(GetVersionRequest::new())
+                    .await
+                    .expect("same connection remains usable after empty-password GMP error");
+                assert_eq!(health_before_authentication.status, 200);
+                let authenticated = client
+                    .authenticate(AuthenticateRequest::new(&config.username, &config.password))
+                    .await
+                    .expect("valid authentication succeeds on the same connection");
+                assert_eq!(authenticated.status, 200);
+                let health_after_authentication = client
+                    .get_version(GetVersionRequest::new())
+                    .await
+                    .expect("authenticated same connection remains usable");
+                assert_eq!(health_after_authentication.status, 200);
+                client.disconnect().await.expect("disconnect test client");
+
+                assert_eq!(
+                    server.await.expect("scripted server"),
+                    [
+                        "get_version",
+                        "authenticate",
+                        "get_version",
+                        "authenticate",
+                        "get_version",
+                    ]
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
+    }
+
+    #[test]
+    fn stop_task_server_error_is_typed_and_session_remains_usable() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("stop-task-server-error");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![vec![
+                        ("get_version", Some(VERSION_RESPONSE)),
+                        ("authenticate", Some(AUTH_RESPONSE)),
+                        ("stop_task", Some(STOP_TASK_BAD_REQUEST_RESPONSE)),
+                        ("get_version", Some(VERSION_RESPONSE)),
+                    ]],
+                ));
+                let config = socket_test_config(&path);
+                let mut client = connect_and_authenticate(&config).await;
+                let task_id = EntityId::new("task-id").expect("valid task ID");
+                let request = StopTaskRequest::new(task_id);
+                assert_eq!(request_xml(&request), "<stop_task task_id=\"task-id\"/>");
+
+                let stop = client.stop_task(request).await;
+                assert!(matches!(
+                    stop,
+                    Err(GvmError::Server {
+                        status: 400,
+                        message,
+                    }) if message == "Internal error stopping task"
+                ));
+
+                let health = client
+                    .get_version(GetVersionRequest::new())
+                    .await
+                    .expect("same session remains usable after stop_task GMP error");
+                assert_eq!(health.status, 200);
+                assert_eq!(health.version, "22.7");
+                client.disconnect().await.expect("disconnect test client");
+
+                assert_eq!(
+                    server.await.expect("scripted server"),
+                    ["get_version", "authenticate", "stop_task", "get_version"]
                 );
                 std::fs::remove_file(&path).expect("remove scripted socket");
             });
