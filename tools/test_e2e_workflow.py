@@ -121,6 +121,11 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
             self.assertNotIn("Restore artifacts directory ownership", body)
             self.assertNotIn("${{ runner.temp }}", body)
 
+    def test_scan_lane_allows_slow_stable_gvmd_export_creation(self):
+        scan = self.jobs()["devel-scan"]
+
+        self.assertIn("E2E_SOCKET_OPERATION_TIMEOUT_SECS: 900", scan)
+
     def test_external_actions_are_immutable(self):
         workflow = WORKFLOW.read_text(encoding="utf-8") + REUSABLE_WORKFLOW.read_text(encoding="utf-8")
         actions = re.findall(r"uses:\s+([^\s]+)", workflow)
