@@ -276,6 +276,7 @@ jobs:
       E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
       E2E_CLEAN_VOLUMES: ${{ inputs.clean && '1' || '0' }}
       E2E_TASK_PROGRESS_TIMEOUT_SECS: 1800
+      E2E_SOCKET_OPERATION_TIMEOUT_SECS: 900
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
