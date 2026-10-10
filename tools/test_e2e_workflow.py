@@ -145,6 +145,7 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
             "oci-image-reference:",
             "readiness-timeout-seconds:",
             "task-progress-timeout-seconds:",
+            "socket-operation-timeout-seconds:",
             "report-export-timeout-seconds:",
             "report-export-poll-interval-seconds:",
             "E2E (${{ inputs.deployment-id }}/${{ matrix.lane }})",

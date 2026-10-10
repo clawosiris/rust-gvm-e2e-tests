@@ -92,6 +92,9 @@ lane consumes a completed file when applicable and emits the exact observed
 state as `conditional-unavailable`; it never claims cancellation passed
 without sending it. `E2E_REPORT_EXPORT_TIMEOUT_SECS` (default 300) and
 `E2E_REPORT_EXPORT_POLL_INTERVAL_SECS` (default 1) bound both paths.
+`E2E_SOCKET_OPERATION_TIMEOUT_SECS` (default 300) separately bounds each
+Unix-socket connect, write, and response read so the initial export request can
+reach lifecycle polling on providers where export creation exceeds one minute.
 
 The tracker reconciles report exports before reports and never blindly replays
 an ambiguous cancel or download. Cleanup discovers exports linked to every

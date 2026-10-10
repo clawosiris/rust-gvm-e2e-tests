@@ -19,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use gvm_client::{parse_version_text, GmpClient, GvmError};
 use gvm_connection::{
     ConnectionError, GvmConnection, SshAuth, SshConfig, SshConnection, TlsClientIdentity,
-    TlsConfig, TlsConnection, UnixSocketConnection,
+    TlsConfig, TlsConnection, UnixSocketConfig, UnixSocketConnection,
 };
 use gvm_gmp::commands::agent_groups::*;
 use gvm_gmp::commands::agents::*;
@@ -229,6 +229,7 @@ async fn async_main() -> Result<(), AppError> {
 #[derive(Clone, Debug)]
 struct EnvConfig {
     task_progress_timeout_secs: u64,
+    socket_operation_timeout_secs: u64,
     report_export_timeout_secs: u64,
     report_export_poll_interval_secs: u64,
     readiness_timeout_secs: u64,
@@ -250,9 +251,12 @@ impl EnvConfig {
             .unwrap_or(90);
         let report_export_timeout_secs = env_u64("E2E_REPORT_EXPORT_TIMEOUT_SECS", 300);
         let report_export_poll_interval_secs = env_u64("E2E_REPORT_EXPORT_POLL_INTERVAL_SECS", 1);
+        let socket_operation_timeout_secs = env_u64("E2E_SOCKET_OPERATION_TIMEOUT_SECS", 300);
         ensure(
-            report_export_timeout_secs > 0 && report_export_poll_interval_secs > 0,
-            "report-export timeout and poll interval must both be positive",
+            socket_operation_timeout_secs > 0
+                && report_export_timeout_secs > 0
+                && report_export_poll_interval_secs > 0,
+            "socket-operation timeout, report-export timeout, and poll interval must all be positive",
         )?;
         let run_id = env::var("E2E_RUN_ID")
             .ok()
@@ -271,6 +275,7 @@ impl EnvConfig {
                 "1" | "true" | "TRUE" | "yes" | "YES"
             ),
             task_progress_timeout_secs,
+            socket_operation_timeout_secs,
             report_export_timeout_secs,
             report_export_poll_interval_secs,
             readiness_timeout_secs: env_u64("E2E_READINESS_TIMEOUT_SECS", 21_000),
@@ -8277,8 +8282,13 @@ async fn create_role_permission(
 }
 
 async fn connect_client(config: &EnvConfig) -> Result<GmpClient<UnixSocketConnection>, AppError> {
-    let connection = UnixSocketConnection::with_path(&config.socket_path);
+    let connection = UnixSocketConnection::new(unix_socket_config(config));
     Ok(GmpClient::connect(connection).await?)
+}
+
+fn unix_socket_config(config: &EnvConfig) -> UnixSocketConfig {
+    UnixSocketConfig::new(&config.socket_path)
+        .with_timeout(Duration::from_secs(config.socket_operation_timeout_secs))
 }
 
 async fn renew_authenticated_after_response(
@@ -8636,6 +8646,7 @@ mod tests {
     fn socket_test_config(path: &Path) -> EnvConfig {
         EnvConfig {
             task_progress_timeout_secs: 3,
+            socket_operation_timeout_secs: 3,
             report_export_timeout_secs: 3,
             report_export_poll_interval_secs: 1,
             readiness_timeout_secs: 3,
@@ -8648,6 +8659,18 @@ mod tests {
             run_id: "socket-policy-test".to_string(),
             namespace: "rust-gvm-e2e-socket-policy-test-".to_string(),
         }
+    }
+
+    #[test]
+    fn unix_socket_uses_configured_operation_timeout() {
+        let path = socket_test_path("configured-timeout");
+        let mut config = socket_test_config(&path);
+        config.socket_operation_timeout_secs = 17;
+
+        let socket = unix_socket_config(&config);
+
+        assert_eq!(socket.path, path);
+        assert_eq!(socket.timeout, Duration::from_secs(17));
     }
 
     fn socket_test_path(label: &str) -> PathBuf {
