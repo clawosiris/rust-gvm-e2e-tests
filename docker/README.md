@@ -59,6 +59,8 @@ docker/scripts/reset.sh
 - `GVM_ADMIN_USER`: GMP username. Default `admin`.
 - `GVM_ADMIN_PASS`: GMP password. Default `admin`.
 - `GVM_SOCKET_PATH`: Socket path inside the runner container. Default `/run/gvmd/gvmd.sock`.
+- `E2E_SOCKET_OPERATION_TIMEOUT_SECS`: Per-operation Unix-socket connect,
+  write, and response-read deadline. Default `300`.
 - `E2E_READINESS_TIMEOUT_SECS`: Combined socket, scan-config, SCAP/CPE, and
   CERT readiness budget. Default `21000`.
 - `E2E_READINESS_POLL_INTERVAL_SECS`: Authenticated feed poll interval.
