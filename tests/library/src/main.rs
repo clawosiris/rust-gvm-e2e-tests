@@ -1616,14 +1616,22 @@ fn runtime_command_path(name: &str) -> bool {
             .any(|entry| entry.wire_command == name && runtime_helper_path(entry.name))
 }
 
-fn plan_inputs(catalog: &FeatureCatalog, version: GmpVersion) -> Vec<PlanInput> {
+fn plan_inputs(
+    catalog: &FeatureCatalog,
+    version: GmpVersion,
+    quarantine_stable_report_exports: bool,
+) -> Vec<PlanInput> {
     let command_inputs = COMMAND_COVERAGE.iter().map(|entry| {
-        let (semantic_eligible, semantic_evidence) = semantic_eligibility(
+        let (mut semantic_eligible, mut semantic_evidence) = semantic_eligibility(
             PlanEntryKind::Command,
             entry.name,
             Some(entry.wire_command),
             version,
         );
+        if quarantine_stable_report_exports && stable_report_export_hang_surface(entry.name) {
+            semantic_eligible = false;
+            semantic_evidence = STABLE_REPORT_EXPORT_HANG_EVIDENCE.to_string();
+        }
         PlanInput {
             kind: PlanEntryKind::Command,
             name: entry.name.to_string(),
@@ -1637,12 +1645,16 @@ fn plan_inputs(catalog: &FeatureCatalog, version: GmpVersion) -> Vec<PlanInput> 
         }
     });
     let helper_inputs = HELPER_COVERAGE.iter().map(|entry| {
-        let (semantic_eligible, semantic_evidence) = semantic_eligibility(
+        let (mut semantic_eligible, mut semantic_evidence) = semantic_eligibility(
             PlanEntryKind::Helper,
             entry.name,
             Some(entry.wire_command),
             version,
         );
+        if quarantine_stable_report_exports && stable_report_export_hang_surface(entry.name) {
+            semantic_eligible = false;
+            semantic_evidence = STABLE_REPORT_EXPORT_HANG_EVIDENCE.to_string();
+        }
         PlanInput {
             kind: PlanEntryKind::Helper,
             name: entry.name.to_string(),
@@ -2028,7 +2040,13 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
         &catalog,
         &capabilities,
         lane,
-        plan_inputs(&catalog, version),
+        plan_inputs(
+            &catalog,
+            version,
+            epss_deployment_evidence
+                .as_ref()
+                .is_some_and(stable_report_export_hang_is_exact),
+        ),
     ) {
         Ok(plan) => plan,
         Err(error) => {
@@ -4655,6 +4673,28 @@ struct EpssDeploymentEvidence {
     source_specific_image: bool,
 }
 
+const STABLE_REPORT_EXPORT_HANG_GVMD_VERSION: &str = "26.40.2";
+const STABLE_REPORT_EXPORT_HANG_GVMD_SOURCE_REVISION: &str =
+    "99503647e445c799b65483817d5cd87bbbf004b4";
+const STABLE_REPORT_EXPORT_HANG_GVMD_IMAGE_DIGEST: &str =
+    "registry.community.greenbone.net/community/gvmd@sha256:fec601848e0847b27d7bb262b684a05747d369b85ddde75f7074fd2880f06221";
+const STABLE_REPORT_EXPORT_HANG_EVIDENCE: &str = "clawosiris/rust-gvm-e2e-tests#210: exact stable gvmd 26.40.2 / source 99503647e445c799b65483817d5cd87bbbf004b4 / registry.community.greenbone.net/community/gvmd@sha256:fec601848e0847b27d7bb262b684a05747d369b85ddde75f7074fd2880f06221 created asynchronous report exports but did not return the GMP create response within 900 seconds in immutable run 38095772242 artifact 11686773617 (sha256:dbbf14af378c6629a797c07c2283ebc53bee2190e096bb43dbd8dd30f8bf5770); no export mutation is sent for this exact provenance; fixed-source and every other gvmd revision must execute the full lifecycle";
+
+fn stable_report_export_hang_is_exact(evidence: &EpssDeploymentEvidence) -> bool {
+    evidence.gvmd_version == STABLE_REPORT_EXPORT_HANG_GVMD_VERSION
+        && evidence.gvmd_source_revision.as_deref()
+            == Some(STABLE_REPORT_EXPORT_HANG_GVMD_SOURCE_REVISION)
+        && evidence.gvmd_image_digest == STABLE_REPORT_EXPORT_HANG_GVMD_IMAGE_DIGEST
+        && !evidence.source_specific_image
+}
+
+fn stable_report_export_hang_surface(name: &str) -> bool {
+    matches!(
+        name,
+        "export_scan_report" | "get_report_exports" | "download_report_export"
+    )
+}
+
 impl EpssDeploymentEvidence {
     fn from_env() -> Result<Self, AppError> {
         let gvmd_version = env::var("E2E_GVMD_VERSION")
@@ -5446,6 +5486,19 @@ async fn run_async_report_export_lifecycle(
             ),
             &format!("typed client did not classify advertised {command} as supported"),
         )?;
+    }
+
+    let deployment_evidence = EpssDeploymentEvidence::from_env()?;
+    if stable_report_export_hang_is_exact(&deployment_evidence) {
+        runtime::observe(
+            "scan report asynchronous export lifecycle",
+            Outcome::KnownUpstreamBug,
+            STABLE_REPORT_EXPORT_HANG_EVIDENCE,
+        );
+        log_line(
+            "[known-upstream-bug] scan report asynchronous export lifecycle is quarantined for the exact stable gvmd provenance; no export mutation was sent",
+        );
+        return Ok(());
     }
 
     tracker.arm_report_export_reconciliation();
@@ -9762,6 +9815,71 @@ mod tests {
     }
 
     #[test]
+    fn stable_report_export_hang_quarantine_requires_exact_provenance() {
+        let exact = EpssDeploymentEvidence {
+            gvmd_version: STABLE_REPORT_EXPORT_HANG_GVMD_VERSION.to_string(),
+            gvmd_source_revision: Some(STABLE_REPORT_EXPORT_HANG_GVMD_SOURCE_REVISION.to_string()),
+            gvmd_image_digest: STABLE_REPORT_EXPORT_HANG_GVMD_IMAGE_DIGEST.to_string(),
+            source_specific_image: false,
+        };
+        assert!(stable_report_export_hang_is_exact(&exact));
+
+        for near_miss in [
+            EpssDeploymentEvidence {
+                gvmd_version: "26.40.3".to_string(),
+                ..exact.clone()
+            },
+            EpssDeploymentEvidence {
+                gvmd_source_revision: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
+                ..exact.clone()
+            },
+            EpssDeploymentEvidence {
+                gvmd_image_digest: "registry.example/gvmd@sha256:different".to_string(),
+                ..exact.clone()
+            },
+            EpssDeploymentEvidence {
+                source_specific_image: true,
+                ..exact.clone()
+            },
+        ] {
+            assert!(!stable_report_export_hang_is_exact(&near_miss));
+        }
+    }
+
+    #[test]
+    fn exact_stable_report_export_surfaces_are_not_selected_for_mutation() {
+        let catalog: FeatureCatalog =
+            serde_json::from_str(include_str!("../../../coverage/feature-catalog.json"))
+                .expect("feature catalog parses");
+        let quarantined = plan_inputs(&catalog, GmpVersion(22, 8), true);
+        let normal = plan_inputs(&catalog, GmpVersion(22, 8), false);
+
+        for kind in [PlanEntryKind::Command, PlanEntryKind::Helper] {
+            for name in [
+                "export_scan_report",
+                "get_report_exports",
+                "download_report_export",
+            ] {
+                let quarantined_input = quarantined
+                    .iter()
+                    .find(|input| input.kind == kind && input.name == name)
+                    .expect("quarantined report-export surface is planned");
+                assert!(!quarantined_input.semantic_eligible);
+                assert_eq!(
+                    quarantined_input.semantic_evidence,
+                    STABLE_REPORT_EXPORT_HANG_EVIDENCE
+                );
+
+                let normal_input = normal
+                    .iter()
+                    .find(|input| input.kind == kind && input.name == name)
+                    .expect("normal report-export surface is planned");
+                assert!(normal_input.semantic_eligible);
+            }
+        }
+    }
+
+    #[test]
     fn epss_known_bug_requires_a_read_side_server_abort_and_dead_same_session() {
         let eof = GvmError::Connection(ConnectionError::ReadFailed(io::Error::from(
             io::ErrorKind::UnexpectedEof,
@@ -9927,7 +10045,7 @@ mod tests {
         let catalog: FeatureCatalog =
             serde_json::from_str(include_str!("../../../coverage/feature-catalog.json"))
                 .expect("feature catalog parses");
-        let inputs = plan_inputs(&catalog, GmpVersion(22, 7));
+        let inputs = plan_inputs(&catalog, GmpVersion(22, 7), false);
 
         for helper in ["get_report_export", "get_report_export_with_opts"] {
             let input = inputs
