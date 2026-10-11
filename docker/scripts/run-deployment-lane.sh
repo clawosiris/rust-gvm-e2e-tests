@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/deployment-lane-artifacts.sh"
+source "${script_dir}/gvmd-version.sh"
 source "${script_dir}/postgres-bootstrap.sh"
 
 lane="${1:?usage: run-deployment-lane.sh <lane>}"
@@ -140,7 +141,7 @@ for file in "${compose_files[@]}"; do runtime_image_args+=(--compose-file "${fil
 python3 tools/runtime_images.py "${runtime_image_args[@]}" \
   --output "artifacts/${deployment_id}-${lane}-runtime-images.json"
 gvmd_version_output="$(deployment_compose exec -T gvmd gvmd --version)"
-export E2E_GVMD_VERSION="$(awk '{ for (field = 1; field <= NF; field++) if ($field ~ /^[0-9]+\.[0-9]+\.[0-9]+$/) { print $field; exit } }' <<< "${gvmd_version_output}")"
+export E2E_GVMD_VERSION="$(extract_gvmd_version "${gvmd_version_output}")"
 gvmd_image_id="$(deployment_compose images --quiet gvmd)"
 export E2E_GVMD_SOURCE_REVISION="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${gvmd_image_id}")"
 if [[ "${E2E_GVMD_SOURCE_REVISION}" == "<no value>" ]]; then
@@ -152,7 +153,7 @@ if [[ -n "${GVMD_IMAGE:-}" ]]; then
 else
   export E2E_GVMD_SOURCE_SPECIFIC_IMAGE=0
 fi
-[[ "${E2E_GVMD_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "could not capture exact gvmd release from: ${gvmd_version_output}" >&2; exit 1; }
+[[ "${E2E_GVMD_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(~dev[0-9]+)?$ ]] || { echo "could not capture exact gvmd version from: ${gvmd_version_output}" >&2; exit 1; }
 [[ -n "${E2E_GVMD_IMAGE_DIGEST}" ]] || { echo "could not capture exact gvmd image digest" >&2; exit 1; }
 if [[ -n "${E2E_GVMD_SOURCE_REVISION}" ]]; then
   [[ "${E2E_GVMD_SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]] || { echo "gvmd image source revision is not an exact commit SHA" >&2; exit 1; }

@@ -4706,8 +4706,8 @@ impl EpssDeploymentEvidence {
                 )
             })?;
         ensure(
-            parse_release_triplet(&gvmd_version).is_some(),
-            "E2E_GVMD_VERSION must be an exact numeric release triplet",
+            parse_gvmd_version_triplet(&gvmd_version).is_some(),
+            "E2E_GVMD_VERSION must be an exact numeric release triplet with an optional ~devN suffix",
         )?;
         let gvmd_source_revision = env::var("E2E_GVMD_SOURCE_REVISION")
             .ok()
@@ -4763,8 +4763,18 @@ impl EpssDeploymentEvidence {
     }
 }
 
-fn parse_release_triplet(version: &str) -> Option<(u64, u64, u64)> {
-    let mut parts = version.split('.');
+fn parse_gvmd_version_triplet(version: &str) -> Option<(u64, u64, u64)> {
+    let (release, suffix) = match version.split_once('~') {
+        Some((release, suffix)) => (release, Some(suffix)),
+        None => (version, None),
+    };
+    if let Some(suffix) = suffix {
+        let sequence = suffix.strip_prefix("dev")?;
+        if sequence.is_empty() || !sequence.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+    }
+    let mut parts = release.split('.');
     let triplet = (
         parts.next()?.parse().ok()?,
         parts.next()?.parse().ok()?,
@@ -9830,6 +9840,10 @@ mod tests {
                 ..exact.clone()
             },
             EpssDeploymentEvidence {
+                gvmd_version: "26.40.3~dev1".to_string(),
+                ..exact.clone()
+            },
+            EpssDeploymentEvidence {
                 gvmd_source_revision: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
                 ..exact.clone()
             },
@@ -9898,10 +9912,22 @@ mod tests {
     }
 
     #[test]
-    fn epss_release_parser_rejects_tags_and_partial_versions() {
-        assert_eq!(parse_release_triplet("26.40.2"), Some((26, 40, 2)));
-        for invalid in ["stable", "v26.40.2", "26.40", "26.40.2-dev", "26.40.2.1"] {
-            assert_eq!(parse_release_triplet(invalid), None, "{invalid}");
+    fn epss_version_parser_accepts_exact_releases_and_source_builds() {
+        assert_eq!(parse_gvmd_version_triplet("26.40.2"), Some((26, 40, 2)));
+        assert_eq!(
+            parse_gvmd_version_triplet("26.40.3~dev1"),
+            Some((26, 40, 3))
+        );
+        for invalid in [
+            "stable",
+            "v26.40.2",
+            "26.40",
+            "26.40.3-dev1",
+            "26.40.3~dev",
+            "26.40.3~rc1",
+            "26.40.2.1",
+        ] {
+            assert_eq!(parse_gvmd_version_triplet(invalid), None, "{invalid}");
         }
     }
 
