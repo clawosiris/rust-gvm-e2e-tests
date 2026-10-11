@@ -1619,7 +1619,7 @@ fn runtime_command_path(name: &str) -> bool {
 fn plan_inputs(
     catalog: &FeatureCatalog,
     version: GmpVersion,
-    quarantine_stable_report_exports: bool,
+    report_export_quarantine_evidence: Option<&str>,
 ) -> Vec<PlanInput> {
     let command_inputs = COMMAND_COVERAGE.iter().map(|entry| {
         let (mut semantic_eligible, mut semantic_evidence) = semantic_eligibility(
@@ -1628,9 +1628,11 @@ fn plan_inputs(
             Some(entry.wire_command),
             version,
         );
-        if quarantine_stable_report_exports && stable_report_export_hang_surface(entry.name) {
+        if let Some(evidence) = report_export_quarantine_evidence
+            .filter(|_| report_export_quarantine_surface(entry.name))
+        {
             semantic_eligible = false;
-            semantic_evidence = STABLE_REPORT_EXPORT_HANG_EVIDENCE.to_string();
+            semantic_evidence = evidence.to_string();
         }
         PlanInput {
             kind: PlanEntryKind::Command,
@@ -1651,9 +1653,11 @@ fn plan_inputs(
             Some(entry.wire_command),
             version,
         );
-        if quarantine_stable_report_exports && stable_report_export_hang_surface(entry.name) {
+        if let Some(evidence) = report_export_quarantine_evidence
+            .filter(|_| report_export_quarantine_surface(entry.name))
+        {
             semantic_eligible = false;
-            semantic_evidence = STABLE_REPORT_EXPORT_HANG_EVIDENCE.to_string();
+            semantic_evidence = evidence.to_string();
         }
         PlanInput {
             kind: PlanEntryKind::Helper,
@@ -2045,7 +2049,7 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
             version,
             epss_deployment_evidence
                 .as_ref()
-                .is_some_and(stable_report_export_hang_is_exact),
+                .and_then(report_export_quarantine_evidence),
         ),
     ) {
         Ok(plan) => plan,
@@ -4680,6 +4684,13 @@ const STABLE_REPORT_EXPORT_HANG_GVMD_IMAGE_DIGEST: &str =
     "registry.community.greenbone.net/community/gvmd@sha256:fec601848e0847b27d7bb262b684a05747d369b85ddde75f7074fd2880f06221";
 const STABLE_REPORT_EXPORT_HANG_EVIDENCE: &str = "clawosiris/rust-gvm-e2e-tests#210: exact stable gvmd 26.40.2 / source 99503647e445c799b65483817d5cd87bbbf004b4 / registry.community.greenbone.net/community/gvmd@sha256:fec601848e0847b27d7bb262b684a05747d369b85ddde75f7074fd2880f06221 created asynchronous report exports but did not return the GMP create response within 900 seconds in immutable run 38095772242 artifact 11686773617 (sha256:dbbf14af378c6629a797c07c2283ebc53bee2190e096bb43dbd8dd30f8bf5770); no export mutation is sent for this exact provenance; fixed-source and every other gvmd revision must execute the full lifecycle";
 
+const SOURCE_REPORT_EXPORT_DOWNLOAD_CLOSE_GVMD_VERSION: &str = "26.40.3~dev1";
+const SOURCE_REPORT_EXPORT_DOWNLOAD_CLOSE_GVMD_SOURCE_REVISION: &str =
+    "45fb6512fb7f858d445009b67259e16d6563b6f8";
+const SOURCE_REPORT_EXPORT_DOWNLOAD_CLOSE_GVMD_IMAGE_DIGEST: &str =
+    "ghcr.io/greenbone/gvmd@sha256:6deed591e0cdf43b87acba05fbd8f4fc9f0e01a0d0a781a38ac6c99f95bfad9b";
+const SOURCE_REPORT_EXPORT_DOWNLOAD_CLOSE_EVIDENCE: &str = "clawosiris/rust-gvm-e2e-tests#215 / greenbone/gvmd#3176: exact source-specific gvmd 26.40.3~dev1 / source 45fb6512fb7f858d445009b67259e16d6563b6f8 / ghcr.io/greenbone/gvmd@sha256:6deed591e0cdf43b87acba05fbd8f4fc9f0e01a0d0a781a38ac6c99f95bfad9b created export 09451ccd-52f9-4eb6-82b5-0af538220add, observed pending:queued -> done:completed, then closed the GMP connection during download_report_export in immutable run 38121664398 artifact 11695814902 (sha256:ceb4925c533ae5f93eca540ac921e6a65ab756dcc6c4771fe44088af7132c229); no export mutation is sent for this exact provenance; every other gvmd image must execute the full lifecycle";
+
 fn stable_report_export_hang_is_exact(evidence: &EpssDeploymentEvidence) -> bool {
     evidence.gvmd_version == STABLE_REPORT_EXPORT_HANG_GVMD_VERSION
         && evidence.gvmd_source_revision.as_deref()
@@ -4688,7 +4699,25 @@ fn stable_report_export_hang_is_exact(evidence: &EpssDeploymentEvidence) -> bool
         && !evidence.source_specific_image
 }
 
-fn stable_report_export_hang_surface(name: &str) -> bool {
+fn source_report_export_download_close_is_exact(evidence: &EpssDeploymentEvidence) -> bool {
+    evidence.gvmd_version == SOURCE_REPORT_EXPORT_DOWNLOAD_CLOSE_GVMD_VERSION
+        && evidence.gvmd_source_revision.as_deref()
+            == Some(SOURCE_REPORT_EXPORT_DOWNLOAD_CLOSE_GVMD_SOURCE_REVISION)
+        && evidence.gvmd_image_digest == SOURCE_REPORT_EXPORT_DOWNLOAD_CLOSE_GVMD_IMAGE_DIGEST
+        && evidence.source_specific_image
+}
+
+fn report_export_quarantine_evidence(evidence: &EpssDeploymentEvidence) -> Option<&'static str> {
+    if stable_report_export_hang_is_exact(evidence) {
+        Some(STABLE_REPORT_EXPORT_HANG_EVIDENCE)
+    } else if source_report_export_download_close_is_exact(evidence) {
+        Some(SOURCE_REPORT_EXPORT_DOWNLOAD_CLOSE_EVIDENCE)
+    } else {
+        None
+    }
+}
+
+fn report_export_quarantine_surface(name: &str) -> bool {
     matches!(
         name,
         "export_scan_report" | "get_report_exports" | "download_report_export"
@@ -5499,14 +5528,14 @@ async fn run_async_report_export_lifecycle(
     }
 
     let deployment_evidence = EpssDeploymentEvidence::from_env()?;
-    if stable_report_export_hang_is_exact(&deployment_evidence) {
+    if let Some(quarantine_evidence) = report_export_quarantine_evidence(&deployment_evidence) {
         runtime::observe(
             "scan report asynchronous export lifecycle",
             Outcome::KnownUpstreamBug,
-            STABLE_REPORT_EXPORT_HANG_EVIDENCE,
+            quarantine_evidence,
         );
         log_line(
-            "[known-upstream-bug] scan report asynchronous export lifecycle is quarantined for the exact stable gvmd provenance; no export mutation was sent",
+            "[known-upstream-bug] scan report asynchronous export lifecycle is quarantined for the exact gvmd provenance; no export mutation was sent",
         );
         return Ok(());
     }
@@ -9833,6 +9862,10 @@ mod tests {
             source_specific_image: false,
         };
         assert!(stable_report_export_hang_is_exact(&exact));
+        assert_eq!(
+            report_export_quarantine_evidence(&exact),
+            Some(STABLE_REPORT_EXPORT_HANG_EVIDENCE)
+        );
 
         for near_miss in [
             EpssDeploymentEvidence {
@@ -9857,38 +9890,80 @@ mod tests {
             },
         ] {
             assert!(!stable_report_export_hang_is_exact(&near_miss));
+            assert_eq!(report_export_quarantine_evidence(&near_miss), None);
         }
     }
 
     #[test]
-    fn exact_stable_report_export_surfaces_are_not_selected_for_mutation() {
+    fn source_report_export_download_close_quarantine_requires_exact_provenance() {
+        let exact = EpssDeploymentEvidence {
+            gvmd_version: SOURCE_REPORT_EXPORT_DOWNLOAD_CLOSE_GVMD_VERSION.to_string(),
+            gvmd_source_revision: Some(
+                SOURCE_REPORT_EXPORT_DOWNLOAD_CLOSE_GVMD_SOURCE_REVISION.to_string(),
+            ),
+            gvmd_image_digest: SOURCE_REPORT_EXPORT_DOWNLOAD_CLOSE_GVMD_IMAGE_DIGEST.to_string(),
+            source_specific_image: true,
+        };
+        assert!(source_report_export_download_close_is_exact(&exact));
+        assert_eq!(
+            report_export_quarantine_evidence(&exact),
+            Some(SOURCE_REPORT_EXPORT_DOWNLOAD_CLOSE_EVIDENCE)
+        );
+
+        for near_miss in [
+            EpssDeploymentEvidence {
+                gvmd_version: "26.40.3".to_string(),
+                ..exact.clone()
+            },
+            EpssDeploymentEvidence {
+                gvmd_source_revision: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
+                ..exact.clone()
+            },
+            EpssDeploymentEvidence {
+                gvmd_image_digest: "ghcr.io/greenbone/gvmd@sha256:different".to_string(),
+                ..exact.clone()
+            },
+            EpssDeploymentEvidence {
+                source_specific_image: false,
+                ..exact.clone()
+            },
+        ] {
+            assert!(!source_report_export_download_close_is_exact(&near_miss));
+            assert_eq!(report_export_quarantine_evidence(&near_miss), None);
+        }
+    }
+
+    #[test]
+    fn exact_report_export_quarantine_surfaces_are_not_selected_for_mutation() {
         let catalog: FeatureCatalog =
             serde_json::from_str(include_str!("../../../coverage/feature-catalog.json"))
                 .expect("feature catalog parses");
-        let quarantined = plan_inputs(&catalog, GmpVersion(22, 8), true);
-        let normal = plan_inputs(&catalog, GmpVersion(22, 8), false);
+        let normal = plan_inputs(&catalog, GmpVersion(22, 8), None);
 
-        for kind in [PlanEntryKind::Command, PlanEntryKind::Helper] {
-            for name in [
-                "export_scan_report",
-                "get_report_exports",
-                "download_report_export",
-            ] {
-                let quarantined_input = quarantined
-                    .iter()
-                    .find(|input| input.kind == kind && input.name == name)
-                    .expect("quarantined report-export surface is planned");
-                assert!(!quarantined_input.semantic_eligible);
-                assert_eq!(
-                    quarantined_input.semantic_evidence,
-                    STABLE_REPORT_EXPORT_HANG_EVIDENCE
-                );
+        for evidence in [
+            STABLE_REPORT_EXPORT_HANG_EVIDENCE,
+            SOURCE_REPORT_EXPORT_DOWNLOAD_CLOSE_EVIDENCE,
+        ] {
+            let quarantined = plan_inputs(&catalog, GmpVersion(22, 8), Some(evidence));
+            for kind in [PlanEntryKind::Command, PlanEntryKind::Helper] {
+                for name in [
+                    "export_scan_report",
+                    "get_report_exports",
+                    "download_report_export",
+                ] {
+                    let quarantined_input = quarantined
+                        .iter()
+                        .find(|input| input.kind == kind && input.name == name)
+                        .expect("quarantined report-export surface is planned");
+                    assert!(!quarantined_input.semantic_eligible);
+                    assert_eq!(quarantined_input.semantic_evidence, evidence);
 
-                let normal_input = normal
-                    .iter()
-                    .find(|input| input.kind == kind && input.name == name)
-                    .expect("normal report-export surface is planned");
-                assert!(normal_input.semantic_eligible);
+                    let normal_input = normal
+                        .iter()
+                        .find(|input| input.kind == kind && input.name == name)
+                        .expect("normal report-export surface is planned");
+                    assert!(normal_input.semantic_eligible);
+                }
             }
         }
     }
@@ -10071,7 +10146,7 @@ mod tests {
         let catalog: FeatureCatalog =
             serde_json::from_str(include_str!("../../../coverage/feature-catalog.json"))
                 .expect("feature catalog parses");
-        let inputs = plan_inputs(&catalog, GmpVersion(22, 7), false);
+        let inputs = plan_inputs(&catalog, GmpVersion(22, 7), None);
 
         for helper in ["get_report_export", "get_report_export_with_opts"] {
             let input = inputs

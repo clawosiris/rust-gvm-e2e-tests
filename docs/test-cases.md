@@ -103,6 +103,19 @@ completed artifact, and finally proves no linked export remains active before
 report/task deletion. Preflight applies the same ordering to stale namespaced
 tasks.
 
+The harness returns before creating an export for two exact, immutable gvmd
+provenances with upstream defects: the stable 26.40.2 create-response hang
+tracked by [E2E #210](https://github.com/clawosiris/rust-gvm-e2e-tests/issues/210),
+and the source-specific `45fb6512` image affected by
+[greenbone/gvmd#3176](https://github.com/greenbone/gvmd/issues/3176), which
+reaches `done:completed` but closes the connection during destructive
+download. Each disposition requires the exact version, source revision, image
+digest, and source-specific classification, records `known-upstream-bug`, and
+sends no export mutation. A near miss must execute the complete lifecycle.
+These quarantines are neither passes nor acceptance evidence for
+`greenbone-hive/rust-gvm#715`; that issue remains open until an unquarantined
+immutable gvmd image passes create, observe, download, and consumption cleanup.
+
 Audit and delta variants remain inventory-visible and help-gated. Community
 Compose explicitly declares `audit_report`, `audit_report_pair`, and
 `delta_scan_report_pair` fixtures unavailable, so `export_audit_report`,
