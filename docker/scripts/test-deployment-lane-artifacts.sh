@@ -3,8 +3,15 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/deployment-lane-artifacts.sh"
+source "${script_dir}/gvmd-version.sh"
 source "${script_dir}/postgres-bootstrap.sh"
 source "${script_dir}/scanner-readiness.sh"
+
+[[ "$(extract_gvmd_version 'Greenbone Vulnerability Manager 26.40.2')" == "26.40.2" ]]
+[[ "$(extract_gvmd_version 'Greenbone Vulnerability Manager 26.40.3~dev1')" == "26.40.3~dev1" ]]
+for invalid in stable v26.40.2 26.40 26.40.3-dev1 26.40.3~rc1 26.40.3.1; do
+  [[ -z "$(extract_gvmd_version "Greenbone Vulnerability Manager ${invalid}")" ]]
+done
 
 expected=$'acme-ci-devel-fast-runtime-images.json\nacme-ci-devel-fast-capability-snapshot.json\nacme-ci-devel-fast-deployment-contract.json\nacme-ci-devel-fast-test-plan.json\nacme-ci-devel-fast-test-results.json\nacme-ci-devel-fast-provider.log'
 [[ "$(deployment_lane_artifact_paths acme-ci devel-fast)" == "${expected}" ]]

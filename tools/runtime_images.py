@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 CANONICAL_GVMD_REPOSITORY = "registry.community.greenbone.net/community/gvmd"
-RELEASE_TRIPLET = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+GVMD_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:~dev[0-9]+)?$")
 SOURCE_REVISION = re.compile(r"^[0-9a-f]{40}$")
 IMMUTABLE_DIGEST = re.compile(r"^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$")
 
@@ -76,8 +76,10 @@ def external_gvmd_provenance(rows: object) -> dict[str, object]:
     source_revision = row.get("source_revision", "")
     if not isinstance(repository, str) or not repository or any(char.isspace() for char in repository):
         raise ValueError("external gvmd repository must be a nonempty whitespace-free string")
-    if not isinstance(version, str) or RELEASE_TRIPLET.fullmatch(version) is None:
-        raise ValueError("external gvmd version must be an exact numeric release triplet")
+    if not isinstance(version, str) or GVMD_VERSION.fullmatch(version) is None:
+        raise ValueError(
+            "external gvmd version must be an exact numeric release triplet with an optional ~devN suffix"
+        )
     if not isinstance(digest, str) or IMMUTABLE_DIGEST.fullmatch(digest) is None:
         raise ValueError("external gvmd digest must be an immutable sha256 digest")
     if not isinstance(source_revision, str):
