@@ -201,7 +201,7 @@ jobs:
             GVM_ROOLS_REF=${{ steps.refs.outputs.gvm-rools-ref }}
           secrets: |
             github_token=${{ secrets.RELEASE_TOKEN }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: community-runner-${{ github.run_id }}
           path: runner-image.tar
@@ -222,7 +222,7 @@ jobs:
       E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
       E2E_CLEAN_VOLUMES: ${{ inputs.clean && '1' || '0' }}
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: community-runner-${{ github.run_id }}
           path: ${{ runner.temp }}/community-runner-${{ github.run_id }}
@@ -255,7 +255,7 @@ jobs:
       - if: failure()
         run: docker compose -f "${COMPOSE_FILE}" logs --tail=250 gvmd ospd-openvas openvasd pg-gvm
       - if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: community-devel-fast-results-${{ github.run_id }}
           path: |
@@ -278,7 +278,7 @@ jobs:
       E2E_TASK_PROGRESS_TIMEOUT_SECS: 1800
       E2E_SOCKET_OPERATION_TIMEOUT_SECS: 900
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: community-runner-${{ github.run_id }}
           path: ${{ runner.temp }}/community-runner-${{ github.run_id }}
@@ -311,7 +311,7 @@ jobs:
       - if: failure()
         run: docker compose -f "${COMPOSE_FILE}" logs --tail=350 gvmd ospd-openvas openvasd pg-gvm scan-fixture
       - if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: community-devel-scan-results-${{ github.run_id }}
           path: |
@@ -333,7 +333,7 @@ jobs:
       E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
       E2E_CLEAN_VOLUMES: ${{ inputs.clean && '1' || '0' }}
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: community-runner-${{ github.run_id }}
           path: ${{ runner.temp }}/community-runner-${{ github.run_id }}
@@ -366,7 +366,7 @@ jobs:
       - if: failure()
         run: COMPOSE_PROJECT_NAME=rust-gvm-e2e-isolated docker compose -f "${COMPOSE_FILE}" logs --tail=350 gvmd pg-gvm
       - if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: community-devel-isolated-results-${{ github.run_id }}
           path: |
@@ -402,7 +402,7 @@ jobs:
       E2E_SSH_KEY_PASSPHRASE: ${{ secrets.E2E_SSH_KEY_PASSPHRASE }}
       E2E_SSH_SOCKET_PATH: ${{ secrets.E2E_SSH_SOCKET_PATH }}
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: community-runner-${{ github.run_id }}
           path: ${{ runner.temp }}/community-runner-${{ github.run_id }}
@@ -433,7 +433,7 @@ jobs:
           clean: false
       - run: bash docker/scripts/run-deployment-lane.sh devel-transport
       - if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: community-devel-transport-results-${{ github.run_id }}
           path: |
@@ -452,7 +452,7 @@ jobs:
       GVM_VERSION: ${{ needs.build-runner.outputs.gvm-version }}
       E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: community-runner-${{ github.run_id }}
           path: ${{ runner.temp }}/community-runner-${{ github.run_id }}
@@ -483,7 +483,7 @@ jobs:
           clean: false
       - run: bash docker/scripts/run-deployment-lane.sh differential
       - if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: community-differential-results-${{ github.run_id }}
           path: |
