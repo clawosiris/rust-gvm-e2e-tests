@@ -637,8 +637,9 @@ def rationale_for(name: str, disposition: str) -> str:
     if name in {"export_scan_report", "get_report_exports", "download_report_export"}:
         return (
             "Help-gated asynchronous scan-report export lifecycle coverage; creation, "
-            "bounded state polling, download consumption, and final reconciliation execute "
-            "together only when the cleanup-safe command set is advertised."
+            "bounded state polling, byte-identical repeatable downloads, retained-state "
+            "verification, and final reconciliation execute together only when the "
+            "cleanup-safe command set is advertised."
         )
     if name == "cancel_report_export":
         return (

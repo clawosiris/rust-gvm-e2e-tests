@@ -821,7 +821,7 @@
       "wire_command": "download_report_export",
       "disposition": "conditional-availability",
       "lane": "devel-scan",
-      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, download consumption, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
+      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, byte-identical repeatable downloads, retained-state verification, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
       "requires": [],
       "implemented": true
     },
@@ -866,7 +866,7 @@
       "wire_command": "export_scan_report",
       "disposition": "conditional-availability",
       "lane": "devel-scan",
-      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, download consumption, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
+      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, byte-identical repeatable downloads, retained-state verification, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
       "requires": [],
       "implemented": true
     },
@@ -1177,7 +1177,7 @@
       "wire_command": "get_report_exports",
       "disposition": "conditional-availability",
       "lane": "devel-scan",
-      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, download consumption, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
+      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, byte-identical repeatable downloads, retained-state verification, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
       "requires": [],
       "implemented": true
     },
@@ -2669,7 +2669,7 @@
       "wire_command": "download_report_export",
       "disposition": "conditional-availability",
       "lane": "devel-scan",
-      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, download consumption, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
+      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, byte-identical repeatable downloads, retained-state verification, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
       "requires": [],
       "implemented": true
     },
@@ -2714,7 +2714,7 @@
       "wire_command": "export_scan_report",
       "disposition": "conditional-availability",
       "lane": "devel-scan",
-      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, download consumption, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
+      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, byte-identical repeatable downloads, retained-state verification, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
       "requires": [],
       "implemented": true
     },
@@ -3395,7 +3395,7 @@
       "wire_command": "get_report_exports",
       "disposition": "conditional-availability",
       "lane": "devel-scan",
-      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, download consumption, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
+      "rationale": "Help-gated asynchronous scan-report export lifecycle coverage; creation, bounded state polling, byte-identical repeatable downloads, retained-state verification, and final reconciliation execute together only when the cleanup-safe command set is advertised.",
       "requires": [],
       "implemented": true
     },
