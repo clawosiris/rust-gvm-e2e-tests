@@ -65,7 +65,7 @@ use gvm_gmp::enums::{
     ScannerType,
 };
 use gvm_gmp::responses::permission::GetPermissionsResponse;
-use gvm_gmp::responses::report::ReportExportInfo;
+use gvm_gmp::responses::report::{DownloadedReportExport, ReportExportInfo};
 use gvm_gmp::responses::report_config::GetReportConfigsResponse;
 use gvm_gmp::responses::report_format::{GetReportFormatsResponse, ReportFormat};
 use gvm_gmp::responses::result::{GetResultsResponse, ScanResult};
@@ -447,7 +447,6 @@ struct CleanupTracker {
 struct TrackedReportExport {
     id: String,
     cancel_attempted: bool,
-    download_attempted: bool,
 }
 
 #[derive(Debug, Default)]
@@ -556,7 +555,6 @@ impl CleanupTracker {
             self.report_exports.push(TrackedReportExport {
                 id: id.to_string(),
                 cancel_attempted: false,
-                download_attempted: false,
             });
         }
     }
@@ -576,24 +574,6 @@ impl CleanupTracker {
             &format!("duplicate cancel_report_export blocked locally for {id}"),
         )?;
         tracked.cancel_attempted = true;
-        Ok(())
-    }
-
-    fn mark_report_export_download_attempted(&mut self, id: &EntityId) -> Result<(), AppError> {
-        let tracked = self
-            .report_exports
-            .iter_mut()
-            .find(|tracked| tracked.id == id.as_str())
-            .ok_or_else(|| {
-                AppError::Assertion(format!(
-                    "cannot mark download attempt for untracked report export {id}"
-                ))
-            })?;
-        ensure(
-            !tracked.download_attempted,
-            &format!("duplicate download_report_export blocked locally for {id}"),
-        )?;
-        tracked.download_attempted = true;
         Ok(())
     }
 
@@ -5181,51 +5161,14 @@ async fn poll_report_export_terminal(
     }
 }
 
-async fn prove_report_export_consumed(
-    client: &mut GmpClient<UnixSocketConnection>,
-    export_id: &EntityId,
-) -> Result<(), AppError> {
-    match client
-        .get_report_exports(GetReportExportsRequest::new(export_id.clone()))
-        .await
-    {
-        Err(GvmError::Server { status: 404, .. }) => {}
-        Ok(response) => {
-            return Err(AppError::Assertion(format!(
-                "downloaded report export {export_id} remained queryable with status {} and {} row(s)",
-                response.status,
-                response.items.len()
-            )));
-        }
-        Err(error) => return Err(error.into()),
-    }
-    log_pass(
-        "report export consumption",
-        &format!("get_report_exports returned exact 404 absence for {export_id}"),
-    );
-    Ok(())
-}
-
-async fn download_completed_report_export(
-    client: &mut GmpClient<UnixSocketConnection>,
-    tracker: &mut CleanupTracker,
+fn validate_downloaded_report_export(
+    export: &DownloadedReportExport,
     export_id: &EntityId,
     report_id: &EntityId,
     report_format_id: &EntityId,
     expected_content_type: Option<&str>,
     expected_extension: Option<&str>,
-) -> Result<usize, AppError> {
-    tracker.mark_report_export_download_attempted(export_id)?;
-    let response = client
-        .download_report_export(DownloadReportExportRequest::new(export_id.clone()))
-        .await?;
-    assert_typed_status(
-        response.status,
-        &response.status_text,
-        200,
-        "download_report_export",
-    )?;
-    let export = response.report_export;
+) -> Result<(), AppError> {
     ensure(
         export.id == *export_id,
         "download changed report-export identity",
@@ -5272,9 +5215,86 @@ async fn download_completed_report_export(
             ),
         )?;
     }
-    let byte_count = export.bytes.len();
-    prove_report_export_consumed(client, export_id).await?;
-    tracker.forget_report_export(export_id);
+    Ok(())
+}
+
+async fn download_completed_report_export_twice(
+    client: &mut GmpClient<UnixSocketConnection>,
+    export_id: &EntityId,
+    report_id: &EntityId,
+    report_format_id: &EntityId,
+    expected_content_type: Option<&str>,
+    expected_extension: Option<&str>,
+) -> Result<usize, AppError> {
+    let first = client
+        .download_report_export(DownloadReportExportRequest::new(export_id.clone()))
+        .await?;
+    assert_typed_status(
+        first.status,
+        &first.status_text,
+        200,
+        "first download_report_export",
+    )?;
+    validate_downloaded_report_export(
+        &first.report_export,
+        export_id,
+        report_id,
+        report_format_id,
+        expected_content_type,
+        expected_extension,
+    )?;
+
+    let second = client
+        .download_report_export(DownloadReportExportRequest::new(export_id.clone()))
+        .await?;
+    assert_typed_status(
+        second.status,
+        &second.status_text,
+        200,
+        "second download_report_export",
+    )?;
+    validate_downloaded_report_export(
+        &second.report_export,
+        export_id,
+        report_id,
+        report_format_id,
+        expected_content_type,
+        expected_extension,
+    )?;
+    ensure(
+        first.report_export == second.report_export,
+        &format!(
+            "repeated downloads of report export {export_id} returned different bytes or metadata"
+        ),
+    )?;
+
+    let retained = get_report_export_once(client, export_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::Assertion(format!(
+                "report export {export_id} disappeared after successful repeated downloads"
+            ))
+        })?;
+    validate_report_export_state(
+        &retained,
+        export_id,
+        Some(report_id),
+        Some(report_format_id),
+    )?;
+    ensure(
+        retained.status == "done" && retained.progress == "completed",
+        &format!(
+            "retained report export {export_id} changed to {}:{} after repeated downloads",
+            retained.status, retained.progress
+        ),
+    )?;
+    let byte_count = first.report_export.bytes.len();
+    log_pass(
+        "repeatable report export download",
+        &format!(
+            "downloaded {export_id} twice with identical {byte_count}-byte content and retained done:completed state"
+        ),
+    );
     Ok(byte_count)
 }
 
@@ -5354,40 +5374,9 @@ async fn reconcile_tracked_report_exports(
         }
 
         if export.status == "done" {
-            if tracked_export.download_attempted {
-                log_line(&format!(
-                    "report export {export_id} is done after an ambiguous prior download; not replaying the consuming mutation"
-                ));
-            } else {
-                tracker.mark_report_export_download_attempted(&export_id)?;
-                match client
-                    .download_report_export(DownloadReportExportRequest::new(export_id.clone()))
-                    .await
-                {
-                    Ok(response) => {
-                        assert_typed_status(
-                            response.status,
-                            &response.status_text,
-                            200,
-                            "cleanup download_report_export",
-                        )?;
-                        ensure(
-                            !response.report_export.bytes.is_empty(),
-                            &format!("cleanup download for report export {export_id} was empty"),
-                        )?;
-                        prove_report_export_consumed(client, &export_id).await?;
-                    }
-                    Err(error) => {
-                        let reconciled = get_report_export_once(client, &export_id).await?;
-                        log_line(&format!(
-                            "ambiguous cleanup download for report export {export_id}: {error}; post-read state={}",
-                            reconciled
-                                .as_ref()
-                                .map_or("absent".to_string(), |value| value.status.clone())
-                        ));
-                    }
-                }
-            }
+            log_line(&format!(
+                "report export {export_id} is done and retained until parent-report cleanup"
+            ));
         }
         ensure(
             report_export_status_is_terminal(&export.status),
@@ -5569,9 +5558,8 @@ async fn run_async_report_export_lifecycle(
             terminal.status, terminal.progress, terminal.error_message
         ),
     )?;
-    let bytes = download_completed_report_export(
+    let bytes = download_completed_report_export_twice(
         client,
-        tracker,
         &export_id,
         report_id,
         report_format_id,
@@ -5582,7 +5570,7 @@ async fn run_async_report_export_lifecycle(
     log_pass(
         "scan report asynchronous export lifecycle",
         &format!(
-            "created {export_id}, observed exact terminal done/completed, downloaded {bytes} bytes, and proved server-side consumption"
+            "created {export_id}, observed exact terminal done/completed, downloaded identical {bytes}-byte content twice, and proved server-side retention"
         ),
     );
     record_helper_executions(
@@ -5591,7 +5579,7 @@ async fn run_async_report_export_lifecycle(
             "get_report_exports",
             "download_report_export",
         ],
-        "help-gated asynchronous scan export completed, downloaded, and reconciled",
+        "help-gated asynchronous scan export completed, downloaded repeatably, and reconciled",
     )?;
 
     if !advertised_commands.contains("cancel_report_export") {
@@ -5673,9 +5661,8 @@ async fn run_async_report_export_lifecycle(
             );
         }
         "done" => {
-            let bytes = download_completed_report_export(
+            let bytes = download_completed_report_export_twice(
                 client,
-                tracker,
                 &cancel_id,
                 report_id,
                 report_format_id,
@@ -5687,7 +5674,7 @@ async fn run_async_report_export_lifecycle(
                 "scan report export cancellation",
                 Outcome::ConditionalUnavailable,
                 &format!(
-                    "separate export {cancel_id} was already done/completed at the first get_report_exports observation; downloaded {bytes} bytes and proved consumption; no deterministic pending/running cancellation window existed"
+                    "separate export {cancel_id} was already done/completed at the first get_report_exports observation; downloaded identical {bytes}-byte content twice and proved retention; no deterministic pending/running cancellation window existed"
                 ),
             );
         }
@@ -10283,7 +10270,7 @@ mod tests {
     }
 
     #[test]
-    fn report_export_tracker_blocks_cancel_and_download_replay() {
+    fn report_export_tracker_blocks_cancel_replay() {
         let mut tracker = CleanupTracker::new(socket_test_config(Path::new(
             "/tmp/rust-gvm-e2e-report-export-test.sock",
         )));
@@ -10301,14 +10288,6 @@ mod tests {
             .expect_err("cancellation replay must be blocked")
             .to_string()
             .contains("duplicate cancel_report_export"));
-        tracker
-            .mark_report_export_download_attempted(&export_id)
-            .expect("first download attempt is owned");
-        assert!(tracker
-            .mark_report_export_download_attempted(&export_id)
-            .expect_err("download replay must be blocked")
-            .to_string()
-            .contains("duplicate download_report_export"));
     }
 
     #[test]

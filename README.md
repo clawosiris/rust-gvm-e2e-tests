@@ -111,9 +111,10 @@ only selects that namespace (plus the historical fixed names from issue #7).
 Deletion is dependency ordered: report exports before tickets/reports/tasks,
 then targets/configs/scanners, access/report resources, and supporting
 entities. Asynchronous report exports are reconciled by exact ID and linked
-report before their parents: active work is canceled and polled, completed
-work is downloaded once and proved consumed, and ambiguous mutations are read
-back without blind replay. Final cleanup authenticates independently, accepts
+report before their parents: active work is canceled and polled, while
+completed work remains available for repeatable downloads until parent-report
+or retention cleanup. Ambiguous cancellation mutations are read back without
+blind replay. Final cleanup authenticates independently, accepts
 only explicit success/already-absent statuses, and also runs during unwind.
 
 ## Dynamic capability boundary

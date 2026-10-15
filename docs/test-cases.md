@@ -79,17 +79,19 @@ When authenticated help advertises the complete cleanup-safe command set, the
 lane creates an asynchronous scan-report export and owns its returned ID
 before checking any later assertion. Bounded `get_report_exports` polling
 records every exact status/progress transition and requires terminal
-`done`/`completed`. The lane downloads the file, checks its nonempty decoded
-bytes, exact byte count, report/format relationships, type, content type, and
-extension, then requires an exact typed 404 from `get_report_exports` to prove
-gvmd consumed and removed the export after the response.
+`done`/`completed`. The lane downloads the file twice through the same
+authenticated session, checks each response's nonempty decoded bytes, exact
+byte count, report/format relationships, type, content type, and extension,
+and requires byte-identical content and metadata. A following
+`get_report_exports` read must still return the export as `done`/`completed`,
+proving gvmd retained it for further downloads.
 
 A second export uses a distinct option set for cancellation qualification. The
 lane sends `cancel_report_export` only after it observes that export in
 `pending` or `running`, then polls through any `cancel_requested` transition to
 `canceled`. If the worker reaches a terminal state before the first read, the
-lane consumes a completed file when applicable and emits the exact observed
-state as `conditional-unavailable`; it never claims cancellation passed
+lane downloads a completed file twice when applicable and emits the exact
+observed state as `conditional-unavailable`; it never claims cancellation passed
 without sending it. `E2E_REPORT_EXPORT_TIMEOUT_SECS` (default 300) and
 `E2E_REPORT_EXPORT_POLL_INTERVAL_SECS` (default 1) bound both paths.
 `E2E_SOCKET_OPERATION_TIMEOUT_SECS` (default 300) separately bounds each
@@ -97,11 +99,11 @@ Unix-socket connect, write, and response read so the initial export request can
 reach lifecycle polling on providers where export creation exceeds one minute.
 
 The tracker reconciles report exports before reports and never blindly replays
-an ambiguous cancel or download. Cleanup discovers exports linked to every
-tracked report, cancels or waits for active work, consumes an unattempted
-completed artifact, and finally proves no linked export remains active before
-report/task deletion. Preflight applies the same ordering to stale namespaced
-tasks.
+an ambiguous cancellation. Cleanup discovers exports linked to every tracked
+report, cancels or waits for active work, permits completed artifacts to remain
+until parent-report or retention cleanup, and finally proves no linked export
+remains active before report/task deletion. Preflight applies the same ordering
+to stale namespaced tasks.
 
 The harness returns before creating an export for two exact, immutable gvmd
 provenances with upstream defects: the stable 26.40.2 create-response hang
@@ -112,9 +114,9 @@ reaches `done:completed` but closes the connection during destructive
 download. Each disposition requires the exact version, source revision, image
 digest, and source-specific classification, records `known-upstream-bug`, and
 sends no export mutation. A near miss must execute the complete lifecycle.
-These quarantines are neither passes nor acceptance evidence for
-`greenbone-hive/rust-gvm#715`; that issue remains open until an unquarantined
-immutable gvmd image passes create, observe, download, and consumption cleanup.
+These quarantines are neither passes nor current-contract evidence. A near miss
+or repaired gvmd provenance must pass create, observe, byte-identical repeated
+downloads, retained-state verification, and retention-aware cleanup.
 
 Audit and delta variants remain inventory-visible and help-gated. Community
 Compose explicitly declares `audit_report`, `audit_report_pair`, and
