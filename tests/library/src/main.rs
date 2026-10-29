@@ -419,6 +419,7 @@ struct CleanupTracker {
     report_export_reconciliation_required: bool,
     target_ids: Vec<String>,
     report_ids: Vec<String>,
+    report_config_ids: Vec<String>,
     task_ids: Vec<String>,
     config_ids: Vec<String>,
     scanner_ids: Vec<String>,
@@ -475,6 +476,7 @@ impl CleanupTracker {
             report_export_reconciliation_required: false,
             target_ids: Vec::new(),
             report_ids: Vec::new(),
+            report_config_ids: Vec::new(),
             task_ids: Vec::new(),
             config_ids: Vec::new(),
             scanner_ids: Vec::new(),
@@ -504,6 +506,7 @@ impl CleanupTracker {
         self.report_exports.is_empty()
             && !self.report_export_reconciliation_required
             && self.report_ids.is_empty()
+            && self.report_config_ids.is_empty()
             && self.task_ids.is_empty()
             && self.target_ids.is_empty()
             && self.config_ids.is_empty()
@@ -539,6 +542,16 @@ impl CleanupTracker {
     fn track_report(&mut self, id: &EntityId) {
         if id.as_str() != "0" && !self.report_ids.iter().any(|value| value == id.as_str()) {
             self.report_ids.push(id.to_string());
+        }
+    }
+
+    fn track_report_config(&mut self, id: &EntityId) {
+        if !self
+            .report_config_ids
+            .iter()
+            .any(|value| value == id.as_str())
+        {
+            self.report_config_ids.push(id.to_string());
         }
     }
 
@@ -701,6 +714,19 @@ impl CleanupTracker {
             };
             log_cleanup_result("delete_report", &report_id, Some(status))?;
             self.report_ids.pop();
+        }
+
+        while let Some(report_config_id) = self.report_config_ids.last().cloned() {
+            let entity_id = parse_entity_id(&report_config_id)?;
+            let mut request = DeleteReportConfigRequest::new(entity_id);
+            request.ultimate = Some(true);
+            let status = match client.delete_report_config(request).await {
+                Ok(response) => response.status,
+                Err(GvmError::Server { status: 404, .. }) => 404,
+                Err(error) => return Err(error.into()),
+            };
+            log_cleanup_result("delete_report_config", &report_config_id, Some(status))?;
+            self.report_config_ids.pop();
         }
 
         while let Some(task_id) = self.task_ids.last().cloned() {
@@ -915,6 +941,7 @@ impl Drop for CleanupTracker {
         let report_exports = self.report_exports.clone();
         let report_export_reconciliation_required = self.report_export_reconciliation_required;
         let report_ids = self.report_ids.clone();
+        let report_config_ids = self.report_config_ids.clone();
         let task_ids = self.task_ids.clone();
         let target_ids = self.target_ids.clone();
         let config_ids = self.config_ids.clone();
@@ -944,6 +971,7 @@ impl Drop for CleanupTracker {
                 report_exports,
                 report_export_reconciliation_required,
                 report_ids,
+                report_config_ids,
                 task_ids,
                 target_ids,
                 config_ids,
@@ -1251,6 +1279,24 @@ async fn cleanup_previous_runs(config: &EnvConfig) -> Result<(), AppError> {
         |item| &item.meta,
         |id| DeleteUserRequest::new(id.clone())
     );
+    if current_lane().as_deref() == Some("devel-isolated")
+        && report_config_version_policy_from_env()? == ReportConfigVersionPolicy::Fixed
+    {
+        cleanup_named_resources!(
+            GetReportConfigsRequest {
+                filter_string: Some("rows=-1".to_string()),
+                ..Default::default()
+            },
+            "preflight get_report_configs",
+            "preflight delete_report_config",
+            |item| &item.meta,
+            |id| {
+                let mut request = DeleteReportConfigRequest::new(id.clone());
+                request.ultimate = Some(true);
+                request
+            }
+        );
+    }
     cleanup_named_resources!(
         GetReportFormatsRequest::default(),
         "preflight get_report_formats",
@@ -1420,6 +1466,7 @@ fn runtime_helper_path(name: &str) -> bool {
         name,
         "authenticate"
             | "clone_config"
+            | "clone_report_config"
             | "clone_report_format"
             | "clone_scanner"
             | "create_alert"
@@ -1434,6 +1481,7 @@ fn runtime_helper_path(name: &str) -> bool {
             | "create_permission"
             | "create_port_list"
             | "create_port_range"
+            | "create_report_config"
             | "create_role"
             | "create_scan_config"
             | "create_schedule"
@@ -1447,6 +1495,7 @@ fn runtime_helper_path(name: &str) -> bool {
             | "delete_group"
             | "delete_permission"
             | "delete_port_range"
+            | "delete_report_config"
             | "delete_role"
             | "delete_scanner"
             | "delete_target"
@@ -1540,6 +1589,7 @@ fn runtime_helper_path(name: &str) -> bool {
             | "modify_policy_set_comment"
             | "modify_policy_set_name"
             | "modify_port_list"
+            | "modify_report_config"
             | "modify_report_format"
             | "modify_role"
             | "modify_scan_config"
@@ -1596,10 +1646,109 @@ fn runtime_command_path(name: &str) -> bool {
             .any(|entry| entry.wire_command == name && runtime_helper_path(entry.name))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReportConfigVersionPolicy {
+    HistoricalQuarantine,
+    Fixed,
+    Unclassified,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReportConfigFormatCapability {
+    version: String,
+    policy: ReportConfigVersionPolicy,
+    configurable_format_id: Option<EntityId>,
+    non_configurable_format_id: Option<EntityId>,
+    existing_report_config_id: Option<EntityId>,
+    active_format_count: usize,
+}
+
+impl ReportConfigFormatCapability {
+    fn evidence(&self) -> String {
+        format!(
+            "gvmd {}; policy={:?}; {} active report format(s); configurable format {}; non-configurable format {}; existing report config {}",
+            self.version,
+            self.policy,
+            self.active_format_count,
+            self.configurable_format_id
+                .as_ref()
+                .map_or("unavailable", EntityId::as_str),
+            self.non_configurable_format_id
+                .as_ref()
+                .map_or("unavailable", EntityId::as_str),
+            self.existing_report_config_id
+                .as_ref()
+                .map_or("unavailable", EntityId::as_str),
+        )
+    }
+}
+
+fn report_config_plan_eligibility(
+    kind: PlanEntryKind,
+    name: &str,
+    capability: &ReportConfigFormatCapability,
+) -> Option<(bool, String)> {
+    let is_create = (kind == PlanEntryKind::Command && name == "create_report_config")
+        || (kind == PlanEntryKind::Helper && name == "create_report_config");
+    let requires_configurable = matches!(
+        (kind, name),
+        (
+            PlanEntryKind::Command,
+            "delete_report_config" | "modify_report_config"
+        ) | (
+            PlanEntryKind::Helper,
+            "clone_report_config" | "delete_report_config" | "modify_report_config"
+        )
+    );
+    let is_singular_read = kind == PlanEntryKind::Helper && name == "get_report_config";
+    if !is_create && !requires_configurable && !is_singular_read {
+        return None;
+    }
+
+    let eligible = match capability.policy {
+        ReportConfigVersionPolicy::HistoricalQuarantine
+        | ReportConfigVersionPolicy::Unclassified
+            if is_singular_read =>
+        {
+            capability.existing_report_config_id.is_some()
+        }
+        ReportConfigVersionPolicy::HistoricalQuarantine
+        | ReportConfigVersionPolicy::Unclassified => false,
+        ReportConfigVersionPolicy::Fixed if is_singular_read => {
+            capability.existing_report_config_id.is_some()
+                || capability.configurable_format_id.is_some()
+        }
+        ReportConfigVersionPolicy::Fixed if is_create => {
+            capability.configurable_format_id.is_some()
+                || capability.non_configurable_format_id.is_some()
+        }
+        ReportConfigVersionPolicy::Fixed => capability.configurable_format_id.is_some(),
+    };
+    let policy = match capability.policy {
+        ReportConfigVersionPolicy::HistoricalQuarantine => {
+            "historical no-mutation quarantine for gvmd <=26.40.2 (greenbone/gvmd#3165)"
+        }
+        ReportConfigVersionPolicy::Fixed => {
+            "gvmd >=26.41.0 executes fixed-regression and available positive lifecycle branches"
+        }
+        ReportConfigVersionPolicy::Unclassified => {
+            "gvmd 26.40.3 through 26.40.x is outside both the historical reproduction and fixed release contract; no mutation is sent"
+        }
+    };
+    Some((
+        eligible,
+        format!(
+            "{policy}; {}; selected surface {kind:?}:{name}",
+            capability.evidence()
+        ),
+    ))
+}
+
 fn plan_inputs(
     catalog: &FeatureCatalog,
     version: GmpVersion,
     report_export_quarantine_evidence: Option<&str>,
+    report_config_capability: Option<&ReportConfigFormatCapability>,
 ) -> Vec<PlanInput> {
     let command_inputs = COMMAND_COVERAGE.iter().map(|entry| {
         let (mut semantic_eligible, mut semantic_evidence) = semantic_eligibility(
@@ -1613,6 +1762,12 @@ fn plan_inputs(
         {
             semantic_eligible = false;
             semantic_evidence = evidence.to_string();
+        }
+        if let Some((eligible, evidence)) = report_config_capability.and_then(|capability| {
+            report_config_plan_eligibility(PlanEntryKind::Command, entry.name, capability)
+        }) {
+            semantic_eligible = eligible;
+            semantic_evidence = evidence;
         }
         PlanInput {
             kind: PlanEntryKind::Command,
@@ -1638,6 +1793,12 @@ fn plan_inputs(
         {
             semantic_eligible = false;
             semantic_evidence = evidence.to_string();
+        }
+        if let Some((eligible, evidence)) = report_config_capability.and_then(|capability| {
+            report_config_plan_eligibility(PlanEntryKind::Helper, entry.name, capability)
+        }) {
+            semantic_eligible = eligible;
+            semantic_evidence = evidence;
         }
         PlanInput {
             kind: PlanEntryKind::Helper,
@@ -1861,6 +2022,35 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
         .iter()
         .map(|(name, evidence)| (name.clone(), provider_probe(evidence)))
         .collect::<BTreeMap<_, _>>();
+    let report_config_capability = if lane == "devel-isolated" {
+        let capability = discover_report_config_format_capability(&mut client).await?;
+        let state = match capability.policy {
+            ReportConfigVersionPolicy::Fixed
+                if capability.configurable_format_id.is_some()
+                    || capability.non_configurable_format_id.is_some() =>
+            {
+                ProbeState::Ready
+            }
+            ReportConfigVersionPolicy::Fixed | ReportConfigVersionPolicy::HistoricalQuarantine => {
+                ProbeState::Unavailable
+            }
+            ReportConfigVersionPolicy::Unclassified => ProbeState::Unknown,
+        };
+        provider_probes.insert(
+            "report-config-format-qualification".to_string(),
+            ProbeResult {
+                state,
+                evidence: Evidence {
+                    source: "safe-gmp-report-format-probe".to_string(),
+                    value: format!("{state:?}").to_ascii_lowercase(),
+                    detail: capability.evidence(),
+                },
+            },
+        );
+        Some(capability)
+    } else {
+        None
+    };
     let epss_deployment_evidence = if lane == "devel-scan" {
         provider_probes.insert(
             "gvmd-epss-result-filter-sort-policy".to_string(),
@@ -1870,6 +2060,14 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
     } else {
         None
     };
+    let observed_gvmd_version = report_config_capability
+        .as_ref()
+        .map(|capability| capability.version.clone())
+        .or_else(|| {
+            epss_deployment_evidence
+                .as_ref()
+                .map(|evidence| evidence.gvmd_version.clone())
+        });
     let fixtures = descriptor
         .fixtures
         .iter()
@@ -1880,9 +2078,7 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
             schema_version: DEPLOYMENT_CAPABILITIES_SCHEMA_VERSION,
             deployment_id,
             gmp_version: Some(version_response.version.clone()),
-            gvmd_version: epss_deployment_evidence
-                .as_ref()
-                .map(|evidence| evidence.gvmd_version.clone()),
+            gvmd_version: observed_gvmd_version.clone(),
             gvmd_source_revision: epss_deployment_evidence
                 .as_ref()
                 .and_then(|evidence| evidence.gvmd_source_revision.clone()),
@@ -2004,9 +2200,7 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
         schema_version: DEPLOYMENT_CAPABILITIES_SCHEMA_VERSION,
         deployment_id,
         gmp_version: Some(version_response.version.clone()),
-        gvmd_version: epss_deployment_evidence
-            .as_ref()
-            .map(|evidence| evidence.gvmd_version.clone()),
+        gvmd_version: observed_gvmd_version,
         gvmd_source_revision: epss_deployment_evidence
             .as_ref()
             .and_then(|evidence| evidence.gvmd_source_revision.clone()),
@@ -2030,6 +2224,7 @@ async fn discover_deployment(config: &EnvConfig, lane: &str) -> Result<TestPlan,
             epss_deployment_evidence
                 .as_ref()
                 .and_then(report_export_quarantine_evidence),
+            report_config_capability.as_ref(),
         ),
     ) {
         Ok(plan) => plan,
@@ -3644,6 +3839,525 @@ fn select_scan_scanner(
         })
 }
 
+fn report_config_version_policy(version: &str) -> Result<ReportConfigVersionPolicy, AppError> {
+    let triplet = parse_gvmd_version_triplet(version).ok_or_else(|| {
+        AppError::Assertion(format!(
+            "report-config qualification requires an exact numeric gvmd version, got {version}"
+        ))
+    })?;
+    Ok(if triplet <= (26, 40, 2) {
+        ReportConfigVersionPolicy::HistoricalQuarantine
+    } else if triplet >= (26, 41, 0) {
+        ReportConfigVersionPolicy::Fixed
+    } else {
+        ReportConfigVersionPolicy::Unclassified
+    })
+}
+
+fn report_config_version_policy_from_env() -> Result<ReportConfigVersionPolicy, AppError> {
+    let version = env::var("E2E_GVMD_VERSION")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            AppError::Assertion(
+                "E2E_GVMD_VERSION is required for report-config mutation policy".to_string(),
+            )
+        })?;
+    report_config_version_policy(&version)
+}
+
+fn report_format_parameter_presence(xml: &str) -> Result<BTreeMap<String, bool>, AppError> {
+    let mut reader = Reader::from_str(xml);
+    let mut depth = 0_usize;
+    let mut current: Option<(String, usize, bool)> = None;
+    let mut formats = BTreeMap::new();
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref event) => {
+                depth += 1;
+                if event.name().as_ref() == "report_format" {
+                    let id = event
+                        .attributes()
+                        .flatten()
+                        .find(|attribute| attribute.key.as_ref() == "id")
+                        .map(|attribute| {
+                            attribute
+                                .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                                .map(|value| value.into_owned())
+                        })
+                        .transpose()?
+                        .ok_or_else(|| {
+                            AppError::Assertion(
+                                "report-format capability response omitted an id".to_string(),
+                            )
+                        })?;
+                    current = Some((id, depth, false));
+                } else if event.name().as_ref() == "param" {
+                    if let Some((_, format_depth, has_parameter)) = current.as_mut() {
+                        if depth == *format_depth + 1 {
+                            *has_parameter = true;
+                        }
+                    }
+                }
+            }
+            Event::Empty(ref event) if event.name().as_ref() == "param" => {
+                if let Some((_, format_depth, has_parameter)) = current.as_mut() {
+                    if depth == *format_depth {
+                        *has_parameter = true;
+                    }
+                }
+            }
+            Event::End(ref event) => {
+                if event.name().as_ref() == "report_format" {
+                    if let Some((id, format_depth, has_parameter)) = current.take() {
+                        ensure(
+                            depth == format_depth,
+                            "report-format capability parser lost element scope",
+                        )?;
+                        formats.insert(id, has_parameter);
+                    }
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(formats)
+}
+
+async fn discover_report_config_format_capability(
+    client: &mut GmpClient<UnixSocketConnection>,
+) -> Result<ReportConfigFormatCapability, AppError> {
+    let version = env::var("E2E_GVMD_VERSION")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            AppError::Assertion(
+                "E2E_GVMD_VERSION is required for report-config qualification".to_string(),
+            )
+        })?;
+    let policy = report_config_version_policy(&version)?;
+    let response = client
+        .send(
+            XmlCommand::new("get_report_formats")
+                .attribute("details", "1")
+                .attribute("params", "1")
+                .attribute("filter", "rows=-1"),
+        )
+        .await?;
+    assert_status(
+        &response,
+        200,
+        "get_report_formats report-config capability probe",
+    )?;
+    let parameter_presence = report_format_parameter_presence(response.as_str()?)?;
+    let typed = GetReportFormatsResponse::from_response(&response)?;
+    let mut active = typed
+        .items
+        .into_iter()
+        .filter(|format| format.active)
+        .collect::<Vec<_>>();
+    active.sort_by(|left, right| left.meta.id.as_str().cmp(right.meta.id.as_str()));
+    for format in &active {
+        ensure(
+            parameter_presence.contains_key(format.meta.id.as_str()),
+            &format!(
+                "parameter-aware report-format probe omitted active format {}",
+                format.meta.id
+            ),
+        )?;
+    }
+    let configurable_format_id = active
+        .iter()
+        .find(|format| parameter_presence.get(format.meta.id.as_str()) == Some(&true))
+        .map(|format| format.meta.id.clone());
+    let non_configurable_format_id = active
+        .iter()
+        .find(|format| parameter_presence.get(format.meta.id.as_str()) == Some(&false))
+        .map(|format| format.meta.id.clone());
+
+    let report_configs = client
+        .get_report_configs(GetReportConfigsRequest {
+            filter_string: Some("rows=-1".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    assert_typed_status(
+        report_configs.status,
+        &report_configs.status_text,
+        200,
+        "get_report_configs report-config capability probe",
+    )?;
+    let existing_report_config_id = select_report_config_capability_id(&report_configs, policy);
+    Ok(ReportConfigFormatCapability {
+        version,
+        policy,
+        configurable_format_id,
+        non_configurable_format_id,
+        existing_report_config_id,
+        active_format_count: active.len(),
+    })
+}
+
+async fn exact_name_report_config_ids(
+    client: &mut GmpClient<UnixSocketConnection>,
+    name: &str,
+) -> Result<Vec<EntityId>, AppError> {
+    let response = client
+        .get_report_configs(GetReportConfigsRequest {
+            filter_string: Some("rows=-1".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    assert_typed_status(
+        response.status,
+        &response.status_text,
+        200,
+        "exact-name get_report_configs reconciliation",
+    )?;
+    Ok(response
+        .items
+        .into_iter()
+        .filter(|item| item.meta.name == name)
+        .map(|item| item.meta.id)
+        .collect())
+}
+
+async fn run_non_configurable_report_config_regression(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    tracker: &mut CleanupTracker,
+    report_format_id: EntityId,
+) -> Result<(), AppError> {
+    let name = config.name("report-config-non-configurable-regression");
+    let result = client
+        .create_report_config(CreateReportConfigRequest::new(
+            name.clone(),
+            report_format_id.clone(),
+        ))
+        .await;
+    match result {
+        Err(GvmError::Server { status, .. }) => {
+            let health = client.get_version(GetVersionRequest::new()).await?;
+            assert_typed_status(
+                health.status,
+                &health.status_text,
+                200,
+                "get_version after rejected non-configurable report-config create",
+            )?;
+            let persisted = exact_name_report_config_ids(client, &name).await?;
+            ensure(
+                persisted.is_empty(),
+                &format!(
+                    "rejected report-config create persisted exact generated name {name} as IDs {persisted:?}"
+                ),
+            )?;
+            ensure(
+                status == 400,
+                &format!(
+                    "non-configurable report-config regression expected GMP status 400 but received {status}; the same authenticated session remained healthy and exact-name reconciliation found no persisted object"
+                ),
+            )?;
+            runtime::observe(
+                "isolated report config non-configurable regression",
+                Outcome::Pass,
+                &format!(
+                    "gvmd rejected zero-override create for active non-configurable report format {report_format_id} with typed GMP status {status}; the same authenticated session returned get_version {}; exact generated name {name} reconciled to zero objects",
+                    health.version
+                ),
+            );
+            record_helper_execution(
+                "create_report_config",
+                "typed GMP rejection, same-session get_version, and exact-name non-persistence proved the fixed regression",
+            )?;
+            Ok(())
+        }
+        Ok(created) => {
+            tracker.track_report_config(&created.id);
+            let persisted = exact_name_report_config_ids(client, &name).await?;
+            Err(AppError::Assertion(format!(
+                "zero-override create against non-configurable report format {report_format_id} unexpectedly returned status {} and created {}; cleanup ownership was recorded immediately and exact generated-name reconciliation found IDs {persisted:?}",
+                created.status, created.id,
+            )))
+        }
+        Err(error) => {
+            let diagnostic = error.to_string();
+            *client = reconnect_authenticated(
+                config,
+                Duration::from_secs(config.task_progress_timeout_secs),
+            )
+            .await?;
+            let persisted = exact_name_report_config_ids(client, &name).await?;
+            for id in &persisted {
+                tracker.track_report_config(id);
+            }
+            Err(AppError::Assertion(format!(
+                "non-configurable report-config regression required a typed GMP error but received {diagnostic}; authenticated exact-name reconciliation found {} object(s), all cleanup-tracked",
+                persisted.len()
+            )))
+        }
+    }
+}
+
+async fn run_positive_report_config_lifecycle(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    tracker: &mut CleanupTracker,
+    report_format_id: EntityId,
+) -> Result<(), AppError> {
+    let create_name = config.name("report-config");
+    let final_name = config.name("report-config-modified");
+    let clone_name = config.name("report-config-clone");
+    let mut create = CreateReportConfigRequest::new(create_name, report_format_id.clone());
+    create.comment = Some(config.name("report-config-comment"));
+    let created = client.create_report_config(create).await?;
+    tracker.track_report_config(&created.id);
+    assert_typed_status(
+        created.status,
+        &created.status_text,
+        201,
+        "create_report_config",
+    )?;
+
+    let mut clone = CloneReportConfigRequest::new(created.id.clone());
+    clone.name = Some(clone_name.clone());
+    let cloned = client.clone_report_config(clone).await?;
+    tracker.track_report_config(&cloned.id);
+    assert_typed_status(
+        cloned.status,
+        &cloned.status_text,
+        201,
+        "clone_report_config",
+    )?;
+
+    let mut modify = ModifyReportConfigRequest::new(created.id.clone());
+    modify.name = Some(final_name.clone());
+    modify.comment = Some(config.name("report-config-comment-modified"));
+    let modified = client.modify_report_config(modify).await?;
+    assert_typed_status(
+        modified.status,
+        &modified.status_text,
+        200,
+        "modify_report_config",
+    )?;
+
+    let mut singular_request = GetReportConfigRequest::new(created.id.clone());
+    singular_request.details = Some(true);
+    let singular = client.get_report_config(singular_request).await?;
+    assert_typed_status(
+        singular.status,
+        &singular.status_text,
+        200,
+        "get_report_config after modify",
+    )?;
+    ensure(
+        singular.items.len() == 1
+            && singular.items[0].meta.id == created.id
+            && singular.items[0].meta.name == final_name,
+        "modified report config did not reconcile by exact ID and generated name",
+    )?;
+    let original_ids = exact_name_report_config_ids(client, &final_name).await?;
+    let clone_ids = exact_name_report_config_ids(client, &clone_name).await?;
+    ensure(
+        original_ids == [created.id.clone()] && clone_ids == [cloned.id.clone()],
+        "report-config create/clone/modify did not reconcile to exactly one expected ID per generated name",
+    )?;
+
+    for id in [cloned.id.clone(), created.id.clone()] {
+        let mut delete = DeleteReportConfigRequest::new(id.clone());
+        delete.ultimate = Some(true);
+        let deleted = client.delete_report_config(delete).await?;
+        assert_typed_status(
+            deleted.status,
+            &deleted.status_text,
+            200,
+            "delete_report_config",
+        )?;
+        tracker
+            .report_config_ids
+            .retain(|tracked| tracked != id.as_str());
+    }
+    let remaining = client
+        .get_report_configs(GetReportConfigsRequest {
+            filter_string: Some("rows=-1".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    assert_typed_status(
+        remaining.status,
+        &remaining.status_text,
+        200,
+        "final report-config reconciliation",
+    )?;
+    let owned = remaining
+        .items
+        .iter()
+        .filter(|item| is_e2e_owned_value(&item.meta.name))
+        .map(|item| format!("{}:{}", item.meta.id, item.meta.name))
+        .collect::<Vec<_>>();
+    ensure(
+        owned.is_empty(),
+        &format!(
+            "E2E-owned report configs remained after lifecycle cleanup: {}",
+            owned.join(", ")
+        ),
+    )?;
+    log_pass(
+        "isolated report config lifecycle",
+        &format!(
+            "active configurable report format {report_format_id}; create/clone/modify/exact get+name reconciliation/delete; zero E2E-owned report configs remain"
+        ),
+    );
+    record_helper_executions(
+        &[
+            "clone_report_config",
+            "create_report_config",
+            "delete_report_config",
+            "get_report_config",
+            "modify_report_config",
+        ],
+        "cleanup-tracked report-config lifecycle and final exact-name reconciliation executed",
+    )?;
+    Ok(())
+}
+
+async fn run_report_config_qualification(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    tracker: &mut CleanupTracker,
+) -> Result<(), AppError> {
+    let listed = client
+        .get_report_configs(GetReportConfigsRequest {
+            filter_string: Some("rows=-1".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    assert_typed_status(
+        listed.status,
+        &listed.status_text,
+        200,
+        "get_report_configs",
+    )?;
+    log_pass(
+        "isolated report config list",
+        &format!(
+            "safe typed list read returned {} item(s)",
+            listed.items.len()
+        ),
+    );
+    if let Some(report_config_id) = select_deterministic_report_config_id(&listed) {
+        let mut request = GetReportConfigRequest::new(report_config_id.clone());
+        request.details = Some(true);
+        let singular = client.get_report_config(request).await?;
+        assert_typed_status(
+            singular.status,
+            &singular.status_text,
+            200,
+            "get_report_config",
+        )?;
+        ensure(
+            singular.items.len() == 1 && singular.items[0].meta.id == report_config_id,
+            "deterministically selected report config did not reconcile by exact ID",
+        )?;
+        record_helper_execution(
+            "get_report_config",
+            "deterministically selected existing report-config detail executed",
+        )?;
+    }
+    record_helper_execution("get_report_configs", "typed report-config list executed")?;
+
+    let capability = discover_report_config_format_capability(client).await?;
+    match capability.policy {
+        ReportConfigVersionPolicy::HistoricalQuarantine => {
+            runtime::observe(
+                "isolated report config historical quarantine",
+                Outcome::KnownUpstreamBug,
+                &format!(
+                    "greenbone/gvmd#3165 affected gvmd {}; mutation fixed by greenbone/gvmd#3170 in 26.41.0; no crash-triggering create_report_config request was sent; {}",
+                    capability.version,
+                    capability.evidence()
+                ),
+            );
+            return Ok(());
+        }
+        ReportConfigVersionPolicy::Unclassified => {
+            runtime::observe(
+                "isolated report config version qualification",
+                Outcome::ConditionalUnavailable,
+                &format!(
+                    "{} is newer than the exact <=26.40.2 historical quarantine but older than the 26.41.0 fixed release; no mutation was sent; {}",
+                    capability.version,
+                    capability.evidence()
+                ),
+            );
+            return Ok(());
+        }
+        ReportConfigVersionPolicy::Fixed => {}
+    }
+
+    if let Some(report_format_id) = capability.non_configurable_format_id.clone() {
+        run_non_configurable_report_config_regression(client, config, tracker, report_format_id)
+            .await?;
+    } else {
+        runtime::observe(
+            "isolated report config non-configurable regression",
+            Outcome::ConditionalUnavailable,
+            &format!(
+                "gvmd {} exposed no active non-configurable report format in the parameter-aware typed/raw report-format probe; no regression create was sent; {}",
+                capability.version,
+                capability.evidence()
+            ),
+        );
+    }
+
+    if let Some(report_format_id) = capability.configurable_format_id.clone() {
+        run_positive_report_config_lifecycle(client, config, tracker, report_format_id).await?;
+    } else {
+        runtime::observe(
+            "isolated report config positive lifecycle",
+            Outcome::ConditionalUnavailable,
+            &format!(
+                "gvmd {} exposed no active configurable report format in the parameter-aware typed/raw report-format probe; create/clone/modify/delete lifecycle was not available and is not reported as pass or known-upstream-bug; {}",
+                capability.version,
+                capability.evidence()
+            ),
+        );
+    }
+    let final_configs = client
+        .get_report_configs(GetReportConfigsRequest {
+            filter_string: Some("rows=-1".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    assert_typed_status(
+        final_configs.status,
+        &final_configs.status_text,
+        200,
+        "final report-config qualification reconciliation",
+    )?;
+    let owned = final_configs
+        .items
+        .iter()
+        .filter(|item| is_e2e_owned_value(&item.meta.name))
+        .map(|item| format!("{}:{}", item.meta.id, item.meta.name))
+        .collect::<Vec<_>>();
+    ensure(
+        owned.is_empty(),
+        &format!(
+            "report-config qualification left E2E-owned objects: {}",
+            owned.join(", ")
+        ),
+    )?;
+    runtime::observe(
+        "isolated report config final reconciliation",
+        Outcome::Pass,
+        "typed rows=-1 reconciliation proved zero E2E-owned report configs remain",
+    );
+    Ok(())
+}
+
 async fn run_isolated_suite(
     config: &EnvConfig,
     tracker: &mut CleanupTracker,
@@ -3657,54 +4371,7 @@ async fn run_isolated_suite(
         .authenticate(AuthenticateRequest::new(&config.username, &config.password))
         .await?;
 
-    let report_configs = client
-        .get_report_configs(GetReportConfigsRequest::default())
-        .await?;
-    assert_typed_status(
-        report_configs.status,
-        &report_configs.status_text,
-        200,
-        "get_report_configs",
-    )?;
-    log_pass(
-        "isolated report config list",
-        "safe typed list read; report-config mutations are recorded as greenbone/gvmd#3165 and are not executed",
-    );
-    match select_deterministic_report_config_id(&report_configs) {
-        Some(report_config_id) => {
-            let mut request = GetReportConfigRequest::new(report_config_id.clone());
-            request.details = Some(true);
-            let singular = client.get_report_config(request).await?;
-            assert_typed_status(
-                singular.status,
-                &singular.status_text,
-                200,
-                "get_report_config",
-            )?;
-            ensure(
-                singular.items.len() == 1 && singular.items[0].meta.id == report_config_id,
-                &format!(
-                    "typed get_report_config for {report_config_id} returned {} item(s) without the selected identity",
-                    singular.items.len()
-                ),
-            )?;
-            log_pass(
-                "isolated report config singular read",
-                &format!(
-                    "safe typed get_report_config for deterministically selected existing report config {report_config_id}; report-config mutations remain quarantined"
-                ),
-            );
-            record_helper_execution(
-                "get_report_config",
-                "deterministically selected report-config detail executed",
-            )?;
-        }
-        None => runtime::observe(
-            "isolated report config singular read",
-            Outcome::ConditionalUnavailable,
-            "typed get_report_configs returned no existing report configs; get_report_config was not invoked because creation is quarantined by greenbone/gvmd#3165",
-        ),
-    }
+    run_report_config_qualification(&mut client, config, tracker).await?;
 
     let predefined_roles = client
         .get_roles(GetRolesRequest {
@@ -5004,6 +5671,20 @@ fn select_deterministic_report_config_id(
     report_configs
         .items
         .iter()
+        .map(|item| item.meta.id.clone())
+        .min_by(|left, right| left.as_str().cmp(right.as_str()))
+}
+
+fn select_report_config_capability_id(
+    report_configs: &GetReportConfigsResponse,
+    policy: ReportConfigVersionPolicy,
+) -> Option<EntityId> {
+    report_configs
+        .items
+        .iter()
+        .filter(|item| {
+            policy != ReportConfigVersionPolicy::Fixed || !is_e2e_owned_value(&item.meta.name)
+        })
         .map(|item| item.meta.id.clone())
         .min_by(|left, right| left.as_str().cmp(right.as_str()))
 }
@@ -8710,6 +9391,10 @@ mod tests {
         r#"<delete_report_response status="404" status_text="Failed to find report"/>"#;
     const STOP_TASK_BAD_REQUEST_RESPONSE: &str =
         r#"<stop_task_response status="400" status_text="Internal error stopping task"/>"#;
+    const REPORT_CONFIG_REJECTED_RESPONSE: &str = r#"<create_report_config_response status="400" status_text="Report format is not configurable"/>"#;
+    const REPORT_CONFIG_UNEXPECTED_ERROR_RESPONSE: &str =
+        r#"<create_report_config_response status="500" status_text="Unexpected backend error"/>"#;
+    const EMPTY_REPORT_CONFIGS_RESPONSE: &str = r#"<get_report_configs_response status="200" status_text="OK"><report_config_count>0<filtered>0</filtered></report_config_count></get_report_configs_response>"#;
     const MODIFIED_PERMISSION_RESPONSE: &str = concat!(
         r#"<get_permissions_response status="200" status_text="OK">"#,
         r#"<permission id="permission-id"><name>get_tasks</name>"#,
@@ -9190,6 +9875,111 @@ mod tests {
                 assert_eq!(
                     server.await.expect("scripted server"),
                     ["get_version", "authenticate", "stop_task", "get_version"]
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
+    }
+
+    #[test]
+    fn non_configurable_report_config_rejection_keeps_session_healthy_and_persists_nothing() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("report-config-regression");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![vec![
+                        ("get_version", Some(VERSION_RESPONSE)),
+                        ("authenticate", Some(AUTH_RESPONSE)),
+                        (
+                            "create_report_config",
+                            Some(REPORT_CONFIG_REJECTED_RESPONSE),
+                        ),
+                        ("get_version", Some(VERSION_RESPONSE)),
+                        ("get_report_configs", Some(EMPTY_REPORT_CONFIGS_RESPONSE)),
+                    ]],
+                ));
+                let config = socket_test_config(&path);
+                let mut client = connect_and_authenticate(&config).await;
+                let mut tracker = CleanupTracker::new(config.clone());
+                tracker.armed = false;
+
+                run_non_configurable_report_config_regression(
+                    &mut client,
+                    &config,
+                    &mut tracker,
+                    EntityId::new("non-configurable-format").expect("valid format ID"),
+                )
+                .await
+                .expect("typed rejection is the qualified outcome");
+
+                assert!(tracker.report_config_ids.is_empty());
+                assert_eq!(
+                    server.await.expect("scripted server"),
+                    [
+                        "get_version",
+                        "authenticate",
+                        "create_report_config",
+                        "get_version",
+                        "get_report_configs",
+                    ]
+                );
+                std::fs::remove_file(&path).expect("remove scripted socket");
+            });
+    }
+
+    #[test]
+    fn non_configurable_report_config_regression_rejects_unexpected_server_status() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(async {
+                let path = socket_test_path("report-config-unexpected-status");
+                let listener = UnixListener::bind(&path).expect("bind scripted socket");
+                let server = tokio::spawn(serve_script(
+                    listener,
+                    vec![vec![
+                        ("get_version", Some(VERSION_RESPONSE)),
+                        ("authenticate", Some(AUTH_RESPONSE)),
+                        (
+                            "create_report_config",
+                            Some(REPORT_CONFIG_UNEXPECTED_ERROR_RESPONSE),
+                        ),
+                        ("get_version", Some(VERSION_RESPONSE)),
+                        ("get_report_configs", Some(EMPTY_REPORT_CONFIGS_RESPONSE)),
+                    ]],
+                ));
+                let config = socket_test_config(&path);
+                let mut client = connect_and_authenticate(&config).await;
+                let mut tracker = CleanupTracker::new(config.clone());
+                tracker.armed = false;
+
+                let error = run_non_configurable_report_config_regression(
+                    &mut client,
+                    &config,
+                    &mut tracker,
+                    EntityId::new("non-configurable-format").expect("valid format ID"),
+                )
+                .await
+                .expect_err("only the documented GMP 400 is a qualified rejection");
+
+                assert!(error
+                    .to_string()
+                    .contains("expected GMP status 400 but received 500"));
+                assert!(tracker.report_config_ids.is_empty());
+                assert_eq!(
+                    server.await.expect("scripted server"),
+                    [
+                        "get_version",
+                        "authenticate",
+                        "create_report_config",
+                        "get_version",
+                        "get_report_configs",
+                    ]
                 );
                 std::fs::remove_file(&path).expect("remove scripted socket");
             });
@@ -9925,13 +10715,13 @@ mod tests {
         let catalog: FeatureCatalog =
             serde_json::from_str(include_str!("../../../coverage/feature-catalog.json"))
                 .expect("feature catalog parses");
-        let normal = plan_inputs(&catalog, GmpVersion(22, 8), None);
+        let normal = plan_inputs(&catalog, GmpVersion(22, 8), None, None);
 
         for evidence in [
             STABLE_REPORT_EXPORT_HANG_EVIDENCE,
             SOURCE_REPORT_EXPORT_DOWNLOAD_CLOSE_EVIDENCE,
         ] {
-            let quarantined = plan_inputs(&catalog, GmpVersion(22, 8), Some(evidence));
+            let quarantined = plan_inputs(&catalog, GmpVersion(22, 8), Some(evidence), None);
             for kind in [PlanEntryKind::Command, PlanEntryKind::Helper] {
                 for name in [
                     "export_scan_report",
@@ -9994,6 +10784,111 @@ mod tests {
     }
 
     #[test]
+    fn report_config_version_policy_preserves_only_the_historical_boundary() {
+        assert_eq!(
+            report_config_version_policy("26.40.2").expect("historical version"),
+            ReportConfigVersionPolicy::HistoricalQuarantine
+        );
+        assert_eq!(
+            report_config_version_policy("26.40.3~dev1").expect("unclassified source build"),
+            ReportConfigVersionPolicy::Unclassified
+        );
+        assert_eq!(
+            report_config_version_policy("26.41.0").expect("first fixed release"),
+            ReportConfigVersionPolicy::Fixed
+        );
+        assert_eq!(
+            report_config_version_policy("26.43.0").expect("current stable"),
+            ReportConfigVersionPolicy::Fixed
+        );
+    }
+
+    #[test]
+    fn report_format_parameter_probe_is_scoped_and_deterministic() {
+        let formats = report_format_parameter_presence(
+            r#"<get_report_formats_response status="200">
+                <report_format id="format-z"><name>Z</name><wrapper><param><name>nested</name></param></wrapper></report_format>
+                <report_format id="format-a"><name>A</name><param><name>Label</name></param></report_format>
+                <report_format id="format-empty"><name>Empty</name><param/></report_format>
+            </get_report_formats_response>"#,
+        )
+        .expect("parameter-aware response parses");
+
+        assert_eq!(formats.get("format-z"), Some(&false));
+        assert_eq!(formats.get("format-a"), Some(&true));
+        assert_eq!(formats.get("format-empty"), Some(&true));
+    }
+
+    #[test]
+    fn report_config_plan_selects_only_runtime_available_fixed_surfaces() {
+        let fixed_non_configurable = ReportConfigFormatCapability {
+            version: "26.43.0".to_string(),
+            policy: ReportConfigVersionPolicy::Fixed,
+            configurable_format_id: None,
+            non_configurable_format_id: Some(EntityId::new("non-configurable").expect("valid ID")),
+            existing_report_config_id: None,
+            active_format_count: 1,
+        };
+        assert!(
+            report_config_plan_eligibility(
+                PlanEntryKind::Helper,
+                "create_report_config",
+                &fixed_non_configurable,
+            )
+            .expect("create surface")
+            .0
+        );
+        assert!(
+            !report_config_plan_eligibility(
+                PlanEntryKind::Helper,
+                "clone_report_config",
+                &fixed_non_configurable,
+            )
+            .expect("clone surface")
+            .0
+        );
+
+        let fixed_configurable = ReportConfigFormatCapability {
+            configurable_format_id: Some(EntityId::new("configurable").expect("valid ID")),
+            non_configurable_format_id: None,
+            ..fixed_non_configurable.clone()
+        };
+        for helper in [
+            "create_report_config",
+            "clone_report_config",
+            "delete_report_config",
+            "get_report_config",
+            "modify_report_config",
+        ] {
+            assert!(
+                report_config_plan_eligibility(PlanEntryKind::Helper, helper, &fixed_configurable,)
+                    .expect("report-config surface")
+                    .0,
+                "{helper}"
+            );
+        }
+
+        let historical = ReportConfigFormatCapability {
+            version: "26.40.2".to_string(),
+            policy: ReportConfigVersionPolicy::HistoricalQuarantine,
+            ..fixed_configurable
+        };
+        for helper in [
+            "create_report_config",
+            "clone_report_config",
+            "delete_report_config",
+            "modify_report_config",
+        ] {
+            assert!(
+                !report_config_plan_eligibility(PlanEntryKind::Helper, helper, &historical)
+                    .expect("historical report-config surface")
+                    .0,
+                "{helper}"
+            );
+        }
+    }
+
+    #[test]
     fn scan_result_detail_selection_is_stable_by_result_id_and_allows_empty_reports() {
         let response = GetResultsResponse::from_response(&Response::from(
             r#"<get_results_response status="200" status_text="OK">
@@ -10040,6 +10935,33 @@ mod tests {
         ))
         .expect("empty typed report configs parse");
         assert!(select_deterministic_report_config_id(&empty).is_none());
+    }
+
+    #[test]
+    fn fixed_report_config_capability_ignores_objects_removed_by_preflight_cleanup() {
+        let response = GetReportConfigsResponse::from_response(&Response::from(
+            r#"<get_report_configs_response status="200" status_text="OK">
+                <report_config id="owned-a"><name>rust-gvm-e2e-previous-report-config</name></report_config>
+                <report_config id="stable-z"><name>Operator Config</name></report_config>
+            </get_report_configs_response>"#,
+        ))
+        .expect("typed report configs parse");
+
+        assert_eq!(
+            select_report_config_capability_id(&response, ReportConfigVersionPolicy::Fixed)
+                .expect("non-owned config remains after preflight")
+                .as_str(),
+            "stable-z"
+        );
+        assert_eq!(
+            select_report_config_capability_id(
+                &response,
+                ReportConfigVersionPolicy::HistoricalQuarantine,
+            )
+            .expect("historical quarantine performs no mutation cleanup")
+            .as_str(),
+            "owned-a"
+        );
     }
 
     #[test]
@@ -10133,7 +11055,7 @@ mod tests {
         let catalog: FeatureCatalog =
             serde_json::from_str(include_str!("../../../coverage/feature-catalog.json"))
                 .expect("feature catalog parses");
-        let inputs = plan_inputs(&catalog, GmpVersion(22, 7), None);
+        let inputs = plan_inputs(&catalog, GmpVersion(22, 7), None, None);
 
         for helper in ["get_report_export", "get_report_export_with_opts"] {
             let input = inputs

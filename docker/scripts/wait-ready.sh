@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Wait for gvmd readiness.
 # Phase 1 (bash): Wait for gvmd to accept connections on socket (inside container)
-# Phase 2 (bash): Wait for the VT data container, then allow OSPd to load the copied VTs
+# Phase 2 (bash): Wait for all feed volumes, freeze their materializers, then let OSPd settle
 # Phase 3 (rust): Poll scan configs + SCAP/CERT databases via GMP (inside runner container)
 set -euo pipefail
 
@@ -12,6 +12,7 @@ SCANNER_SETTLE_SECS="${E2E_SCANNER_SETTLE_SECS:-60}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/scanner-readiness.sh"
+source "${script_dir}/feed-snapshot.sh"
 
 IFS=':' read -r -a compose_files <<< "${COMPOSE_FILE}"
 compose_args=()
@@ -66,8 +67,7 @@ if (( remaining <= 0 )); then
   exit 1
 fi
 
-echo "=== Waiting for vulnerability-test data copy ==="
-wait_for_compose_service_health vulnerability-tests "$remaining" 5
+freeze_feed_snapshot "$((STARTED_AT + READINESS_TIMEOUT_SECS))" 5
 
 elapsed=$(( $(date +%s) - STARTED_AT ))
 remaining=$((READINESS_TIMEOUT_SECS - elapsed))

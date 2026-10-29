@@ -27,7 +27,7 @@ historical qualification evidence, not a runtime selection gate. Complete
 observed snapshots are emitted per lane for drift review.
 
 Regenerate or check against the supported rust-gvm checkout at
-`3039246a1835954287ddbe5817f067addb4a059e`:
+`f20a01f7297060f02b6f577bba7261cacb585fc3` (rust-gvm v0.8.0):
 
 ```bash
 python3 tools/coverage_manifest.py --rust-gvm-source ../rust-gvm
@@ -66,10 +66,12 @@ test-plan failure, and lane-result JSON artifacts.
 Ordinary fast and scan jobs intentionally reuse warm feed volumes. Initializing
 a fresh feed can consume most of the shared 21,000-second readiness budget. Volume
 deletion happens only with the explicit `clean` workflow input.
-Readiness waits for the vulnerability-test data container to finish copying,
-allows OSPd a bounded stabilization interval to load the copied VTs, and then
-requires authenticated scan-config plus SCAP/CPE/CERT queries to succeed before
-any lane starts.
+Readiness waits for all eight feed materializers to finish populating their
+volumes, verifies every runtime consumer, and stops only those materializers so
+the mounted snapshot cannot change during qualification. It then allows OSPd a
+bounded VT-loading interval and requires authenticated scan-config plus
+SCAP/CPE/CERT queries to succeed before any lane starts. The freeze uses the
+existing readiness budget; it does not weaken or extend the authenticated gate.
 
 Before checkout, each self-hosted lane loads the run's already-built runner
 image from runner-temporary storage and uses that exact image as root to restore
@@ -90,7 +92,7 @@ Build the runner, start the warm stack, and execute a lane:
 
 ```bash
 docker build -f docker/Dockerfile.runner \
-  --build-arg RUST_GVM_SHA=3039246a1835954287ddbe5817f067addb4a059e \
+  --build-arg RUST_GVM_SHA=f20a01f7297060f02b6f577bba7261cacb585fc3 \
   -t rust-gvm-e2e-runner:ci .
 bash docker/scripts/run-deployment-lane.sh devel-fast
 ```
@@ -126,12 +128,15 @@ probes. Implemented agent-group and OCI-target lifecycles retain namespace,
 cleanup, and exactly-once safeguards. Enabled entries without a cleanup-safe
 public execution path fail as coverage gaps.
 
-Report-config mutation is separately dispositioned as a known upstream crash:
-the safe typed list read remains in `devel-isolated`, while create/clone/modify/
-delete are not executed against Community stable pending
-[greenbone/gvmd#3165](https://github.com/greenbone/gvmd/issues/3165). See
-[the test cases](docs/test-cases.md#devel-isolated) and the generated inventory
-for the exact reproducibility evidence.
+Report-config mutation is version-qualified in `devel-isolated`.
+gvmd through 26.40.2 retains a no-mutation historical quarantine for
+[greenbone/gvmd#3165](https://github.com/greenbone/gvmd/issues/3165). Starting
+with the 26.41.0 fix, the lane requires a typed rejection, same-session health,
+and exact-name non-persistence for a zero-override create against an active
+non-configurable format. When a configurable format is present, it also runs a
+cleanup-tracked create/clone/modify/read/delete lifecycle. Missing format
+capabilities are recorded as conditional-unavailable, never as a pass or a
+known bug. See [the test cases](docs/test-cases.md#devel-isolated).
 
 The scan lane separately qualifies the read-only gvmd EPSS result filter/sort
 regression for all four EPSS fields. `GVMD_VERSION` may select an exact
@@ -153,6 +158,7 @@ cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 python3 -m unittest discover -s tools -p 'test_*.py'
 bash -n docker/scripts/*.sh tests/cli/*.sh
+bash docker/scripts/test-feed-snapshot.sh
 bash docker/scripts/test-community-lane-artifacts.sh
 bash docker/scripts/test-deployment-lane-artifacts.sh
 docker compose -f docker/docker-compose.yml config --quiet
