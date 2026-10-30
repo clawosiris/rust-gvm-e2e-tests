@@ -217,7 +217,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' &&
        (inputs.lane == 'devel-fast' || inputs.lane == 'all'))
     runs-on: [self-hosted]
-    timeout-minutes: 420
+    timeout-minutes: 480
     env:
       GVM_VERSION: ${{ needs.build-runner.outputs.gvm-version }}
       E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
@@ -271,7 +271,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' &&
        (inputs.lane == 'devel-scan' || inputs.lane == 'all'))
     runs-on: [self-hosted]
-    timeout-minutes: 420
+    timeout-minutes: 480
     env:
       GVM_VERSION: ${{ needs.build-runner.outputs.gvm-version }}
       E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
@@ -328,7 +328,7 @@ jobs:
        (github.event_name == 'workflow_dispatch' &&
         (inputs.lane == 'devel-isolated' || inputs.lane == 'all')))
     runs-on: [self-hosted]
-    timeout-minutes: 420
+    timeout-minutes: 480
     env:
       GVM_VERSION: ${{ needs.build-runner.outputs.gvm-version }}
       E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
@@ -381,7 +381,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       (inputs.lane == 'devel-transport' || inputs.lane == 'all')
     runs-on: [self-hosted]
-    timeout-minutes: 420
+    timeout-minutes: 480
     env:
       GVM_VERSION: ${{ needs.build-runner.outputs.gvm-version }}
       E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}
@@ -448,7 +448,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       (inputs.lane == 'differential' || inputs.lane == 'all')
     runs-on: [self-hosted]
-    timeout-minutes: 420
+    timeout-minutes: 480
     env:
       GVM_VERSION: ${{ needs.build-runner.outputs.gvm-version }}
       E2E_RUST_GVM_SHA: ${{ needs.build-runner.outputs.rust-gvm-sha }}

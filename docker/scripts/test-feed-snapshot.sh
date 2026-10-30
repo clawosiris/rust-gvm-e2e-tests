@@ -56,9 +56,15 @@ deployment_compose() {
   return 1
 }
 
-freeze_feed_snapshot 200 7
+wait_for_feed_snapshot_materialization 200 7
 
-expected_log=$'wait vulnerability-tests 100 7\nwait notus-data 100 7\nwait scap-data 100 7\nwait cert-bund-data 100 7\nwait dfn-cert-data 100 7\nwait data-objects 100 7\nwait report-formats 100 7\nwait gpg-data 100 7\nstop --timeout 10 vulnerability-tests notus-data scap-data cert-bund-data dfn-cert-data data-objects report-formats gpg-data'
+expected_log=$'wait vulnerability-tests 100 7\nwait notus-data 100 7\nwait scap-data 100 7\nwait cert-bund-data 100 7\nwait dfn-cert-data 100 7\nwait data-objects 100 7\nwait report-formats 100 7\nwait gpg-data 100 7'
+[[ "$(<"${test_log}")" == "${expected_log}" ]]
+[[ "${snapshot_stopped}" == "false" ]]
+
+freeze_feed_snapshot
+
+expected_log+=$'\nstop --timeout 10 vulnerability-tests notus-data scap-data cert-bund-data dfn-cert-data data-objects report-formats gpg-data'
 [[ "$(<"${test_log}")" == "${expected_log}" ]]
 
 for protected in redis-server pg-gvm gvmd openvasd ospd-openvas gsad scan-fixture; do

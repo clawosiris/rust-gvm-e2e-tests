@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 # Containers whose only runtime responsibility is to materialize a feed volume.
-# They remain stopped after their health markers prove that the mounted snapshot
-# is complete, preventing a later image refresh from changing that snapshot.
+# They remain running while gvmd imports the completed feed volumes, then stop
+# before qualification so the mounted snapshot cannot change during a lane.
 readonly -a FEED_MATERIALIZER_SERVICES=(
   vulnerability-tests
   notus-data
@@ -35,7 +35,7 @@ remaining_feed_snapshot_budget() {
   }
   remaining=$((deadline_epoch - $(date +%s)))
   if (( remaining <= 0 )); then
-    echo "ERROR: no readiness budget remains for feed snapshot materialization" >&2
+    echo "ERROR: no feed-materialization budget remains" >&2
     return 1
   fi
   printf '%s\n' "${remaining}"
@@ -108,10 +108,10 @@ require_snapshot_service_running() {
   fi
 }
 
-freeze_feed_snapshot() {
+wait_for_feed_snapshot_materialization() {
   local deadline_epoch="${1:?deadline epoch is required}"
   local poll_interval_secs="${2:-5}"
-  local service remaining running_id
+  local service remaining
 
   echo "=== Waiting for complete feed-volume materialization ==="
   for service in "${FEED_MATERIALIZER_SERVICES[@]}"; do
@@ -119,14 +119,19 @@ freeze_feed_snapshot() {
     wait_for_feed_materializer_completion "${service}" "${remaining}" "${poll_interval_secs}"
   done
 
-  echo "=== Verifying runtime consumers before freezing the feed snapshot ==="
+  echo "=== Verifying runtime consumers before authenticated feed import ==="
   for service in "${FEED_SNAPSHOT_CONSUMER_SERVICES[@]}"; do
     require_snapshot_service_running "${service}"
   done
+}
+
+freeze_feed_snapshot() {
+  local service running_id
 
   echo "=== Freezing immutable feed snapshot (materializers only) ==="
-  # Materializers are idle after their completion markers are present. Keep
-  # this grace period short because Compose applies it per service.
+  # Authenticated readiness has proved that gvmd finished importing the
+  # completed volumes. Materializers are idle at this point; keep this grace
+  # period short because Compose applies it per service.
   deployment_compose stop --timeout 10 "${FEED_MATERIALIZER_SERVICES[@]}"
 
   for service in "${FEED_MATERIALIZER_SERVICES[@]}"; do

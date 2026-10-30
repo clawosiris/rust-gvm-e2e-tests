@@ -229,7 +229,7 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
         self.assertIn("branches: [main]", workflow)
         self.assertIn("group: rust-gvm-e2e-shared-compose-state", workflow)
         for job in SELF_HOSTED_LANES:
-            self.assertIn("timeout-minutes: 420", self.jobs()[job])
+            self.assertIn("timeout-minutes: 480", self.jobs()[job])
         self.assertIn("deployment_compose up -d pg-gvm", lane_script)
         self.assertNotIn("up -d --wait --wait-timeout 300 pg-gvm", lane_script)
         self.assertIn("wait_for_postgres_bootstrap", lane_script)
@@ -264,11 +264,18 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
         )
         self.assertIn("CHECKPOINT;", lane_script)
         self.assertIn(
+            'FEED_MATERIALIZATION_TIMEOUT_SECS="${E2E_FEED_MATERIALIZATION_TIMEOUT_SECS:-5400}"',
+            wait_script,
+        )
+        self.assertIn(
             'READINESS_TIMEOUT_SECS="${E2E_READINESS_TIMEOUT_SECS:-21000}"',
             wait_script,
         )
-        self.assertIn('remaining=$((READINESS_TIMEOUT_SECS - elapsed))', wait_script)
-        self.assertIn('-e E2E_READINESS_TIMEOUT_SECS="$remaining"', wait_script)
+        self.assertNotIn('remaining=$((READINESS_TIMEOUT_SECS - elapsed))', wait_script)
+        self.assertIn(
+            '-e E2E_READINESS_TIMEOUT_SECS="${READINESS_TIMEOUT_SECS}"',
+            wait_script,
+        )
 
     def test_shared_volume_feed_producers_are_serialized(self):
         compose = COMPOSE_FILE.read_text(encoding="utf-8")
@@ -352,11 +359,15 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
         )
         self.assertLess(
             wait_script.index("gvmd responding on socket"),
-            wait_script.index("freeze_feed_snapshot"),
+            wait_script.index("wait_for_feed_snapshot_materialization"),
         )
         self.assertLess(
-            wait_script.index("freeze_feed_snapshot"),
+            wait_script.index("wait_for_feed_snapshot_materialization"),
             wait_script.index("gvm-community-e2e --mode wait-ready"),
+        )
+        self.assertLess(
+            wait_script.index("gvm-community-e2e --mode wait-ready"),
+            wait_script.index("freeze_feed_snapshot"),
         )
         self.assertLess(
             lane_script.index("bash docker/scripts/wait-ready.sh"),

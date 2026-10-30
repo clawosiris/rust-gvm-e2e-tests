@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Wait for gvmd readiness.
 # Phase 1 (bash): Wait for gvmd to accept connections on socket (inside container)
-# Phase 2 (bash): Wait for all feed volumes, freeze their materializers, then let OSPd settle
+# Phase 2 (bash): Wait for all feed volumes, then let OSPd settle
 # Phase 3 (rust): Poll scan configs + SCAP/CERT databases via GMP (inside runner container)
+# Phase 4 (bash): Stop only the completed materializers to freeze the qualified snapshot
 set -euo pipefail
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker/docker-compose.yml}"
 SOCKET_PATH="/run/gvmd/gvmd.sock"
+FEED_MATERIALIZATION_TIMEOUT_SECS="${E2E_FEED_MATERIALIZATION_TIMEOUT_SECS:-5400}"
 READINESS_TIMEOUT_SECS="${E2E_READINESS_TIMEOUT_SECS:-21000}"
 SCANNER_SETTLE_SECS="${E2E_SCANNER_SETTLE_SECS:-60}"
 
@@ -19,6 +21,10 @@ compose_args=()
 for file in "${compose_files[@]}"; do compose_args+=(-f "${file}"); done
 deployment_compose() { docker compose "${compose_args[@]}" "$@"; }
 
+if ! [[ "${FEED_MATERIALIZATION_TIMEOUT_SECS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: E2E_FEED_MATERIALIZATION_TIMEOUT_SECS must be a positive integer" >&2
+  exit 2
+fi
 if ! [[ "${READINESS_TIMEOUT_SECS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "ERROR: E2E_READINESS_TIMEOUT_SECS must be a positive integer" >&2
   exit 2
@@ -35,7 +41,7 @@ echo "=== Waiting for gvmd to accept connections ==="
 ready=false
 while true; do
   elapsed=$(( $(date +%s) - STARTED_AT ))
-  if (( elapsed >= READINESS_TIMEOUT_SECS )); then
+  if (( elapsed >= FEED_MATERIALIZATION_TIMEOUT_SECS )); then
     break
   fi
   # Check that gvmd is actually listening, not just that the socket file exists
@@ -54,25 +60,25 @@ while true; do
 done
 
 if [ "$ready" != "true" ]; then
-  echo "ERROR: gvmd did not respond within the ${READINESS_TIMEOUT_SECS}s readiness budget"
+  echo "ERROR: gvmd did not respond within the ${FEED_MATERIALIZATION_TIMEOUT_SECS}s feed-materialization budget"
   deployment_compose logs --tail=20 gvmd 2>&1 || true
   deployment_compose logs --tail=10 pg-gvm 2>&1 || true
   exit 1
 fi
 
 elapsed=$(( $(date +%s) - STARTED_AT ))
-remaining=$((READINESS_TIMEOUT_SECS - elapsed))
+remaining=$((FEED_MATERIALIZATION_TIMEOUT_SECS - elapsed))
 if (( remaining <= 0 )); then
-  echo "ERROR: no readiness budget remains for feed validation" >&2
+  echo "ERROR: no feed-materialization budget remains" >&2
   exit 1
 fi
 
-freeze_feed_snapshot "$((STARTED_AT + READINESS_TIMEOUT_SECS))" 5
+wait_for_feed_snapshot_materialization "$((STARTED_AT + FEED_MATERIALIZATION_TIMEOUT_SECS))" 5
 
 elapsed=$(( $(date +%s) - STARTED_AT ))
-remaining=$((READINESS_TIMEOUT_SECS - elapsed))
+remaining=$((FEED_MATERIALIZATION_TIMEOUT_SECS - elapsed))
 if (( remaining <= SCANNER_SETTLE_SECS )); then
-  echo "ERROR: no readiness budget remains for scanner VT loading" >&2
+  echo "ERROR: no feed-materialization budget remains for scanner VT loading" >&2
   exit 1
 fi
 if (( SCANNER_SETTLE_SECS > 0 )); then
@@ -80,22 +86,17 @@ if (( SCANNER_SETTLE_SECS > 0 )); then
   sleep "${SCANNER_SETTLE_SECS}"
 fi
 
-elapsed=$(( $(date +%s) - STARTED_AT ))
-remaining=$((READINESS_TIMEOUT_SECS - elapsed))
-if (( remaining <= 0 )); then
-  echo "ERROR: no readiness budget remains for feed validation" >&2
-  exit 1
-fi
-
 echo "=== Running GMP readiness check via rust-gvm (polling for feed-backed data) ==="
-echo "Feed readiness budget: ${remaining}s (${elapsed}s already used for deployment readiness)"
+echo "Authenticated feed readiness budget: ${READINESS_TIMEOUT_SECS}s"
 deployment_compose --profile runner run --no-deps --rm -T \
   --entrypoint "" \
   -e GVM_ADMIN_USER="${GVM_ADMIN_USER:-admin}" \
   -e GVM_ADMIN_PASS="${GVM_ADMIN_PASS:-admin}" \
   -e GVM_SOCKET_PATH="${GVM_SOCKET_PATH:-/run/gvmd/gvmd.sock}" \
-  -e E2E_READINESS_TIMEOUT_SECS="$remaining" \
+  -e E2E_READINESS_TIMEOUT_SECS="${READINESS_TIMEOUT_SECS}" \
   rust-gvm-e2e \
   gvm-community-e2e --mode wait-ready
 
-echo "=== gvmd and scanner are ready (VT copy settled; scan configs, SCAP, and CERT available) ==="
+freeze_feed_snapshot
+
+echo "=== gvmd and scanner are ready; authenticated feed snapshot is frozen ==="

@@ -12,7 +12,7 @@ The compose file is based on the current Greenbone Community container docs at `
 
 ## First run expectations
 
-The first `docker compose up -d` is slow. The feed containers download and unpack vulnerability tests, SCAP data, CERT data, and report formats before `gvmd` becomes responsive. A clean SCAP/CPE aggregation can take hours; the coordinated readiness budget is 21,000 seconds.
+The first `docker compose up -d` is slow. The feed containers download and unpack vulnerability tests, SCAP data, CERT data, and report formats before `gvmd` becomes responsive. Feed-volume materialization and scanner settling have a 5,400-second budget. After that phase completes, a clean authenticated SCAP/CPE aggregation receives its full 21,000-second readiness budget.
 
 Named volumes keep feed and database state between runs. Use
 `docker compose -f docker/docker-compose.yml down` to preserve those caches.
@@ -61,8 +61,10 @@ docker/scripts/reset.sh
 - `GVM_SOCKET_PATH`: Socket path inside the runner container. Default `/run/gvmd/gvmd.sock`.
 - `E2E_SOCKET_OPERATION_TIMEOUT_SECS`: Per-operation Unix-socket connect,
   write, and response-read deadline. Default `300`.
-- `E2E_READINESS_TIMEOUT_SECS`: Combined socket, scan-config, SCAP/CPE, and
-  CERT readiness budget. Default `21000`.
+- `E2E_FEED_MATERIALIZATION_TIMEOUT_SECS`: Combined gvmd socket,
+  feed-volume materialization, and scanner-settle budget. Default `5400`.
+- `E2E_READINESS_TIMEOUT_SECS`: Authenticated scan-config, no-active-sync,
+  SCAP/CPE, and CERT readiness budget after materialization. Default `21000`.
 - `E2E_READINESS_POLL_INTERVAL_SECS`: Authenticated feed poll interval.
   Default `30`.
 - `E2E_READINESS_MAX_RECONNECTS`: Bounded connection-loss retries. Default
@@ -93,10 +95,12 @@ cargo run --locked --bin gvm-community-e2e -- --mode wait-ready
   containers became healthy. The stock entrypoint performs the configuration
   import once; a `service_started` dependency can race the initial volume copy,
   and waiting longer inside the already-running `gvmd` does not rerun it.
-- `wait-ready.sh` waits for every feed materializer health marker and then
-  stops only those materializer containers. Their volumes stay mounted while
-  Redis, PostgreSQL, gvmd, scanners, gsad, and the scan fixture continue
-  running against one immutable snapshot for the rest of the deployment.
+- `wait-ready.sh` waits for every feed materializer health marker, then keeps
+  those containers running until authenticated scan-config and SCAP/CERT
+  readiness proves gvmd completed its imports. It stops only the materializers
+  after that gate. Their volumes stay mounted while Redis, PostgreSQL, gvmd,
+  scanners, gsad, and the scan fixture continue against the qualified immutable
+  snapshot for the rest of the deployment.
 - Keep `report-formats` gated on healthy `data-objects`, and `dfn-cert-data`
   gated on healthy `cert-bund-data`. Each pair writes one shared volume; the
   prerequisite initializer clears that mount before copying and can otherwise
