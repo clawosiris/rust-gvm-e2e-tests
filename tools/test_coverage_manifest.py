@@ -89,17 +89,21 @@ class CoveragePolicyTests(unittest.TestCase):
             for right in classes[index + 1 :]:
                 self.assertFalse(left & right)
 
-    def test_report_config_mutations_are_known_upstream_bugs_not_isolated_live(self):
+    def test_report_config_mutations_are_version_qualified_isolated_live(self):
         expected = {
             "create_report_config",
             "delete_report_config",
             "modify_report_config",
         }
-        self.assertEqual(MANIFEST.KNOWN_UPSTREAM_BUG_COMMANDS, expected)
+        self.assertEqual(MANIFEST.KNOWN_UPSTREAM_BUG_COMMANDS, set())
         for name in expected:
-            self.assertEqual(MANIFEST.command_disposition(name), "known-upstream-bug")
-            self.assertEqual(MANIFEST.lane_for("known-upstream-bug"), "none")
-            self.assertIn("greenbone/gvmd#3165", MANIFEST.rationale_for(name, "known-upstream-bug"))
+            self.assertIn(name, MANIFEST.ISOLATED_COMMANDS)
+            self.assertEqual(MANIFEST.command_disposition(name), "isolated-live")
+            self.assertEqual(MANIFEST.lane_for("isolated-live"), "devel-isolated")
+            rationale = MANIFEST.rationale_for(name, "isolated-live")
+            self.assertIn("<=26.40.2", rationale)
+            self.assertIn(">=26.41.0", rationale)
+            self.assertIn("same-session health", rationale)
         self.assertEqual(MANIFEST.command_disposition("get_report_configs"), "isolated-live")
 
     def test_helper_only_variants_retain_explicit_exclusion_policy(self):
@@ -220,7 +224,7 @@ class CoveragePolicyTests(unittest.TestCase):
         self.assertEqual(fixture["issue"], 715)
         self.assertEqual(
             fixture["rust_gvm_sha"],
-            "3039246a1835954287ddbe5817f067addb4a059e",
+            "f20a01f7297060f02b6f577bba7261cacb585fc3",
         )
         self.assertEqual(
             [case["command"] for case in fixture["live_cases"]],

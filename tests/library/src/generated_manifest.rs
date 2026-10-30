@@ -7,7 +7,7 @@ use gvm_connection::UnixSocketConnection;
 
 use crate::{CoverageEntry, Disposition, LiveHelpAllowlistEntry, SurfaceMigration, SurfaceStatus};
 
-pub const RUST_GVM_SHA: &str = "3039246a1835954287ddbe5817f067addb4a059e";
+pub const RUST_GVM_SHA: &str = "f20a01f7297060f02b6f577bba7261cacb585fc3";
 
 pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
@@ -141,8 +141,8 @@ pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "create_report_config",
         wire_command: "create_report_config",
-        disposition: Disposition::KnownUpstreamBug,
-        lane: "none",
+        disposition: Disposition::IsolatedLive,
+        lane: "devel-isolated",
         requires: &[],
         implemented: true,
     },
@@ -357,8 +357,8 @@ pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "delete_report_config",
         wire_command: "delete_report_config",
-        disposition: Disposition::KnownUpstreamBug,
-        lane: "none",
+        disposition: Disposition::IsolatedLive,
+        lane: "devel-isolated",
         requires: &[],
         implemented: true,
     },
@@ -1125,8 +1125,8 @@ pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "modify_report_config",
         wire_command: "modify_report_config",
-        disposition: Disposition::KnownUpstreamBug,
-        lane: "none",
+        disposition: Disposition::IsolatedLive,
+        lane: "devel-isolated",
         requires: &[],
         implemented: true,
     },
@@ -1432,8 +1432,8 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "clone_report_config",
         wire_command: "create_report_config",
-        disposition: Disposition::KnownUpstreamBug,
-        lane: "none",
+        disposition: Disposition::IsolatedLive,
+        lane: "devel-isolated",
         requires: &[],
         implemented: true,
     },
@@ -1688,8 +1688,8 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "create_report_config",
         wire_command: "create_report_config",
-        disposition: Disposition::KnownUpstreamBug,
-        lane: "none",
+        disposition: Disposition::IsolatedLive,
+        lane: "devel-isolated",
         requires: &[],
         implemented: true,
     },
@@ -1944,8 +1944,8 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "delete_report_config",
         wire_command: "delete_report_config",
-        disposition: Disposition::KnownUpstreamBug,
-        lane: "none",
+        disposition: Disposition::IsolatedLive,
+        lane: "devel-isolated",
         requires: &[],
         implemented: true,
     },
@@ -3224,8 +3224,8 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "modify_report_config",
         wire_command: "modify_report_config",
-        disposition: Disposition::KnownUpstreamBug,
-        lane: "none",
+        disposition: Disposition::IsolatedLive,
+        lane: "devel-isolated",
         requires: &[],
         implemented: true,
     },

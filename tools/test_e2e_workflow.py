@@ -16,10 +16,13 @@ POSTGRES_BOOTSTRAP_SCRIPT = (
 )
 REUSABLE_WORKFLOW = Path(__file__).parents[1] / ".github/workflows/deployment-e2e.yml"
 WAIT_SCRIPT = Path(__file__).parents[1] / "docker/scripts/wait-ready.sh"
+FEED_SNAPSHOT_SCRIPT = (
+    Path(__file__).parents[1] / "docker/scripts/feed-snapshot.sh"
+)
 COMPOSE_FILE = Path(__file__).parents[1] / "docker/docker-compose.yml"
 CARGO_MANIFEST = Path(__file__).parents[1] / "tests/library/Cargo.toml"
 LOCKFILE = Path(__file__).parents[1] / "Cargo.lock"
-SUPPORTED_RUST_GVM_SHA = "3039246a1835954287ddbe5817f067addb4a059e"
+SUPPORTED_RUST_GVM_SHA = "f20a01f7297060f02b6f577bba7261cacb585fc3"
 SELF_HOSTED_LANES = {
     "devel-fast",
     "devel-scan",
@@ -290,6 +293,77 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
                 rf"{re.escape(prerequisite)}:\n"
                 r"\s+condition: service_started",
             )
+
+    def test_feed_snapshot_freeze_has_exact_scope_and_order(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        wait_script = WAIT_SCRIPT.read_text(encoding="utf-8")
+        snapshot_script = FEED_SNAPSHOT_SCRIPT.read_text(encoding="utf-8")
+        lane_script = LANE_SCRIPT.read_text(encoding="utf-8")
+        runtime_images_script = RUNTIME_IMAGES_SCRIPT.read_text(encoding="utf-8")
+
+        def array_values(name):
+            match = re.search(
+                rf"readonly -a {name}=\(\n(.*?)\n\)",
+                snapshot_script,
+                re.DOTALL,
+            )
+            self.assertIsNotNone(match)
+            return match.group(1).split()
+
+        materializers = array_values("FEED_MATERIALIZER_SERVICES")
+        consumers = array_values("FEED_SNAPSHOT_CONSUMER_SERVICES")
+        self.assertEqual(
+            materializers,
+            [
+                "vulnerability-tests",
+                "notus-data",
+                "scap-data",
+                "cert-bund-data",
+                "dfn-cert-data",
+                "data-objects",
+                "report-formats",
+                "gpg-data",
+            ],
+        )
+        self.assertEqual(
+            consumers,
+            [
+                "redis-server",
+                "pg-gvm",
+                "gvmd",
+                "openvasd",
+                "ospd-openvas",
+                "gsad",
+                "scan-fixture",
+            ],
+        )
+        self.assertTrue(set(materializers).isdisjoint(consumers))
+        self.assertLess(
+            snapshot_script.index("wait_for_feed_materializer_completion"),
+            snapshot_script.index("deployment_compose stop --timeout 10"),
+        )
+        self.assertIn(
+            '[[ "${runtime_status}" == "exited" && "${exit_code}" == "0" ]]',
+            snapshot_script,
+        )
+        self.assertIn(
+            'if [[ "${runtime_status}" == "exited" ]]; then',
+            snapshot_script,
+        )
+        self.assertLess(
+            wait_script.index("gvmd responding on socket"),
+            wait_script.index("freeze_feed_snapshot"),
+        )
+        self.assertLess(
+            wait_script.index("freeze_feed_snapshot"),
+            wait_script.index("gvm-community-e2e --mode wait-ready"),
+        )
+        self.assertLess(
+            lane_script.index("bash docker/scripts/wait-ready.sh"),
+            lane_script.index('python3 tools/runtime_images.py "${runtime_image_args[@]}"'),
+        )
+        self.assertIn('[*compose_command, "images", "--format", "json"]', runtime_images_script)
+        self.assertIn("bash docker/scripts/test-feed-snapshot.sh", workflow)
 
 
 if __name__ == "__main__":

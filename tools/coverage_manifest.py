@@ -66,6 +66,7 @@ FEATURE_CATALOG_PATH = ROOT / "coverage/feature-catalog.json"
 LIVE_HELP_ALLOWLIST_PATH = ROOT / "coverage/live-help-allowlist.json"
 EPSS_REGRESSION_PATH = ROOT / "fixtures/epss-result-regression.json"
 ISSUE_715_VALIDATION_PATH = ROOT / "fixtures/issue-715-validation.json"
+REVIEWED_RUST_GVM_SHA = "f20a01f7297060f02b6f577bba7261cacb585fc3"
 
 
 def load_feature_catalog() -> dict[str, object]:
@@ -112,7 +113,7 @@ def load_issue_715_validation() -> dict[str, object]:
         raise ValueError("issue #715 validation fixture must use schema_version 1 and exact fields")
     if regression["issue"] != 715:
         raise ValueError("issue #715 validation fixture must identify issue 715")
-    if regression["rust_gvm_sha"] != "3039246a1835954287ddbe5817f067addb4a059e":
+    if regression["rust_gvm_sha"] != REVIEWED_RUST_GVM_SHA:
         raise ValueError("issue #715 validation fixture must pin the reviewed rust-gvm SHA")
     expected_live_cases = [
         ("get_info NVT OID filtering", "get_info"),
@@ -289,22 +290,13 @@ NIGHTLY_COMMANDS = {
     "stop_task",
 }
 
-# Do not send report-config mutations to the Community stable stack while
-# greenbone/gvmd#3165 is unresolved. Runs 36611076644 and 36665378965 both
-# reproduced a connection closure; the latter retained gvmd 26.40.2 / GMP 22.7
-# evidence of `Report Config could not be created` followed by SIGSEGV. Exact
-# name reconciliation found no persisted object, so retrying would only replay
-# a known crash boundary.
-KNOWN_UPSTREAM_BUG_COMMANDS = {
-    "create_report_config",
-    "delete_report_config",
-    "modify_report_config",
-}
+KNOWN_UPSTREAM_BUG_COMMANDS: set[str] = set()
 
 ISOLATED_COMMANDS = {
     "create_asset",
     "create_group",
     "create_permission",
+    "create_report_config",
     "create_report_format",
     "create_role",
     "create_ticket",
@@ -313,6 +305,7 @@ ISOLATED_COMMANDS = {
     "delete_asset",
     "delete_group",
     "delete_permission",
+    "delete_report_config",
     "delete_report",
     "delete_report_format",
     "delete_role",
@@ -332,6 +325,7 @@ ISOLATED_COMMANDS = {
     "modify_auth",
     "modify_group",
     "modify_permission",
+    "modify_report_config",
     "modify_report_format",
     "modify_role",
     "modify_setting",
@@ -628,6 +622,19 @@ def lane_for(disposition: str, wire_command: str = "") -> str:
 
 
 def rationale_for(name: str, disposition: str) -> str:
+    if name in {
+        "create_report_config",
+        "clone_report_config",
+        "delete_report_config",
+        "modify_report_config",
+    }:
+        return (
+            "Version-aware isolated regression coverage preserves the gvmd <=26.40.2 "
+            "no-mutation quarantine, requires a typed rejection plus same-session health "
+            "and exact-name non-persistence for zero-override creation against an active "
+            "non-configurable format on gvmd >=26.41.0, and executes the complete "
+            "cleanup-tracked lifecycle when an active configurable format is available."
+        )
     if name == "get_results":
         return (
             "Nightly scan-linked result coverage includes read-only filter and sort probes for "
@@ -672,9 +679,8 @@ def rationale_for(name: str, disposition: str) -> str:
         "nightly-live": "Expected Community scan/report capability exercised by the bounded nightly/manual lane.",
         "isolated-live": "Supported operation isolated because it is administrative, global, or destructive.",
         "known-upstream-bug": (
-            "Known upstream crash greenbone/gvmd#3165: gvmd 26.40.2 / GMP 22.7 "
-            "closed create_report_config connections in runs 36611076644 and 36665378965; "
-            "exact-name reconciliation found no persisted object, so this mutation family is not executed."
+            "A precisely versioned upstream defect is retained with reproduction and "
+            "reconciliation evidence; the affected operation is never reported as pass."
         ),
         "conditional-availability": "Availability is decided by recorded version, feature, help, and probe evidence.",
         "capability-selected": "Selection is decided by the deployment contract and feature catalog before mutation.",

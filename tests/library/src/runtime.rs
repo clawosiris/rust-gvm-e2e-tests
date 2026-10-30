@@ -16,12 +16,9 @@ use crate::capability::{
     reconcile, DeploymentCapabilities, DeploymentContract, ExecutionResult, LiveHelpParity,
     PlanEntryKind, TerminalOutcome, TestPlan,
 };
-use crate::{Disposition, COMMAND_COVERAGE, HELPER_COVERAGE, RUST_GVM_SHA};
+use crate::{COMMAND_COVERAGE, HELPER_COVERAGE, RUST_GVM_SHA};
 
 static REPORT: OnceLock<Mutex<RunReport>> = OnceLock::new();
-
-/// Reproducibility evidence for the report-config mutation crash disposition.
-pub const REPORT_CONFIG_CRASH_EVIDENCE: &str = "known upstream crash greenbone/gvmd#3165: gvmd 26.40.2 / GMP 22.7 closed create_report_config connections in reproducible runs 36611076644 and 36665378965; exact-name reconciliation found no persisted object; the retained run 36665378965 Compose log recorded 'Report Config could not be created', a backtrace, and 'Received Segmentation fault signal'; no report-config mutation wire request is executed";
 
 /// Stable result state. Conditional, excluded, and known-bug states never count as passes.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -109,27 +106,6 @@ impl RunReport {
     /// Create a report and make all edition exclusions visible immediately.
     #[must_use]
     pub fn new(run_id: &str, lane: &str) -> Self {
-        let mut observations = Vec::new();
-        for entry in COMMAND_COVERAGE
-            .iter()
-            .filter(|entry| entry.disposition == Disposition::KnownUpstreamBug)
-        {
-            observations.push(Observation {
-                name: format!("command:{}", entry.name),
-                outcome: Outcome::KnownUpstreamBug,
-                evidence: REPORT_CONFIG_CRASH_EVIDENCE.to_string(),
-            });
-        }
-        for entry in HELPER_COVERAGE
-            .iter()
-            .filter(|entry| entry.disposition == Disposition::KnownUpstreamBug)
-        {
-            observations.push(Observation {
-                name: format!("helper:{}", entry.name),
-                outcome: Outcome::KnownUpstreamBug,
-                evidence: REPORT_CONFIG_CRASH_EVIDENCE.to_string(),
-            });
-        }
         Self {
             schema_version: 4,
             run_id: run_id.to_string(),
@@ -159,7 +135,7 @@ impl RunReport {
             live_help_parity: LiveHelpParity::default(),
             conditional_commands: BTreeMap::new(),
             registry_version_gates: BTreeMap::new(),
-            observations,
+            observations: Vec::new(),
             plan_results: Vec::new(),
         }
     }
@@ -523,39 +499,6 @@ mod tests {
             Some(&(initial_known_bugs + 1))
         );
         assert_eq!(report.outcome_counts.get("pass"), None);
-    }
-
-    #[test]
-    fn report_config_crash_disposition_is_known_bug_not_pass_or_generic_skip() {
-        let mut report = RunReport::new("unit", "devel-isolated");
-        let names = report
-            .observations
-            .iter()
-            .filter(|observation| observation.evidence == REPORT_CONFIG_CRASH_EVIDENCE)
-            .map(|observation| observation.name.as_str())
-            .collect::<Vec<_>>();
-        for name in [
-            "command:create_report_config",
-            "command:delete_report_config",
-            "command:modify_report_config",
-            "helper:create_report_config",
-            "helper:clone_report_config",
-            "helper:delete_report_config",
-            "helper:modify_report_config",
-        ] {
-            assert!(
-                names.contains(&name),
-                "missing explicit disposition for {name}"
-            );
-        }
-        assert!(report.observations.iter().all(|observation| {
-            observation.evidence != REPORT_CONFIG_CRASH_EVIDENCE
-                || observation.outcome == Outcome::KnownUpstreamBug
-        }));
-        report.finish();
-        assert_eq!(report.outcome_counts.get("known-upstream-bug"), Some(&7));
-        assert_eq!(report.outcome_counts.get("pass"), None);
-        assert_eq!(report.outcome_counts.get("conditional-unavailable"), None);
     }
 
     #[test]

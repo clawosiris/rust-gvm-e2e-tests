@@ -25,7 +25,7 @@ From the repository root, build the pinned runner and use the lane wrapper:
 
 ```bash
 docker build -f docker/Dockerfile.runner \
-  --build-arg RUST_GVM_SHA=3039246a1835954287ddbe5817f067addb4a059e \
+  --build-arg RUST_GVM_SHA=f20a01f7297060f02b6f577bba7261cacb585fc3 \
   -t rust-gvm-e2e-runner:ci .
 bash docker/scripts/run-deployment-lane.sh devel-fast
 ```
@@ -93,6 +93,10 @@ cargo run --locked --bin gvm-community-e2e -- --mode wait-ready
   containers became healthy. The stock entrypoint performs the configuration
   import once; a `service_started` dependency can race the initial volume copy,
   and waiting longer inside the already-running `gvmd` does not rerun it.
+- `wait-ready.sh` waits for every feed materializer health marker and then
+  stops only those materializer containers. Their volumes stay mounted while
+  Redis, PostgreSQL, gvmd, scanners, gsad, and the scan fixture continue
+  running against one immutable snapshot for the rest of the deployment.
 - Keep `report-formats` gated on healthy `data-objects`, and `dfn-cert-data`
   gated on healthy `cert-bund-data`. Each pair writes one shared volume; the
   prerequisite initializer clears that mount before copying and can otherwise

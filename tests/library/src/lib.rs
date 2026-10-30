@@ -224,7 +224,7 @@ mod tests {
     }
 
     #[test]
-    fn report_config_mutations_are_explicit_known_upstream_bugs_but_reads_remain_isolated() {
+    fn report_config_mutations_and_reads_are_version_qualified_isolated_live() {
         for name in [
             "create_report_config",
             "delete_report_config",
@@ -232,8 +232,9 @@ mod tests {
         ] {
             assert!(COMMAND_COVERAGE.iter().any(|entry| {
                 entry.name == name
-                    && entry.disposition == Disposition::KnownUpstreamBug
-                    && entry.lane == "none"
+                    && entry.disposition == Disposition::IsolatedLive
+                    && entry.lane == "devel-isolated"
+                    && entry.implemented
             }));
         }
         assert!(COMMAND_COVERAGE.iter().any(|entry| {
@@ -255,7 +256,10 @@ mod tests {
             "modify_report_config",
         ] {
             assert!(HELPER_COVERAGE.iter().any(|entry| {
-                entry.name == name && entry.disposition == Disposition::KnownUpstreamBug
+                entry.name == name
+                    && entry.disposition == Disposition::IsolatedLive
+                    && entry.lane == "devel-isolated"
+                    && entry.implemented
             }));
         }
     }

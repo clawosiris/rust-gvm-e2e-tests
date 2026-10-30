@@ -5,11 +5,13 @@ typed public client surface. See [community-coverage.md](community-coverage.md)
 for every command/helper and its disposition. The generated file must never be
 edited by hand.
 
-All Compose lanes first require the vulnerability-test data container to finish
-copying and give OSPd a bounded VT-loading interval. Authenticated GMP readiness
-then requires scan configs and SCAP/CPE/CERT data before lane-specific tests can
-begin, preventing scan evidence from being collected against an uninitialized
-scanner.
+All Compose lanes first require every feed materializer to report a complete
+volume, verify all runtime consumers, and then stop only the eight materializer
+containers. The volumes remain mounted while Redis, PostgreSQL, gvmd, scanners,
+gsad, and the scan fixture keep running against that immutable deployment
+snapshot. After a bounded OSPd VT-loading interval, authenticated GMP readiness
+still requires scan configs and SCAP/CPE/CERT data before lane-specific tests
+can begin; no timeout or assertion is weakened by the freeze.
 
 ## `devel-fast`
 
@@ -168,21 +170,26 @@ The access-control lifecycle uses the canonical nested permission subject and
 complete request values throughout; response-loss reconciliation reads the
 permission back and never replays an ambiguous mutation.
 
-The lane retains the safe typed `get_report_configs` list read. When it finds
-an existing config, it selects the lowest stable ID and proves the typed
-`get_report_config` helper against that identity. An empty list emits explicit
-`conditional-unavailable` evidence for the singular read: creation remains
-quarantined, so it cannot be called a pass. The lane does not send
-`create_report_config`, clone, modify, or delete requests while
-[greenbone/gvmd#3165](https://github.com/greenbone/gvmd/issues/3165) remains
-unresolved. In stable gvmd 26.40.2 / GMP 22.7, runs `36611076644` and
-`36665378965` reproducibly closed the create connection; exact-name
-reconciliation found no persisted object. The retained Compose log for the
-latter run records `Report Config could not be created`, a backtrace, and
-`Received Segmentation fault signal`. The result artifact emits one explicit
-`known-upstream-bug` observation for every affected command/helper, including
-this evidence and the fact that no mutation wire request was executed. It is
-neither a pass nor a generic conditional skip.
+The lane always performs the typed `get_report_configs` list read. When an
+existing config is present, the lowest stable ID also qualifies the typed
+singular read. Report-config mutations use the parsed executable gvmd release:
+through 26.40.2, the lane records the historical
+[greenbone/gvmd#3165](https://github.com/greenbone/gvmd/issues/3165) quarantine
+and sends no crash-triggering mutation. The fix landed in gvmd 26.41.0 via
+greenbone/gvmd#3170. On that release and newer, an active non-configurable
+report format drives a zero-override create regression: the response must be a
+typed GMP error, `get_version` must succeed on the same authenticated session,
+and exact generated-name reconciliation must prove that nothing persisted.
+The current stable qualification image, gvmd 26.43.0, therefore takes this
+fixed-release path.
+
+When an active configurable report format is exposed, the lane additionally
+runs create, clone, modify, singular/exact-name reconciliation, and ultimate
+delete, tracking both created IDs before later assertions and proving no
+E2E-owned report config remains. A missing configurable or non-configurable
+format is recorded independently as `conditional-unavailable`; neither branch
+is mislabeled as pass or known-upstream-bug. Releases between 26.40.2 and
+26.41.0 are fail-closed as unclassified and receive no mutation.
 
 Report-format import remains separately `conditional-unavailable`: the pinned
 typed projection does not expose the export envelope needed to construct a
