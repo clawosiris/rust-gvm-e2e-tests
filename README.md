@@ -64,14 +64,18 @@ test-plan failure, and lane-result JSON artifacts.
 | `differential` | Blocking semantic parity with python-gvm | Opt-in |
 
 Ordinary fast and scan jobs intentionally reuse warm feed volumes. Initializing
-a fresh feed can consume most of the shared 21,000-second readiness budget. Volume
+a fresh feed can take most of the separate 5,400-second materialization budget;
+authenticated GMP readiness then receives its full 21,000-second budget. Volume
 deletion happens only with the explicit `clean` workflow input.
 Readiness waits for all eight feed materializers to finish populating their
-volumes, verifies every runtime consumer, and stops only those materializers so
-the mounted snapshot cannot change during qualification. It then allows OSPd a
-bounded VT-loading interval and requires authenticated scan-config plus
-SCAP/CPE/CERT queries to succeed before any lane starts. The freeze uses the
-existing readiness budget; it does not weaken or extend the authenticated gate.
+volumes and verifies every runtime consumer. It then allows OSPd a bounded
+VT-loading interval and requires authenticated scan-config plus SCAP/CPE/CERT
+queries to succeed. Only after gvmd finishes those imports does readiness stop
+the materializers, preventing the qualified mounted snapshot from changing
+during the lane without interrupting initial feed ingestion. The freeze does
+not weaken the authenticated gate. Self-hosted jobs retain an eight-hour cap so
+cold materialization, authenticated import, lane execution, and teardown each
+have bounded time.
 
 Before checkout, each self-hosted lane loads the run's already-built runner
 image from runner-temporary storage and uses that exact image as root to restore

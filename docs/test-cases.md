@@ -6,12 +6,15 @@ for every command/helper and its disposition. The generated file must never be
 edited by hand.
 
 All Compose lanes first require every feed materializer to report a complete
-volume, verify all runtime consumers, and then stop only the eight materializer
-containers. The volumes remain mounted while Redis, PostgreSQL, gvmd, scanners,
-gsad, and the scan fixture keep running against that immutable deployment
-snapshot. After a bounded OSPd VT-loading interval, authenticated GMP readiness
-still requires scan configs and SCAP/CPE/CERT data before lane-specific tests
-can begin; no timeout or assertion is weakened by the freeze.
+volume and verify all runtime consumers. After a bounded OSPd VT-loading
+interval, authenticated GMP readiness requires scan configs and SCAP/CPE/CERT
+data, proving gvmd completed its feed imports. Readiness then stops only the
+eight materializer containers. The volumes remain mounted while Redis,
+PostgreSQL, gvmd, scanners, gsad, and the scan fixture keep running against the
+qualified immutable snapshot. No timeout or assertion is weakened by the
+freeze. Cold feed-volume materialization and scanner settling have their own
+5,400-second phase; the authenticated GMP gate then receives its full
+21,000-second budget.
 
 ## `devel-fast`
 

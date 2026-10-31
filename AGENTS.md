@@ -118,8 +118,10 @@ No arguments currently means smoke mode. The main environment variables are:
 - `GVM_SOCKET_PATH` — defaults to `/run/gvmd/gvmd.sock`.
 - `E2E_RUN_SCAN` — `1`, `true`, or `yes` enables the extended scan from smoke.
 - `E2E_TASK_PROGRESS_TIMEOUT_SECS` — scan progress timeout; defaults to 90.
-- `E2E_READINESS_TIMEOUT_SECS` — combined socket and feed-readiness budget;
-  defaults to 21,000 (350 minutes).
+- `E2E_FEED_MATERIALIZATION_TIMEOUT_SECS` — gvmd socket, feed-volume
+  materialization, and scanner-settle budget; defaults to 5,400 (90 minutes).
+- `E2E_READINESS_TIMEOUT_SECS` — authenticated feed-readiness budget after
+  materialization; defaults to 21,000 (350 minutes).
 - `GVM_VERSION` — Compose runtime image tag; defaults to `stable`.
 
 Use `docker compose -f docker/docker-compose.yml ...` from the repository root.
@@ -177,11 +179,12 @@ The self-hosted runner normally preserves named volumes. Consequences:
   reloads PostgreSQL. Keep this runner-capacity-specific tuning in the workflow
   and ahead of `gvmd`; the image defaults cause excessive checkpoint churn
   during the first SCAP import.
-- The default readiness budget is 21,000 seconds, the readiness step uses
-  GitHub's maximum 360-minute step timeout, and the E2E job is capped at 420
-  minutes. Keep these ceilings coordinated so clean SCAP/CPE aggregation can
-  finish while tests and teardown retain margin. Longer ceilings must never
-  replace or weaken the authenticated scan-config, SCAP, and CERT assertions.
+- Feed materialization and scanner settling have a separate 5,400-second
+  budget. The authenticated readiness gate then receives its full 21,000
+  seconds, and the E2E job is capped at 480 minutes. Keep these ceilings
+  coordinated so clean SCAP/CPE aggregation can finish while tests and teardown
+  retain margin. Longer ceilings must never replace or weaken the authenticated
+  scan-config, no-active-sync, SCAP, CPE, and CERT assertions.
 - The Compose project and volumes are shared by repository-root invocations.
   Avoid concurrent manual runs against the same host/project.
 - `docker compose down` preserves volumes. `docker/scripts/reset.sh` removes

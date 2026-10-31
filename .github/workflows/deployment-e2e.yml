@@ -68,10 +68,15 @@ on:
         type: string
         default: ""
       readiness-timeout-seconds:
-        description: Authenticated socket and feed readiness budget
+        description: Authenticated GMP feed readiness budget after materialization
         required: false
         type: string
         default: "21000"
+      feed-materialization-timeout-seconds:
+        description: Compose socket, feed-volume materialization, and scanner-settle budget
+        required: false
+        type: string
+        default: "5400"
       task-progress-timeout-seconds:
         description: Scan task progress budget
         required: false
@@ -213,7 +218,7 @@ jobs:
       matrix:
         lane: ${{ fromJSON(inputs.lane == 'all' && '["devel-fast","devel-scan","devel-isolated","devel-transport","differential"]' || format('["{0}"]', inputs.lane)) }}
     runs-on: [self-hosted]
-    timeout-minutes: 420
+    timeout-minutes: 480
     env:
       E2E_DEPLOYMENT_ID: ${{ inputs.deployment-id }}
       E2E_PROVIDER_MODE: ${{ inputs.provider-mode }}
@@ -229,6 +234,7 @@ jobs:
       E2E_SCAN_TARGET_HOST: ${{ inputs.scan-target-host }}
       E2E_OCI_IMAGE_REFERENCE: ${{ inputs.oci-image-reference }}
       E2E_READINESS_TIMEOUT_SECS: ${{ inputs.readiness-timeout-seconds }}
+      E2E_FEED_MATERIALIZATION_TIMEOUT_SECS: ${{ inputs.feed-materialization-timeout-seconds }}
       E2E_TASK_PROGRESS_TIMEOUT_SECS: ${{ inputs.task-progress-timeout-seconds }}
       E2E_SOCKET_OPERATION_TIMEOUT_SECS: ${{ inputs.socket-operation-timeout-seconds }}
       E2E_REPORT_EXPORT_TIMEOUT_SECS: ${{ inputs.report-export-timeout-seconds }}
