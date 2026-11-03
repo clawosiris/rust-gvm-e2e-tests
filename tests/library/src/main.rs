@@ -5993,12 +5993,28 @@ async fn assert_same_connection_health(
     )
 }
 
+fn raw_epss_nvt_list_request() -> XmlCommand {
+    XmlCommand::new("get_nvts")
+        .attribute("details", "1")
+        .attribute("lean", "1")
+        .attribute("skip_cert_refs", "1")
+        .attribute("skip_tags", "1")
+}
+
+fn typed_epss_nvt_list_request() -> GetNvtsRequest {
+    GetNvtsRequest {
+        details: Some(true),
+        lean: Some(true),
+        skip_cert_refs: Some(true),
+        skip_tags: Some(true),
+        ..GetNvtsRequest::default()
+    }
+}
+
 async fn qualify_nvt_epss_projection(
     client: &mut GmpClient<UnixSocketConnection>,
 ) -> Result<SelectedEpssNvt, AppError> {
-    let raw_list = client
-        .send(XmlCommand::new("get_nvts").attribute("details", "1"))
-        .await?;
+    let raw_list = client.send(raw_epss_nvt_list_request()).await?;
     assert_status(&raw_list, 200, "raw EPSS NVT list")?;
     let mut raw_items = parse_raw_epss_items(raw_list.as_str()?, "nvt")?;
     raw_items.sort_by(|left, right| left.id.cmp(&right.id));
@@ -6012,12 +6028,7 @@ async fn qualify_nvt_epss_projection(
         "raw NVT list",
     )?;
 
-    let typed_list = client
-        .get_nvts(GetNvtsRequest {
-            details: Some(true),
-            ..GetNvtsRequest::default()
-        })
-        .await?;
+    let typed_list = client.get_nvts(typed_epss_nvt_list_request()).await?;
     assert_typed_status(
         typed_list.status,
         &typed_list.status_text,
@@ -11842,6 +11853,17 @@ mod tests {
         .expect("typed EPSS values are finite and in range");
         assert_epss_projection_equal(&epss, &typed_epss, "unit raw/typed")
             .expect("raw and typed helpers agree");
+    }
+
+    #[test]
+    fn epss_nvt_discovery_uses_matching_lean_bounded_requests() {
+        let raw = String::from_utf8(gvm_protocol::Request::to_bytes(&raw_epss_nvt_list_request()))
+            .expect("raw request should be UTF-8");
+        let typed = request_xml(&typed_epss_nvt_list_request());
+        let expected = r#"<get_nvts details="1" lean="1" skip_cert_refs="1" skip_tags="1"/>"#;
+
+        assert_eq!(raw, expected);
+        assert_eq!(typed, expected);
     }
 
     #[test]
