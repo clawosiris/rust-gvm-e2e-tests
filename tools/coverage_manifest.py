@@ -65,8 +65,9 @@ IMPLEMENTED_FEATURE_COMMANDS = {
 FEATURE_CATALOG_PATH = ROOT / "coverage/feature-catalog.json"
 LIVE_HELP_ALLOWLIST_PATH = ROOT / "coverage/live-help-allowlist.json"
 EPSS_REGRESSION_PATH = ROOT / "fixtures/epss-result-regression.json"
+EPSS_PROJECTION_PARITY_PATH = ROOT / "fixtures/epss-projection-parity.json"
 ISSUE_715_VALIDATION_PATH = ROOT / "fixtures/issue-715-validation.json"
-REVIEWED_RUST_GVM_SHA = "f20a01f7297060f02b6f577bba7261cacb585fc3"
+REVIEWED_RUST_GVM_SHA = "d57605b5d1284c36e3f4e58112a6a987baa3395b"
 
 
 def load_feature_catalog() -> dict[str, object]:
@@ -96,6 +97,36 @@ def load_epss_regression() -> dict[str, object]:
     ]
     if not isinstance(probes, list) or [probe.get("field") for probe in probes] != expected_fields:
         raise ValueError("EPSS regression fixture must contain the four ordered gvmd fields")
+    return regression
+
+
+def load_epss_projection_parity() -> dict[str, object]:
+    regression = json.loads(EPSS_PROJECTION_PARITY_PATH.read_text(encoding="utf-8"))
+    required = {
+        "schema_version",
+        "issue",
+        "upstream_pull_request",
+        "rust_gvm_sha",
+        "lane",
+        "surfaces",
+        "import_fixture",
+        "qod",
+    }
+    if set(regression) != required or regression["schema_version"] != 1:
+        raise ValueError("EPSS projection parity fixture must use schema_version 1 and exact fields")
+    if regression["issue"] != 231 or regression["rust_gvm_sha"] != REVIEWED_RUST_GVM_SHA:
+        raise ValueError("EPSS projection parity fixture must pin issue #231 and the reviewed SHA")
+    if regression["lane"] != "devel-scan" or regression["surfaces"] != [
+        "nvt-list",
+        "nvt-detail",
+        "imported-result-list",
+        "imported-result-detail",
+    ]:
+        raise ValueError("EPSS projection parity fixture must enumerate the four ordered scan surfaces")
+    if regression["import_fixture"] != "fixtures/import-report.xml":
+        raise ValueError("EPSS projection parity fixture must use the sanitized import report")
+    if regression["qod"] != {"value": 87, "type": "remote_banner"}:
+        raise ValueError("EPSS projection parity fixture must preserve the explicit QoD")
     return regression
 
 
@@ -824,6 +855,7 @@ def build_manifest(
         "live_help_allowlist": live_help_allowlist,
         "regressions": {
             "gvmd-epss-result-filter-sort": load_epss_regression(),
+            "rust-gvm-epss-projection-parity": load_epss_projection_parity(),
             "issue-715-validation-error-layer": load_issue_715_validation(),
         },
         "feature_catalog": load_feature_catalog()["features"],
@@ -854,6 +886,7 @@ def render_markdown(manifest: dict[str, object]) -> str:
     migrations = manifest["helper_migrations"]
     live_help_allowlist = manifest["live_help_allowlist"]
     epss = manifest["regressions"]["gvmd-epss-result-filter-sort"]
+    epss_projection = manifest["regressions"]["rust-gvm-epss-projection-parity"]
     issue_715 = manifest["regressions"]["issue-715-validation-error-layer"]
     counts = {
         disposition: sum(
@@ -921,6 +954,15 @@ def render_markdown(manifest: dict[str, object]) -> str:
     )
     lines.extend(
         [
+            "",
+            "### EPSS typed projection parity",
+            "",
+            f"- upstream typed projection: [{epss_projection['upstream_pull_request']}]({epss_projection['upstream_pull_request']}) at exact rust-gvm source `{epss_projection['rust_gvm_sha']}`",
+            "- lane: `devel-scan`; deterministic selection: lowest-OID EPSS-bearing NVT in the live feed",
+            "- raw and typed GMP projections are compared independently for NVT list/detail and imported result list/detail, with `get_version` after every sequence",
+            f"- sanitized import fixture: `{epss_projection['import_fixture']}`; mandatory result QoD: `{epss_projection['qod']['value']}` / `{epss_projection['qod']['type']}`",
+            "- result artifacts record exact E2E, rust-gvm, gvmd source/image provenance, selected OID, imported identities, EPSS values, and QoD",
+            "- this value-projection qualification is separate from the gvmd filter/sort connection-health regression above",
             "",
             "### Issue #715 typed validation/error layer",
             "",

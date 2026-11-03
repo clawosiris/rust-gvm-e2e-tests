@@ -219,12 +219,27 @@ class CoveragePolicyTests(unittest.TestCase):
             MANIFEST.rationale_for("get_results", "nightly-live"),
         )
 
+    def test_epss_projection_parity_is_separate_and_revision_pinned(self):
+        regression = MANIFEST.load_epss_projection_parity()
+        self.assertEqual(regression["issue"], 231)
+        self.assertEqual(regression["rust_gvm_sha"], MANIFEST.REVIEWED_RUST_GVM_SHA)
+        self.assertEqual(
+            regression["surfaces"],
+            [
+                "nvt-list",
+                "nvt-detail",
+                "imported-result-list",
+                "imported-result-detail",
+            ],
+        )
+        self.assertEqual(regression["qod"], {"value": 87, "type": "remote_banner"})
+
     def test_issue_715_validation_fixture_covers_live_and_socket_cases(self):
         fixture = MANIFEST.load_issue_715_validation()
         self.assertEqual(fixture["issue"], 715)
         self.assertEqual(
             fixture["rust_gvm_sha"],
-            "f20a01f7297060f02b6f577bba7261cacb585fc3",
+            "d57605b5d1284c36e3f4e58112a6a987baa3395b",
         )
         self.assertEqual(
             [case["command"] for case in fixture["live_cases"]],

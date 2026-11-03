@@ -739,8 +739,8 @@ dependencies = [
 
 [[package]]
 name = "gvm-client"
-version = "0.8.0"
-source = "git+https://github.com/greenbone-hive/rust-gvm.git?rev=f20a01f7297060f02b6f577bba7261cacb585fc3#f20a01f7297060f02b6f577bba7261cacb585fc3"
+version = "0.9.0"
+source = "git+https://github.com/greenbone-hive/rust-gvm.git?rev=d57605b5d1284c36e3f4e58112a6a987baa3395b#d57605b5d1284c36e3f4e58112a6a987baa3395b"
 dependencies = [
  "async-trait",
  "gvm-connection",
@@ -769,8 +769,8 @@ dependencies = [
 
 [[package]]
 name = "gvm-connection"
-version = "0.8.0"
-source = "git+https://github.com/greenbone-hive/rust-gvm.git?rev=f20a01f7297060f02b6f577bba7261cacb585fc3#f20a01f7297060f02b6f577bba7261cacb585fc3"
+version = "0.9.0"
+source = "git+https://github.com/greenbone-hive/rust-gvm.git?rev=d57605b5d1284c36e3f4e58112a6a987baa3395b#d57605b5d1284c36e3f4e58112a6a987baa3395b"
 dependencies = [
  "async-trait",
  "gvm-protocol",
@@ -786,8 +786,8 @@ dependencies = [
 
 [[package]]
 name = "gvm-gmp"
-version = "0.8.0"
-source = "git+https://github.com/greenbone-hive/rust-gvm.git?rev=f20a01f7297060f02b6f577bba7261cacb585fc3#f20a01f7297060f02b6f577bba7261cacb585fc3"
+version = "0.9.0"
+source = "git+https://github.com/greenbone-hive/rust-gvm.git?rev=d57605b5d1284c36e3f4e58112a6a987baa3395b#d57605b5d1284c36e3f4e58112a6a987baa3395b"
 dependencies = [
  "base64",
  "chrono",
@@ -799,8 +799,8 @@ dependencies = [
 
 [[package]]
 name = "gvm-protocol"
-version = "0.8.0"
-source = "git+https://github.com/greenbone-hive/rust-gvm.git?rev=f20a01f7297060f02b6f577bba7261cacb585fc3#f20a01f7297060f02b6f577bba7261cacb585fc3"
+version = "0.9.0"
+source = "git+https://github.com/greenbone-hive/rust-gvm.git?rev=d57605b5d1284c36e3f4e58112a6a987baa3395b#d57605b5d1284c36e3f4e58112a6a987baa3395b"
 dependencies = [
  "quick-xml",
  "thiserror",

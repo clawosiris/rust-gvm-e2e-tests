@@ -257,6 +257,7 @@ services:
       GVMD_VERSION: ${GVMD_VERSION:-}
       GVMD_IMAGE: ${GVMD_IMAGE:-}
       E2E_RUST_GVM_SHA: ${E2E_RUST_GVM_SHA:-}
+      E2E_REPOSITORY_SHA: ${E2E_REPOSITORY_SHA:-}
       E2E_DEPLOYMENT_ID: ${E2E_DEPLOYMENT_ID:-community-stable}
       E2E_DEPLOYMENT_CONTRACT_PATH: ${E2E_DEPLOYMENT_CONTRACT_PATH:-/workspace/contracts/community-stable.json}
       E2E_FIXTURE_DESCRIPTOR_PATH: ${E2E_FIXTURE_DESCRIPTOR_PATH:-/workspace/fixtures/community-provider.json}

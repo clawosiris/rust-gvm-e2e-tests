@@ -72,6 +72,7 @@ use gvm_gmp::responses::result::{GetResultsResponse, ScanResult};
 use gvm_gmp::responses::scanner::GetScannersResponse;
 use gvm_gmp::responses::task::{GetTasksResponse, Task};
 use gvm_gmp::responses::ActionResponse;
+use gvm_gmp::responses::{Epss, EpssSelection};
 use gvm_gmp::types::{CollectionUpdate, EntityId, GmpVersion};
 #[cfg(test)]
 use gvm_gmp::GmpRequestCodec;
@@ -5649,6 +5650,681 @@ async fn run_epss_result_regression(
     Ok(())
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+struct RawEpssSelection {
+    score: Option<String>,
+    percentile: Option<String>,
+    cve_id: Option<String>,
+    cve_severity: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct RawEpss {
+    max_severity: RawEpssSelection,
+    max_epss: RawEpssSelection,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct RawEpssItem {
+    id: String,
+    nvt_oid: Option<String>,
+    epss: Option<RawEpss>,
+    qod_value: Option<String>,
+    qod_type: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct RawEpssItemBuilder {
+    item: RawEpssItem,
+    item_depth: usize,
+    saw_epss: bool,
+    epss: RawEpss,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ComparableEpssSelection {
+    score: f64,
+    percentile: f64,
+    cve_id: String,
+    cve_severity: Option<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ComparableEpss {
+    max_severity: ComparableEpssSelection,
+    max_epss: ComparableEpssSelection,
+}
+
+#[derive(Clone, Debug)]
+struct SelectedEpssNvt {
+    oid: String,
+    epss: ComparableEpss,
+}
+
+fn path_ends_with(path: &[String], suffix: &[&str]) -> bool {
+    path.len() >= suffix.len()
+        && path[path.len() - suffix.len()..]
+            .iter()
+            .map(String::as_str)
+            .eq(suffix.iter().copied())
+}
+
+fn normalized_attribute(
+    event: &quick_xml::events::BytesStart<'_>,
+    name: &str,
+) -> Result<Option<String>, AppError> {
+    event
+        .attributes()
+        .flatten()
+        .find(|attribute| attribute.key.as_ref() == name)
+        .map(|attribute| {
+            attribute
+                .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                .map(|value| value.into_owned())
+                .map_err(AppError::from)
+        })
+        .transpose()
+}
+
+fn append_text(target: &mut Option<String>, value: &str) {
+    target.get_or_insert_with(String::new).push_str(value);
+}
+
+fn record_raw_epss_start(
+    builder: &mut RawEpssItemBuilder,
+    path: &[String],
+    event: &quick_xml::events::BytesStart<'_>,
+) -> Result<(), AppError> {
+    if path.last().is_some_and(|name| name == "nvt") {
+        builder.item.nvt_oid = normalized_attribute(event, "oid")?;
+    }
+    if path.last().is_some_and(|name| name == "epss") {
+        builder.saw_epss = true;
+    }
+    if path_ends_with(path, &["epss", "max_severity", "cve"]) {
+        builder.epss.max_severity.cve_id = normalized_attribute(event, "id")?;
+    } else if path_ends_with(path, &["epss", "max_epss", "cve"]) {
+        builder.epss.max_epss.cve_id = normalized_attribute(event, "id")?;
+    }
+    Ok(())
+}
+
+fn raw_epss_selection(
+    selection: RawEpssSelection,
+    label: &str,
+) -> Result<RawEpssSelection, AppError> {
+    for (field, value) in [
+        ("score", selection.score.as_deref()),
+        ("percentile", selection.percentile.as_deref()),
+        ("cve.id", selection.cve_id.as_deref()),
+    ] {
+        ensure(
+            value.is_some(),
+            &format!("raw EPSS {label}.{field} is missing"),
+        )?;
+    }
+    Ok(selection)
+}
+
+fn parse_raw_epss_items(xml: &str, item_element: &str) -> Result<Vec<RawEpssItem>, AppError> {
+    let mut reader = Reader::from_str(xml);
+    let mut path = Vec::<String>::new();
+    let mut current: Option<RawEpssItemBuilder> = None;
+    let mut items = Vec::new();
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref event) => {
+                let name = event.name().as_ref().to_string();
+                path.push(name.clone());
+                if current.is_none() && name == item_element {
+                    let id_attribute = if item_element == "nvt" { "oid" } else { "id" };
+                    let id = normalized_attribute(event, id_attribute)?.ok_or_else(|| {
+                        AppError::Assertion(format!(
+                            "raw {item_element} response item omitted {id_attribute:?}"
+                        ))
+                    })?;
+                    current = Some(RawEpssItemBuilder {
+                        item: RawEpssItem {
+                            id,
+                            ..RawEpssItem::default()
+                        },
+                        item_depth: path.len(),
+                        ..RawEpssItemBuilder::default()
+                    });
+                }
+                if let Some(builder) = current.as_mut() {
+                    record_raw_epss_start(builder, &path, event)?;
+                }
+            }
+            Event::Empty(ref event) => {
+                if let Some(builder) = current.as_mut() {
+                    let name = event.name().as_ref().to_string();
+                    path.push(name);
+                    record_raw_epss_start(builder, &path, event)?;
+                    path.pop();
+                }
+            }
+            Event::Text(ref event) => {
+                let Some(builder) = current.as_mut() else {
+                    continue;
+                };
+                let text = event
+                    .xml_content(quick_xml::XmlVersion::Implicit1_0)
+                    .into_owned();
+                if path_ends_with(&path, &["epss", "max_severity", "score"]) {
+                    append_text(&mut builder.epss.max_severity.score, &text);
+                } else if path_ends_with(&path, &["epss", "max_severity", "percentile"]) {
+                    append_text(&mut builder.epss.max_severity.percentile, &text);
+                } else if path_ends_with(&path, &["epss", "max_severity", "cve", "severity"]) {
+                    append_text(&mut builder.epss.max_severity.cve_severity, &text);
+                } else if path_ends_with(&path, &["epss", "max_epss", "score"]) {
+                    append_text(&mut builder.epss.max_epss.score, &text);
+                } else if path_ends_with(&path, &["epss", "max_epss", "percentile"]) {
+                    append_text(&mut builder.epss.max_epss.percentile, &text);
+                } else if path_ends_with(&path, &["epss", "max_epss", "cve", "severity"]) {
+                    append_text(&mut builder.epss.max_epss.cve_severity, &text);
+                } else if path_ends_with(&path, &["qod", "value"]) {
+                    append_text(&mut builder.item.qod_value, &text);
+                } else if path_ends_with(&path, &["qod", "type"]) {
+                    append_text(&mut builder.item.qod_type, &text);
+                }
+            }
+            Event::End(ref event) => {
+                let name = event.name();
+                if name.as_ref() == item_element
+                    && current
+                        .as_ref()
+                        .is_some_and(|builder| builder.item_depth == path.len())
+                {
+                    let mut builder = current.take().expect("current item exists");
+                    if builder.saw_epss {
+                        builder.epss.max_severity =
+                            raw_epss_selection(builder.epss.max_severity, "max_severity")?;
+                        builder.epss.max_epss =
+                            raw_epss_selection(builder.epss.max_epss, "max_epss")?;
+                        builder.item.epss = Some(builder.epss);
+                    }
+                    items.push(builder.item);
+                }
+                path.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    ensure(current.is_none(), "raw EPSS response ended inside an item")?;
+    Ok(items)
+}
+
+fn finite_value(value: &str, label: &str) -> Result<f64, AppError> {
+    let parsed = value.parse::<f64>().map_err(|_| {
+        AppError::Assertion(format!("{label} is not valid numeric text: {value:?}"))
+    })?;
+    ensure(parsed.is_finite(), &format!("{label} is not finite"))?;
+    Ok(parsed)
+}
+
+fn comparable_selection_from_raw(
+    selection: &RawEpssSelection,
+    label: &str,
+) -> Result<ComparableEpssSelection, AppError> {
+    let score = selection
+        .score
+        .as_deref()
+        .ok_or_else(|| AppError::Assertion(format!("raw EPSS {label}.score is missing")))?;
+    let percentile = selection
+        .percentile
+        .as_deref()
+        .ok_or_else(|| AppError::Assertion(format!("raw EPSS {label}.percentile is missing")))?;
+    let cve_id = selection
+        .cve_id
+        .as_deref()
+        .ok_or_else(|| AppError::Assertion(format!("raw EPSS {label}.cve.id is missing")))?;
+    Ok(ComparableEpssSelection {
+        score: finite_value(score, &format!("{label}.score"))?,
+        percentile: finite_value(percentile, &format!("{label}.percentile"))?,
+        cve_id: cve_id.to_string(),
+        cve_severity: selection
+            .cve_severity
+            .as_deref()
+            .map(|value| finite_value(value, &format!("{label}.cve.severity")))
+            .transpose()?,
+    })
+}
+
+fn comparable_selection_from_typed(
+    selection: &EpssSelection,
+    label: &str,
+) -> Result<ComparableEpssSelection, AppError> {
+    Ok(ComparableEpssSelection {
+        score: finite_value(&selection.score, &format!("typed {label}.score"))?,
+        percentile: finite_value(&selection.percentile, &format!("typed {label}.percentile"))?,
+        cve_id: selection.cve.id.clone(),
+        cve_severity: selection
+            .cve
+            .severity
+            .as_deref()
+            .map(|value| finite_value(value, &format!("typed {label}.cve.severity")))
+            .transpose()?,
+    })
+}
+
+fn validate_epss_ranges(epss: &ComparableEpss, label: &str) -> Result<(), AppError> {
+    for (selection_name, selection) in [
+        ("max_severity", &epss.max_severity),
+        ("max_epss", &epss.max_epss),
+    ] {
+        ensure(
+            (0.0..=1.0).contains(&selection.score),
+            &format!("{label}.{selection_name}.score is outside 0..=1"),
+        )?;
+        ensure(
+            (0.0..=100.0).contains(&selection.percentile),
+            &format!(
+                "{label}.{selection_name}.percentile is outside gvmd's native 0..=100 percentage"
+            ),
+        )?;
+        ensure(
+            !selection.cve_id.is_empty(),
+            &format!("{label}.{selection_name}.cve.id is empty"),
+        )?;
+        if let Some(severity) = selection.cve_severity {
+            ensure(
+                (0.0..=10.0).contains(&severity),
+                &format!("{label}.{selection_name}.cve.severity is outside 0..=10"),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn comparable_epss_from_raw(raw: &RawEpss, label: &str) -> Result<ComparableEpss, AppError> {
+    let epss = ComparableEpss {
+        max_severity: comparable_selection_from_raw(
+            &raw.max_severity,
+            &format!("{label}.max_severity"),
+        )?,
+        max_epss: comparable_selection_from_raw(&raw.max_epss, &format!("{label}.max_epss"))?,
+    };
+    validate_epss_ranges(&epss, label)?;
+    Ok(epss)
+}
+
+fn comparable_epss_from_typed(epss: &Epss, label: &str) -> Result<ComparableEpss, AppError> {
+    let comparable = ComparableEpss {
+        max_severity: comparable_selection_from_typed(
+            &epss.max_severity,
+            &format!("{label}.max_severity"),
+        )?,
+        max_epss: comparable_selection_from_typed(&epss.max_epss, &format!("{label}.max_epss"))?,
+    };
+    validate_epss_ranges(&comparable, label)?;
+    Ok(comparable)
+}
+
+fn assert_epss_projection_equal(
+    raw: &ComparableEpss,
+    typed: &ComparableEpss,
+    label: &str,
+) -> Result<(), AppError> {
+    ensure(
+        raw.max_severity == typed.max_severity,
+        &format!("{label} max_severity raw/typed projection mismatch"),
+    )?;
+    ensure(
+        raw.max_epss == typed.max_epss,
+        &format!("{label} max_epss raw/typed projection mismatch"),
+    )
+}
+
+async fn assert_same_connection_health(
+    client: &mut GmpClient<UnixSocketConnection>,
+    label: &str,
+) -> Result<(), AppError> {
+    let expected = client.version().to_string();
+    let version = client.get_version(GetVersionRequest::new()).await?;
+    ensure(
+        version.version == expected,
+        &format!(
+            "{label} same-connection get_version changed GMP version from {expected} to {}",
+            version.version
+        ),
+    )
+}
+
+async fn qualify_nvt_epss_projection(
+    client: &mut GmpClient<UnixSocketConnection>,
+) -> Result<SelectedEpssNvt, AppError> {
+    let raw_list = client
+        .send(XmlCommand::new("get_nvts").attribute("details", "1"))
+        .await?;
+    assert_status(&raw_list, 200, "raw EPSS NVT list")?;
+    let mut raw_items = parse_raw_epss_items(raw_list.as_str()?, "nvt")?;
+    raw_items.sort_by(|left, right| left.id.cmp(&right.id));
+    let raw_selected = raw_items
+        .iter()
+        .find(|item| item.epss.is_some())
+        .ok_or_else(|| AppError::Assertion("live feed contains no EPSS-bearing NVT".to_string()))?;
+    let selected_oid = raw_selected.id.clone();
+    let raw_list_epss = comparable_epss_from_raw(
+        raw_selected.epss.as_ref().expect("selected item has EPSS"),
+        "raw NVT list",
+    )?;
+
+    let typed_list = client
+        .get_nvts(GetNvtsRequest {
+            details: Some(true),
+            ..GetNvtsRequest::default()
+        })
+        .await?;
+    assert_typed_status(
+        typed_list.status,
+        &typed_list.status_text,
+        200,
+        "typed EPSS NVT list",
+    )?;
+    let typed_selected = typed_list
+        .items
+        .iter()
+        .find(|nvt| nvt.oid == selected_oid)
+        .ok_or_else(|| {
+            AppError::Assertion(format!(
+                "typed NVT list omitted deterministic EPSS OID {selected_oid}"
+            ))
+        })?;
+    let typed_list_epss = comparable_epss_from_typed(
+        typed_selected.epss.as_ref().ok_or_else(|| {
+            AppError::Assertion(format!(
+                "typed NVT list omitted EPSS for deterministic OID {selected_oid}"
+            ))
+        })?,
+        "typed NVT list",
+    )?;
+    assert_epss_projection_equal(&raw_list_epss, &typed_list_epss, "NVT list")?;
+    assert_same_connection_health(client, "NVT list raw/typed sequence").await?;
+
+    let raw_detail = client
+        .send(
+            XmlCommand::new("get_nvts")
+                .attribute("nvt_oid", &selected_oid)
+                .attribute("details", "1"),
+        )
+        .await?;
+    assert_status(&raw_detail, 200, "raw EPSS NVT detail")?;
+    let raw_detail_items = parse_raw_epss_items(raw_detail.as_str()?, "nvt")?;
+    ensure(
+        raw_detail_items.len() == 1 && raw_detail_items[0].id == selected_oid,
+        &format!("raw NVT detail did not return exactly {selected_oid}"),
+    )?;
+    let raw_detail_epss = comparable_epss_from_raw(
+        raw_detail_items[0].epss.as_ref().ok_or_else(|| {
+            AppError::Assertion(format!("raw NVT detail omitted EPSS for {selected_oid}"))
+        })?,
+        "raw NVT detail",
+    )?;
+
+    let typed_detail = client.get_nvt(GetNvtRequest::new(&selected_oid)).await?;
+    assert_typed_status(
+        typed_detail.status,
+        &typed_detail.status_text,
+        200,
+        "typed EPSS NVT detail",
+    )?;
+    ensure(
+        typed_detail.items.len() == 1 && typed_detail.items[0].oid == selected_oid,
+        &format!("typed NVT detail did not return exactly {selected_oid}"),
+    )?;
+    let typed_detail_epss = comparable_epss_from_typed(
+        typed_detail.items[0].epss.as_ref().ok_or_else(|| {
+            AppError::Assertion(format!("typed NVT detail omitted EPSS for {selected_oid}"))
+        })?,
+        "typed NVT detail",
+    )?;
+    assert_epss_projection_equal(&raw_detail_epss, &typed_detail_epss, "NVT detail")?;
+    ensure(
+        raw_list_epss == raw_detail_epss && typed_list_epss == typed_detail_epss,
+        &format!("NVT list/detail EPSS projection disagrees for {selected_oid}"),
+    )?;
+    assert_same_connection_health(client, "NVT detail raw/typed sequence").await?;
+
+    Ok(SelectedEpssNvt {
+        oid: selected_oid,
+        epss: typed_detail_epss,
+    })
+}
+
+fn exact_sha_env(name: &str) -> Result<String, AppError> {
+    let value = env::var(name)
+        .ok()
+        .filter(|value| {
+            value.len() == 40
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+        .ok_or_else(|| AppError::Assertion(format!("{name} must be an exact lowercase SHA")))?;
+    Ok(value)
+}
+
+fn comparable_epss_json(epss: &ComparableEpss) -> Value {
+    serde_json::json!({
+        "max_severity": {
+            "score": epss.max_severity.score,
+            "percentile": epss.max_severity.percentile,
+            "cve_id": epss.max_severity.cve_id,
+            "cve_severity": epss.max_severity.cve_severity,
+        },
+        "max_epss": {
+            "score": epss.max_epss.score,
+            "percentile": epss.max_epss.percentile,
+            "cve_id": epss.max_epss.cve_id,
+            "cve_severity": epss.max_epss.cve_severity,
+        },
+    })
+}
+
+async fn qualify_imported_result_epss_projection(
+    client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    selected_nvt: &SelectedEpssNvt,
+    imported_report_id: &EntityId,
+    expected_result_id: &EntityId,
+    expected_qod_value: u32,
+    expected_qod_type: &str,
+) -> Result<(), AppError> {
+    let deadline = Instant::now() + Duration::from_secs(config.task_progress_timeout_secs);
+    let (raw_result, typed_result) = loop {
+        let filter = format!("report_id={imported_report_id} rows=-1");
+        let raw_list = client
+            .send(
+                XmlCommand::new("get_results")
+                    .attribute("filter", &filter)
+                    .attribute("details", "1")
+                    .attribute("get_counts", "1"),
+            )
+            .await?;
+        assert_status(&raw_list, 200, "raw imported result list")?;
+        let raw_items = parse_raw_epss_items(raw_list.as_str()?, "result")?;
+
+        let typed_list = client
+            .get_results(GetResultsRequest {
+                filter_string: Some(filter),
+                details: Some(true),
+                get_counts: Some(true),
+                ..GetResultsRequest::default()
+            })
+            .await?;
+        assert_typed_status(
+            typed_list.status,
+            &typed_list.status_text,
+            200,
+            "typed imported result list",
+        )?;
+        assert_same_connection_health(client, "imported result list raw/typed sequence").await?;
+
+        let raw = raw_items
+            .into_iter()
+            .find(|item| item.id == expected_result_id.as_str());
+        let typed = typed_list
+            .items
+            .into_iter()
+            .find(|item| item.meta.id == *expected_result_id);
+        ensure(
+            raw.is_some() == typed.is_some(),
+            "raw and typed imported result lists disagree on mandatory result presence",
+        )?;
+        if let (Some(raw), Some(typed)) = (raw, typed) {
+            break (raw, typed);
+        }
+        ensure(
+            Instant::now() < deadline,
+            &format!(
+                "imported report {imported_report_id} did not expose mandatory result {expected_result_id} before timeout"
+            ),
+        )?;
+        sleep(Duration::from_secs(1)).await;
+    };
+
+    let raw_list_epss = comparable_epss_from_raw(
+        raw_result.epss.as_ref().ok_or_else(|| {
+            AppError::Assertion(format!(
+                "raw imported result {expected_result_id} omitted EPSS"
+            ))
+        })?,
+        "raw imported result list",
+    )?;
+    let typed_list_epss = comparable_epss_from_typed(
+        typed_result
+            .nvt
+            .as_ref()
+            .and_then(|nvt| nvt.epss.as_ref())
+            .ok_or_else(|| {
+                AppError::Assertion(format!(
+                    "typed imported result {expected_result_id} omitted NVT EPSS"
+                ))
+            })?,
+        "typed imported result list",
+    )?;
+    ensure(
+        raw_result.nvt_oid.as_deref() == Some(selected_nvt.oid.as_str())
+            && typed_result
+                .nvt
+                .as_ref()
+                .is_some_and(|nvt| nvt.oid == selected_nvt.oid),
+        "imported result list did not retain the selected NVT OID",
+    )?;
+    assert_epss_projection_equal(&raw_list_epss, &typed_list_epss, "imported result list")?;
+    ensure(
+        typed_list_epss == selected_nvt.epss,
+        "imported result EPSS does not match the selected live NVT",
+    )?;
+
+    let raw_qod_value = raw_result
+        .qod_value
+        .as_deref()
+        .ok_or_else(|| AppError::Assertion("raw imported result omitted QoD value".to_string()))?
+        .parse::<u32>()
+        .map_err(|_| AppError::Assertion("raw imported result QoD is malformed".to_string()))?;
+    ensure(
+        typed_result.qod.as_ref().is_some_and(|qod| {
+            qod.value == Some(expected_qod_value) && qod.type_.as_deref() == Some(expected_qod_type)
+        }) && raw_qod_value == expected_qod_value
+            && raw_result.qod_type.as_deref() == Some(expected_qod_type),
+        "imported result raw/typed QoD projection mismatch",
+    )?;
+
+    let raw_detail = client
+        .send(
+            XmlCommand::new("get_results")
+                .attribute("result_id", expected_result_id.as_str())
+                .attribute("details", "1"),
+        )
+        .await?;
+    assert_status(&raw_detail, 200, "raw imported result detail")?;
+    let raw_detail_items = parse_raw_epss_items(raw_detail.as_str()?, "result")?;
+    ensure(
+        raw_detail_items.len() == 1 && raw_detail_items[0].id == expected_result_id.as_str(),
+        "raw imported result detail did not return exactly the mandatory result",
+    )?;
+    let raw_detail_epss = comparable_epss_from_raw(
+        raw_detail_items[0].epss.as_ref().ok_or_else(|| {
+            AppError::Assertion("raw imported result detail omitted EPSS".to_string())
+        })?,
+        "raw imported result detail",
+    )?;
+
+    let typed_detail = client
+        .get_result(GetResultRequest::new(expected_result_id.clone()))
+        .await?;
+    assert_typed_status(
+        typed_detail.status,
+        &typed_detail.status_text,
+        200,
+        "typed imported result detail",
+    )?;
+    ensure(
+        typed_detail.items.len() == 1 && typed_detail.items[0].meta.id == *expected_result_id,
+        "typed imported result detail did not return exactly the mandatory result",
+    )?;
+    let typed_detail_result = &typed_detail.items[0];
+    let typed_detail_epss = comparable_epss_from_typed(
+        typed_detail_result
+            .nvt
+            .as_ref()
+            .and_then(|nvt| nvt.epss.as_ref())
+            .ok_or_else(|| {
+                AppError::Assertion("typed imported result detail omitted NVT EPSS".to_string())
+            })?,
+        "typed imported result detail",
+    )?;
+    assert_epss_projection_equal(
+        &raw_detail_epss,
+        &typed_detail_epss,
+        "imported result detail",
+    )?;
+    ensure(
+        raw_detail_epss == raw_list_epss
+            && typed_detail_epss == typed_list_epss
+            && typed_detail_result.qod.as_ref().is_some_and(|qod| {
+                qod.value == Some(expected_qod_value)
+                    && qod.type_.as_deref() == Some(expected_qod_type)
+            }),
+        "imported result list/detail projection or typed QoD disagrees",
+    )?;
+    assert_same_connection_health(client, "imported result detail raw/typed sequence").await?;
+
+    let deployment = EpssDeploymentEvidence::from_env()?;
+    let evidence = serde_json::json!({
+        "e2e_sha": exact_sha_env("E2E_REPOSITORY_SHA")?,
+        "rust_gvm_sha": exact_sha_env("E2E_RUST_GVM_SHA")?,
+        "gvmd_version": deployment.gvmd_version,
+        "gvmd_source_revision": deployment.gvmd_source_revision,
+        "gvmd_image_digest": deployment.gvmd_image_digest,
+        "selected_nvt_oid": selected_nvt.oid,
+        "imported_report_id": imported_report_id.as_str(),
+        "imported_result_id": expected_result_id.as_str(),
+        "epss": comparable_epss_json(&typed_detail_epss),
+        "qod": {
+            "value": expected_qod_value,
+            "type": expected_qod_type,
+        },
+    });
+    runtime::observe(
+        "epss:typed-raw-projection-parity",
+        Outcome::Pass,
+        &serde_json::to_string(&evidence)?,
+    );
+    log_pass(
+        "EPSS typed/raw projection parity",
+        &format!(
+            "NVT {} and imported result {} agree across list/detail projections",
+            selected_nvt.oid, expected_result_id
+        ),
+    );
+    Ok(())
+}
+
 fn scan_report_results_request(report_id: &EntityId) -> GetResultsRequest {
     GetResultsRequest {
         filter_string: Some(format!("report_id={report_id} rows=-1")),
@@ -7008,6 +7684,9 @@ async fn run_scan_suite(
         );
     }
 
+    let selected_epss_nvt = qualify_nvt_epss_projection(client).await?;
+    let imported_result_id =
+        parse_entity_id(&fixture_uuid(&config.run_id, "epss-parity-imported-result"))?;
     let mut import_task_request = CreateImportTaskRequest::new(config.name("import-task"));
     import_task_request.comment = Some(config.name("sanitized-report-import"));
     let import_task = client.create_import_task(import_task_request).await?;
@@ -7018,7 +7697,11 @@ async fn run_scan_suite(
         .replace(
             "{{REPORT_ID}}",
             &fixture_uuid(&config.run_id, "rust-gvm-e2e-report"),
-        );
+        )
+        .replace("{{RESULT_ID}}", imported_result_id.as_str())
+        .replace("{{NVT_OID}}", &selected_epss_nvt.oid)
+        .replace("{{QOD_VALUE}}", "87")
+        .replace("{{QOD_TYPE}}", "remote_banner");
     let mut import_request =
         ImportReportRequest::new(import_task.id.clone(), import_xml.as_bytes());
     import_request.in_assets = Some(false);
@@ -7029,6 +7712,16 @@ async fn run_scan_suite(
         "report import",
         "sanitized fixture create_import_task/import_report; report and parent-task cleanup tracked",
     );
+    qualify_imported_result_epss_projection(
+        client,
+        config,
+        &selected_epss_nvt,
+        &imported.id,
+        &imported_result_id,
+        87,
+        "remote_banner",
+    )
+    .await?;
 
     let delete_report = client
         .delete_report(DeleteReportRequest::new(report_id.clone()))
@@ -11097,7 +11790,11 @@ mod tests {
         let task_id = EntityId::new("import-task").expect("valid task id");
         let report_xml = include_str!("../../../fixtures/import-report.xml")
             .replace("{{RUN_NAME}}", "imported-report")
-            .replace("{{REPORT_ID}}", "89245cdb-8f0a-4ae9-8505-d60713578915");
+            .replace("{{REPORT_ID}}", "89245cdb-8f0a-4ae9-8505-d60713578915")
+            .replace("{{RESULT_ID}}", "4c5ccf20-b86c-46dc-b165-423b6bfa47c3")
+            .replace("{{NVT_OID}}", "1.3.6.1.4.1.25623.1.0.100000")
+            .replace("{{QOD_VALUE}}", "87")
+            .replace("{{QOD_TYPE}}", "remote_banner");
         let mut request = ImportReportRequest::new(task_id, report_xml.as_bytes());
         request.in_assets = Some(false);
         let xml = request_xml(&request);
@@ -11105,9 +11802,107 @@ mod tests {
         assert!(xml.starts_with(r#"<create_report><report "#));
         assert!(!xml.contains("<?xml"));
         assert!(!xml.contains("<!DOCTYPE"));
+        assert!(xml.contains(r#"<result id="4c5ccf20-b86c-46dc-b165-423b6bfa47c3">"#));
+        assert!(xml.contains(r#"<nvt oid="1.3.6.1.4.1.25623.1.0.100000">"#));
+        assert!(
+            xml.contains("<qod>\n        <value>87</value>\n        <type>remote_banner</type>")
+        );
         assert!(xml.ends_with(
             "</report>\n<task id=\"import-task\"/><in_assets>0</in_assets></create_report>"
         ));
+    }
+
+    #[test]
+    fn raw_epss_parser_preserves_distinct_selections_optional_severity_and_qod() {
+        let xml = r#"<get_results_response status="200" status_text="OK"><result id="result-1"><nvt oid="1.3.6.1"><epss><max_severity><score>0.125</score><percentile>87.5</percentile><cve id="CVE-2026-0001"><severity>9.8</severity></cve></max_severity><max_epss><score>0.75</score><percentile>99.1</percentile><cve id="CVE-2026-0002"/></max_epss></epss></nvt><qod><value>87</value><type>remote_banner</type></qod></result></get_results_response>"#;
+        let items = parse_raw_epss_items(xml, "result").expect("raw EPSS response parses");
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "result-1");
+        assert_eq!(items[0].nvt_oid.as_deref(), Some("1.3.6.1"));
+        assert_eq!(items[0].qod_value.as_deref(), Some("87"));
+        assert_eq!(items[0].qod_type.as_deref(), Some("remote_banner"));
+        let epss = comparable_epss_from_raw(items[0].epss.as_ref().expect("EPSS present"), "test")
+            .expect("EPSS values are finite and in range");
+        assert_eq!(epss.max_severity.cve_id, "CVE-2026-0001");
+        assert_eq!(epss.max_severity.cve_severity, Some(9.8));
+        assert_eq!(epss.max_epss.cve_id, "CVE-2026-0002");
+        assert_eq!(epss.max_epss.cve_severity, None);
+
+        let typed = GetResultsResponse::from_response(&Response::from(xml))
+            .expect("typed EPSS response parses");
+        let typed_epss = comparable_epss_from_typed(
+            typed.items[0]
+                .nvt
+                .as_ref()
+                .and_then(|nvt| nvt.epss.as_ref())
+                .expect("typed EPSS present"),
+            "test",
+        )
+        .expect("typed EPSS values are finite and in range");
+        assert_epss_projection_equal(&epss, &typed_epss, "unit raw/typed")
+            .expect("raw and typed helpers agree");
+    }
+
+    #[test]
+    fn raw_epss_parser_distinguishes_absence() {
+        let items = parse_raw_epss_items(
+            r#"<get_nvts_response status="200" status_text="OK"><nvt oid="1.3.6.1"><name>No EPSS</name></nvt></get_nvts_response>"#,
+            "nvt",
+        )
+        .expect("absent EPSS parses");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].epss, None);
+
+        let typed = GetResultsResponse::from_response(&Response::from(
+            r#"<get_results_response status="200" status_text="OK"><result id="result-1"><nvt oid="1.3.6.1"/></result></get_results_response>"#,
+        ))
+        .expect("typed absent EPSS parses");
+        assert_eq!(
+            typed.items[0]
+                .nvt
+                .as_ref()
+                .and_then(|nvt| nvt.epss.as_ref()),
+            None
+        );
+    }
+
+    #[test]
+    fn epss_comparison_rejects_malformed_and_nonfinite_numeric_text() {
+        for value in ["not-a-number", "NaN", "inf", "-inf"] {
+            let raw = RawEpss {
+                max_severity: RawEpssSelection {
+                    score: Some(value.to_string()),
+                    percentile: Some("50".to_string()),
+                    cve_id: Some("CVE-2026-0001".to_string()),
+                    cve_severity: None,
+                },
+                max_epss: RawEpssSelection {
+                    score: Some("0.5".to_string()),
+                    percentile: Some("50".to_string()),
+                    cve_id: Some("CVE-2026-0002".to_string()),
+                    cve_severity: None,
+                },
+            };
+            assert!(comparable_epss_from_raw(&raw, "test").is_err(), "{value}");
+            let xml = format!(
+                r#"<get_results_response status="200" status_text="OK"><result id="result-1"><nvt oid="1.3.6.1"><epss><max_severity><score>{value}</score><percentile>50</percentile><cve id="CVE-2026-0001"/></max_severity><max_epss><score>0.5</score><percentile>50</percentile><cve id="CVE-2026-0002"/></max_epss></epss></nvt></result></get_results_response>"#
+            );
+            let typed = GetResultsResponse::from_response(&Response::from(xml.as_str()))
+                .expect("typed response preserves invalid numeric text");
+            assert!(
+                comparable_epss_from_typed(
+                    typed.items[0]
+                        .nvt
+                        .as_ref()
+                        .and_then(|nvt| nvt.epss.as_ref())
+                        .expect("typed EPSS present"),
+                    "test",
+                )
+                .is_err(),
+                "{value}"
+            );
+        }
     }
 
     #[test]

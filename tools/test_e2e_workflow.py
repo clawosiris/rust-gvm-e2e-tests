@@ -22,7 +22,7 @@ FEED_SNAPSHOT_SCRIPT = (
 COMPOSE_FILE = Path(__file__).parents[1] / "docker/docker-compose.yml"
 CARGO_MANIFEST = Path(__file__).parents[1] / "tests/library/Cargo.toml"
 LOCKFILE = Path(__file__).parents[1] / "Cargo.lock"
-SUPPORTED_RUST_GVM_SHA = "f20a01f7297060f02b6f577bba7261cacb585fc3"
+SUPPORTED_RUST_GVM_SHA = "d57605b5d1284c36e3f4e58112a6a987baa3395b"
 SELF_HOSTED_LANES = {
     "devel-fast",
     "devel-scan",
@@ -172,9 +172,18 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
     def test_workflow_keeps_reviewed_default_and_supports_exact_candidates(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+        reusable_workflow = REUSABLE_WORKFLOW.read_text(encoding="utf-8")
+        lane_script = LANE_SCRIPT.read_text(encoding="utf-8")
+        compose = COMPOSE_FILE.read_text(encoding="utf-8")
 
         self.assertIn(f"RUST_GVM_SHA: {SUPPORTED_RUST_GVM_SHA}", workflow)
         self.assertIn(f"default: {SUPPORTED_RUST_GVM_SHA}", workflow)
+        self.assertIn("E2E_REPOSITORY_SHA: ${{ github.sha }}", workflow)
+        self.assertIn(
+            "E2E_REPOSITORY_SHA: ${{ inputs.harness-ref }}", reusable_workflow
+        )
+        self.assertIn("-e E2E_REPOSITORY_SHA", lane_script)
+        self.assertIn("E2E_REPOSITORY_SHA: ${E2E_REPOSITORY_SHA:-}", compose)
         self.assertIn(
             "RUST_GVM_SHA=${{ steps.refs.outputs.rust-gvm-sha }}", workflow
         )

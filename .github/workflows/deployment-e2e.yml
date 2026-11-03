@@ -226,6 +226,7 @@ jobs:
       E2E_FIXTURE_DESCRIPTOR: .provider-input/fixtures.json
       E2E_PROVIDER_DESCRIPTOR: .provider-input/provider.json
       E2E_RUST_GVM_SHA: ${{ inputs.rust-gvm-ref }}
+      E2E_REPOSITORY_SHA: ${{ inputs.harness-ref }}
       E2E_CLEAN_VOLUMES: ${{ inputs.clean && '1' || '0' }}
       GVM_VERSION: ${{ inputs.runtime-image-version }}
       GVMD_VERSION: ${{ inputs.gvmd-image-version }}

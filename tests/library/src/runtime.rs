@@ -59,6 +59,7 @@ pub struct RunReport {
     pub lane: String,
     pub started_unix_seconds: u64,
     pub finished_unix_seconds: Option<u64>,
+    pub e2e_repository_sha: Option<String>,
     pub rust_gvm_sha: String,
     pub gvm_image_tag: String,
     pub gvmd_image_tag: String,
@@ -107,13 +108,14 @@ impl RunReport {
     #[must_use]
     pub fn new(run_id: &str, lane: &str) -> Self {
         Self {
-            schema_version: 4,
+            schema_version: 5,
             run_id: run_id.to_string(),
             deployment_id: env::var("E2E_DEPLOYMENT_ID")
                 .unwrap_or_else(|_| "community-stable".to_string()),
             lane: lane.to_string(),
             started_unix_seconds: now(),
             finished_unix_seconds: None,
+            e2e_repository_sha: nonempty_env("E2E_REPOSITORY_SHA"),
             rust_gvm_sha: env::var("E2E_RUST_GVM_SHA")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
