@@ -5993,18 +5993,18 @@ async fn assert_same_connection_health(
     )
 }
 
-fn raw_epss_nvt_list_request() -> XmlCommand {
+fn raw_epss_nvt_list_request(family: &str) -> XmlCommand {
     XmlCommand::new("get_nvts")
+        .attribute("family", family)
         .attribute("details", "1")
-        .attribute("lean", "1")
         .attribute("skip_cert_refs", "1")
         .attribute("skip_tags", "1")
 }
 
-fn typed_epss_nvt_list_request() -> GetNvtsRequest {
+fn typed_epss_nvt_list_request(family: &str) -> GetNvtsRequest {
     GetNvtsRequest {
+        family: Some(family.to_string()),
         details: Some(true),
-        lean: Some(true),
         skip_cert_refs: Some(true),
         skip_tags: Some(true),
         ..GetNvtsRequest::default()
@@ -6014,21 +6014,53 @@ fn typed_epss_nvt_list_request() -> GetNvtsRequest {
 async fn qualify_nvt_epss_projection(
     client: &mut GmpClient<UnixSocketConnection>,
 ) -> Result<SelectedEpssNvt, AppError> {
-    let raw_list = client.send(raw_epss_nvt_list_request()).await?;
-    assert_status(&raw_list, 200, "raw EPSS NVT list")?;
-    let mut raw_items = parse_raw_epss_items(raw_list.as_str()?, "nvt")?;
-    raw_items.sort_by(|left, right| left.id.cmp(&right.id));
-    let raw_selected = raw_items
-        .iter()
-        .find(|item| item.epss.is_some())
-        .ok_or_else(|| AppError::Assertion("live feed contains no EPSS-bearing NVT".to_string()))?;
-    let selected_oid = raw_selected.id.clone();
-    let raw_list_epss = comparable_epss_from_raw(
-        raw_selected.epss.as_ref().expect("selected item has EPSS"),
-        "raw NVT list",
+    let families = client
+        .get_nvt_families(GetNvtFamiliesRequest::new())
+        .await?;
+    assert_typed_status(
+        families.status,
+        &families.status_text,
+        200,
+        "typed NVT family list",
+    )?;
+    let mut families = families.items;
+    families.retain(|family| !family.name.is_empty());
+    families.sort_by(|left, right| {
+        left.max_nvt_count
+            .unwrap_or(u32::MAX)
+            .cmp(&right.max_nvt_count.unwrap_or(u32::MAX))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    ensure(
+        !families.is_empty(),
+        "live feed contains no NVT families for bounded EPSS discovery",
     )?;
 
-    let typed_list = client.get_nvts(typed_epss_nvt_list_request()).await?;
+    let mut selected = None;
+    for family in &families {
+        let raw_list = client.send(raw_epss_nvt_list_request(&family.name)).await?;
+        assert_status(
+            &raw_list,
+            200,
+            &format!("raw EPSS NVT list for family {}", family.name),
+        )?;
+        let mut raw_items = parse_raw_epss_items(raw_list.as_str()?, "nvt")?;
+        raw_items.sort_by(|left, right| left.id.cmp(&right.id));
+        if let Some(raw_selected) = raw_items.into_iter().find(|item| item.epss.is_some()) {
+            let raw_list_epss = comparable_epss_from_raw(
+                raw_selected.epss.as_ref().expect("selected item has EPSS"),
+                "raw NVT list",
+            )?;
+            selected = Some((family.name.clone(), raw_selected.id, raw_list_epss));
+            break;
+        }
+    }
+    let (selected_family, selected_oid, raw_list_epss) = selected
+        .ok_or_else(|| AppError::Assertion("live feed contains no EPSS-bearing NVT".to_string()))?;
+
+    let typed_list = client
+        .get_nvts(typed_epss_nvt_list_request(&selected_family))
+        .await?;
     assert_typed_status(
         typed_list.status,
         &typed_list.status_text,
@@ -11856,11 +11888,14 @@ mod tests {
     }
 
     #[test]
-    fn epss_nvt_discovery_uses_matching_lean_bounded_requests() {
-        let raw = String::from_utf8(gvm_protocol::Request::to_bytes(&raw_epss_nvt_list_request()))
-            .expect("raw request should be UTF-8");
-        let typed = request_xml(&typed_epss_nvt_list_request());
-        let expected = r#"<get_nvts details="1" lean="1" skip_cert_refs="1" skip_tags="1"/>"#;
+    fn epss_nvt_discovery_uses_matching_family_bounded_requests() {
+        let family = "Web application abuses";
+        let raw = String::from_utf8(gvm_protocol::Request::to_bytes(&raw_epss_nvt_list_request(
+            family,
+        )))
+        .expect("raw request should be UTF-8");
+        let typed = request_xml(&typed_epss_nvt_list_request(family));
+        let expected = r#"<get_nvts details="1" family="Web application abuses" skip_cert_refs="1" skip_tags="1"/>"#;
 
         assert_eq!(raw, expected);
         assert_eq!(typed, expected);
