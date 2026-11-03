@@ -5993,99 +5993,47 @@ async fn assert_same_connection_health(
     )
 }
 
-fn raw_epss_nvt_list_request(family: &str) -> XmlCommand {
+fn epss_nvt_discovery_request() -> GetInfoListRequest {
+    let mut request = GetInfoListRequest::new(GenericInfoType::Nvt);
+    request.filter_string = Some("epss_score>0 sort=oid rows=1".to_string());
+    request
+}
+
+fn raw_epss_nvt_list_request(config_id: &EntityId, family: &str) -> XmlCommand {
     XmlCommand::new("get_nvts")
+        .attribute("config_id", config_id.as_str())
         .attribute("family", family)
         .attribute("details", "1")
         .attribute("skip_cert_refs", "1")
         .attribute("skip_tags", "1")
 }
 
-fn typed_epss_nvt_list_request(family: &str) -> GetNvtsRequest {
-    GetNvtsRequest {
-        family: Some(family.to_string()),
-        details: Some(true),
-        skip_cert_refs: Some(true),
-        skip_tags: Some(true),
-        ..GetNvtsRequest::default()
-    }
+fn typed_epss_nvt_list_request(config_id: EntityId, family: &str) -> GetScanConfigNvtsRequest {
+    let mut request = GetScanConfigNvtsRequest::new(config_id, family);
+    request.details = Some(true);
+    request.skip_cert_refs = Some(true);
+    request.skip_tags = Some(true);
+    request
 }
 
 async fn qualify_nvt_epss_projection(
     client: &mut GmpClient<UnixSocketConnection>,
+    config: &EnvConfig,
+    tracker: &mut CleanupTracker,
+    base_config_id: &EntityId,
 ) -> Result<SelectedEpssNvt, AppError> {
-    let families = client
-        .get_nvt_families(GetNvtFamiliesRequest::new())
-        .await?;
+    let discovery = client.get_info_list(epss_nvt_discovery_request()).await?;
     assert_typed_status(
-        families.status,
-        &families.status_text,
+        discovery.status,
+        &discovery.status_text,
         200,
-        "typed NVT family list",
+        "bounded EPSS NVT discovery",
     )?;
-    let mut families = families.items;
-    families.retain(|family| !family.name.is_empty());
-    families.sort_by(|left, right| {
-        left.max_nvt_count
-            .unwrap_or(u32::MAX)
-            .cmp(&right.max_nvt_count.unwrap_or(u32::MAX))
-            .then_with(|| left.name.cmp(&right.name))
-    });
     ensure(
-        !families.is_empty(),
-        "live feed contains no NVT families for bounded EPSS discovery",
+        discovery.items.len() == 1,
+        "bounded live-feed discovery did not return exactly one EPSS-bearing NVT",
     )?;
-
-    let mut selected = None;
-    for family in &families {
-        let raw_list = client.send(raw_epss_nvt_list_request(&family.name)).await?;
-        assert_status(
-            &raw_list,
-            200,
-            &format!("raw EPSS NVT list for family {}", family.name),
-        )?;
-        let mut raw_items = parse_raw_epss_items(raw_list.as_str()?, "nvt")?;
-        raw_items.sort_by(|left, right| left.id.cmp(&right.id));
-        if let Some(raw_selected) = raw_items.into_iter().find(|item| item.epss.is_some()) {
-            let raw_list_epss = comparable_epss_from_raw(
-                raw_selected.epss.as_ref().expect("selected item has EPSS"),
-                "raw NVT list",
-            )?;
-            selected = Some((family.name.clone(), raw_selected.id, raw_list_epss));
-            break;
-        }
-    }
-    let (selected_family, selected_oid, raw_list_epss) = selected
-        .ok_or_else(|| AppError::Assertion("live feed contains no EPSS-bearing NVT".to_string()))?;
-
-    let typed_list = client
-        .get_nvts(typed_epss_nvt_list_request(&selected_family))
-        .await?;
-    assert_typed_status(
-        typed_list.status,
-        &typed_list.status_text,
-        200,
-        "typed EPSS NVT list",
-    )?;
-    let typed_selected = typed_list
-        .items
-        .iter()
-        .find(|nvt| nvt.oid == selected_oid)
-        .ok_or_else(|| {
-            AppError::Assertion(format!(
-                "typed NVT list omitted deterministic EPSS OID {selected_oid}"
-            ))
-        })?;
-    let typed_list_epss = comparable_epss_from_typed(
-        typed_selected.epss.as_ref().ok_or_else(|| {
-            AppError::Assertion(format!(
-                "typed NVT list omitted EPSS for deterministic OID {selected_oid}"
-            ))
-        })?,
-        "typed NVT list",
-    )?;
-    assert_epss_projection_equal(&raw_list_epss, &typed_list_epss, "NVT list")?;
-    assert_same_connection_health(client, "NVT list raw/typed sequence").await?;
+    let selected_oid = discovery.items[0].id.clone();
 
     let raw_detail = client
         .send(
@@ -6118,6 +6066,16 @@ async fn qualify_nvt_epss_projection(
         typed_detail.items.len() == 1 && typed_detail.items[0].oid == selected_oid,
         &format!("typed NVT detail did not return exactly {selected_oid}"),
     )?;
+    let selected_family = typed_detail.items[0]
+        .family
+        .as_deref()
+        .filter(|family| !family.is_empty())
+        .ok_or_else(|| {
+            AppError::Assertion(format!(
+                "typed NVT detail omitted family for deterministic OID {selected_oid}"
+            ))
+        })?
+        .to_string();
     let typed_detail_epss = comparable_epss_from_typed(
         typed_detail.items[0].epss.as_ref().ok_or_else(|| {
             AppError::Assertion(format!("typed NVT detail omitted EPSS for {selected_oid}"))
@@ -6125,11 +6083,108 @@ async fn qualify_nvt_epss_projection(
         "typed NVT detail",
     )?;
     assert_epss_projection_equal(&raw_detail_epss, &typed_detail_epss, "NVT detail")?;
+    assert_same_connection_health(client, "NVT detail raw/typed sequence").await?;
+
+    let mut create_config =
+        CreateScanConfigRequest::new(config.name("epss-parity-config"), base_config_id.clone());
+    create_config.comment = Some(config.name("epss-parity-config"));
+    create_config.usage_type = Some(ConfigUsageType::Scan);
+    let scoped_config = client.create_scan_config(create_config).await?;
+    ensure(
+        scoped_config.status == 201,
+        "typed EPSS list config creation failed",
+    )?;
+    tracker.track_config(&scoped_config.id);
+
+    let family_selection = client
+        .execute(ModifyScanConfigSetFamilySelectionRequest::new(
+            scoped_config.id.clone(),
+            vec![NvtFamilySelection {
+                name: selected_family.clone(),
+                growing: false,
+                all: false,
+            }],
+            false,
+        ))
+        .await?;
+    ensure(
+        family_selection.status == 200,
+        "typed EPSS list family selection failed",
+    )?;
+    let nvt_selection = client
+        .execute(ModifyScanConfigSetNvtSelectionRequest::new(
+            scoped_config.id.clone(),
+            selected_family.clone(),
+            vec![selected_oid.clone()],
+        ))
+        .await?;
+    ensure(
+        nvt_selection.status == 200,
+        "typed EPSS list NVT selection failed",
+    )?;
+
+    let raw_list = client
+        .send(raw_epss_nvt_list_request(
+            &scoped_config.id,
+            &selected_family,
+        ))
+        .await?;
+    assert_status(&raw_list, 200, "raw config-scoped EPSS NVT list")?;
+    let raw_list_items = parse_raw_epss_items(raw_list.as_str()?, "nvt")?;
+    ensure(
+        raw_list_items.len() == 1 && raw_list_items[0].id == selected_oid,
+        &format!("raw config-scoped NVT list did not return exactly {selected_oid}"),
+    )?;
+    let raw_list_epss = comparable_epss_from_raw(
+        raw_list_items[0].epss.as_ref().ok_or_else(|| {
+            AppError::Assertion(format!(
+                "raw config-scoped NVT list omitted EPSS for {selected_oid}"
+            ))
+        })?,
+        "raw NVT list",
+    )?;
+
+    let typed_list = client
+        .get_scan_config_nvts(typed_epss_nvt_list_request(
+            scoped_config.id.clone(),
+            &selected_family,
+        ))
+        .await?;
+    assert_typed_status(
+        typed_list.status,
+        &typed_list.status_text,
+        200,
+        "typed config-scoped EPSS NVT list",
+    )?;
+    ensure(
+        typed_list.items.len() == 1 && typed_list.items[0].oid == selected_oid,
+        &format!("typed config-scoped NVT list did not return exactly {selected_oid}"),
+    )?;
+    let typed_list_epss = comparable_epss_from_typed(
+        typed_list.items[0].epss.as_ref().ok_or_else(|| {
+            AppError::Assertion(format!(
+                "typed config-scoped NVT list omitted EPSS for {selected_oid}"
+            ))
+        })?,
+        "typed NVT list",
+    )?;
+    assert_epss_projection_equal(&raw_list_epss, &typed_list_epss, "NVT list")?;
     ensure(
         raw_list_epss == raw_detail_epss && typed_list_epss == typed_detail_epss,
         &format!("NVT list/detail EPSS projection disagrees for {selected_oid}"),
     )?;
-    assert_same_connection_health(client, "NVT detail raw/typed sequence").await?;
+    assert_same_connection_health(client, "NVT list raw/typed sequence").await?;
+
+    let mut delete_config = DeleteConfigRequest::new(scoped_config.id.clone());
+    delete_config.ultimate = Some(true);
+    let deleted = client.delete_config(delete_config).await?;
+    ensure(
+        deleted.status == 200,
+        "typed EPSS list config cleanup failed",
+    )?;
+    tracker
+        .config_ids
+        .retain(|tracked| tracked != scoped_config.id.as_str());
 
     Ok(SelectedEpssNvt {
         oid: selected_oid,
@@ -7727,7 +7782,8 @@ async fn run_scan_suite(
         );
     }
 
-    let selected_epss_nvt = qualify_nvt_epss_projection(client).await?;
+    let selected_epss_nvt =
+        qualify_nvt_epss_projection(client, config, tracker, &scan_config.meta.id).await?;
     let imported_result_id =
         parse_entity_id(&fixture_uuid(&config.run_id, "epss-parity-imported-result"))?;
     let mut import_task_request = CreateImportTaskRequest::new(config.name("import-task"));
@@ -11888,14 +11944,20 @@ mod tests {
     }
 
     #[test]
-    fn epss_nvt_discovery_uses_matching_family_bounded_requests() {
+    fn epss_nvt_discovery_and_list_requests_are_hard_bounded() {
+        assert_eq!(
+            request_xml(&epss_nvt_discovery_request()),
+            r#"<get_info filter="epss_score&gt;0 sort=oid rows=1" type="NVT"/>"#
+        );
+
+        let config_id = EntityId::new("config-1").expect("valid config ID");
         let family = "Web application abuses";
         let raw = String::from_utf8(gvm_protocol::Request::to_bytes(&raw_epss_nvt_list_request(
-            family,
+            &config_id, family,
         )))
         .expect("raw request should be UTF-8");
-        let typed = request_xml(&typed_epss_nvt_list_request(family));
-        let expected = r#"<get_nvts details="1" family="Web application abuses" skip_cert_refs="1" skip_tags="1"/>"#;
+        let typed = request_xml(&typed_epss_nvt_list_request(config_id, family));
+        let expected = r#"<get_nvts config_id="config-1" details="1" family="Web application abuses" skip_cert_refs="1" skip_tags="1"/>"#;
 
         assert_eq!(raw, expected);
         assert_eq!(typed, expected);
