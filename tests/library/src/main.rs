@@ -5993,12 +5993,6 @@ async fn assert_same_connection_health(
     )
 }
 
-fn epss_nvt_discovery_request() -> GetInfoListRequest {
-    let mut request = GetInfoListRequest::new(GenericInfoType::Nvt);
-    request.filter_string = Some("epss_score>0 sort=oid rows=1".to_string());
-    request
-}
-
 fn raw_epss_nvt_list_request(config_id: &EntityId, family: &str) -> XmlCommand {
     XmlCommand::new("get_nvts")
         .attribute("config_id", config_id.as_str())
@@ -6016,24 +6010,30 @@ fn typed_epss_nvt_list_request(config_id: EntityId, family: &str) -> GetScanConf
     request
 }
 
+fn select_epss_nvt_projection(scan_results: &[ScanResult]) -> Option<(&str, &Epss)> {
+    scan_results
+        .iter()
+        .filter_map(|result| result.nvt.as_ref())
+        .filter_map(|nvt| nvt.epss.as_ref().map(|epss| (nvt.oid.as_str(), epss)))
+        .min_by(|left, right| left.0.cmp(right.0))
+}
+
 async fn qualify_nvt_epss_projection(
     client: &mut GmpClient<UnixSocketConnection>,
     config: &EnvConfig,
     tracker: &mut CleanupTracker,
     base_config_id: &EntityId,
+    scan_results: &[ScanResult],
 ) -> Result<SelectedEpssNvt, AppError> {
-    let discovery = client.get_info_list(epss_nvt_discovery_request()).await?;
-    assert_typed_status(
-        discovery.status,
-        &discovery.status_text,
-        200,
-        "bounded EPSS NVT discovery",
-    )?;
-    ensure(
-        discovery.items.len() == 1,
-        "bounded live-feed discovery did not return exactly one EPSS-bearing NVT",
-    )?;
-    let selected_oid = discovery.items[0].id.clone();
+    let (selected_oid, selected_result_epss) = select_epss_nvt_projection(scan_results)
+        .ok_or_else(|| {
+            AppError::Assertion(
+                "live scan results contain no typed EPSS-bearing NVT projection".to_string(),
+            )
+        })?;
+    let selected_oid = selected_oid.to_string();
+    let selected_result_epss =
+        comparable_epss_from_typed(selected_result_epss, "typed scan-result NVT")?;
 
     let raw_detail = client
         .send(
@@ -6083,6 +6083,10 @@ async fn qualify_nvt_epss_projection(
         "typed NVT detail",
     )?;
     assert_epss_projection_equal(&raw_detail_epss, &typed_detail_epss, "NVT detail")?;
+    ensure(
+        typed_detail_epss == selected_result_epss,
+        &format!("scan-result and NVT-detail EPSS projections disagree for {selected_oid}"),
+    )?;
     assert_same_connection_health(client, "NVT detail raw/typed sequence").await?;
 
     let mut create_config =
@@ -7782,8 +7786,14 @@ async fn run_scan_suite(
         );
     }
 
-    let selected_epss_nvt =
-        qualify_nvt_epss_projection(client, config, tracker, &scan_config.meta.id).await?;
+    let selected_epss_nvt = qualify_nvt_epss_projection(
+        client,
+        config,
+        tracker,
+        &scan_config.meta.id,
+        &scan_results.items,
+    )
+    .await?;
     let imported_result_id =
         parse_entity_id(&fixture_uuid(&config.run_id, "epss-parity-imported-result"))?;
     let mut import_task_request = CreateImportTaskRequest::new(config.name("import-task"));
@@ -11944,12 +11954,7 @@ mod tests {
     }
 
     #[test]
-    fn epss_nvt_discovery_and_list_requests_are_hard_bounded() {
-        assert_eq!(
-            request_xml(&epss_nvt_discovery_request()),
-            r#"<get_info filter="epss_score&gt;0 sort=oid rows=1" type="NVT"/>"#
-        );
-
+    fn epss_nvt_list_requests_are_hard_bounded() {
         let config_id = EntityId::new("config-1").expect("valid config ID");
         let family = "Web application abuses";
         let raw = String::from_utf8(gvm_protocol::Request::to_bytes(&raw_epss_nvt_list_request(
@@ -11961,6 +11966,22 @@ mod tests {
 
         assert_eq!(raw, expected);
         assert_eq!(typed, expected);
+    }
+
+    #[test]
+    fn epss_nvt_selection_uses_the_lowest_live_scan_result_oid() {
+        let response = GetResultsResponse::from_response(&Response::from(
+            r#"<get_results_response status="200" status_text="OK">
+              <result id="result-without-epss"><nvt oid="0"/></result>
+              <result id="result-high"><nvt oid="2"><epss><max_severity><score>0.2</score><percentile>20</percentile><cve id="CVE-2"/></max_severity><max_epss><score>0.3</score><percentile>30</percentile><cve id="CVE-3"/></max_epss></epss></nvt></result>
+              <result id="result-low"><nvt oid="1"><epss><max_severity><score>0.1</score><percentile>10</percentile><cve id="CVE-1"/></max_severity><max_epss><score>0.4</score><percentile>40</percentile><cve id="CVE-4"/></max_epss></epss></nvt></result>
+            </get_results_response>"#,
+        ))
+        .expect("scan results should parse");
+
+        let (oid, _) = select_epss_nvt_projection(&response.items)
+            .expect("an EPSS-bearing NVT should be selected");
+        assert_eq!(oid, "1");
     }
 
     #[test]
