@@ -152,6 +152,19 @@ unclassified deployments must return normal GMP responses and keep the
 connection usable. The deterministic policy and request matrix live in
 `fixtures/epss-result-regression.json`; no report-config mutation is involved.
 
+Separately, the lane qualifies rust-gvm's typed EPSS value projection. It
+selects the lowest-OID EPSS-bearing NVT from the live feed, compares raw and
+typed list/detail responses field-for-field after finite numeric conversion,
+and checks gvmd's native score, percentage, and severity ranges. The sanitized
+report import contains one mandatory result for that OID with explicit QoD;
+the lane waits for it to become visible, then compares raw and typed
+`get_results`/`get_result` projections and requires the result EPSS to equal the
+selected NVT. Every raw/typed sequence is followed by same-connection
+`get_version`. The result artifact records exact E2E, rust-gvm, gvmd
+version/source/image provenance, selected OID, imported report/result IDs,
+compared values, and QoD. This is projection coverage, not another execution
+of the filter/sort connection-health regression above.
+
 The fixture being a container does not make this container-image scanning.
 No OCI target is created or required.
 

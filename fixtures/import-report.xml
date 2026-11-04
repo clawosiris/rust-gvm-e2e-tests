@@ -2,5 +2,21 @@
   <name>{{RUN_NAME}}</name>
   <scan_start>2026-07-25T00:00:00Z</scan_start>
   <scan_end>2026-07-25T00:00:01Z</scan_end>
-  <results/>
+  <results>
+    <result id="{{RESULT_ID}}">
+      <name>EPSS projection parity fixture</name>
+      <host>192.0.2.231</host>
+      <port>443/tcp</port>
+      <nvt oid="{{NVT_OID}}">
+        <name>Selected live-feed EPSS NVT</name>
+      </nvt>
+      <threat>Log</threat>
+      <severity>0.0</severity>
+      <qod>
+        <value>{{QOD_VALUE}}</value>
+        <type>{{QOD_TYPE}}</type>
+      </qod>
+      <description>Sanitized deterministic EPSS projection parity result.</description>
+    </result>
+  </results>
 </report>

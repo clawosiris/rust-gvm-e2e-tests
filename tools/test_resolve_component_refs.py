@@ -7,7 +7,7 @@ import unittest
 from resolve_component_refs import resolve
 
 
-PIN = "f20a01f7297060f02b6f577bba7261cacb585fc3"
+PIN = "d57605b5d1284c36e3f4e58112a6a987baa3395b"
 CANDIDATE = "bc7f3474efd2f1f05904b73ea7fe223e102ebade"
 
 
