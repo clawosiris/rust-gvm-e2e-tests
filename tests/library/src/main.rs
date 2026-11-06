@@ -16,7 +16,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gvm_client::{parse_version_text, GmpClient, GvmError};
+use gvm_client::{parse_version_text, GmpClient, GmpServerErrorKind, GvmError};
 use gvm_connection::{
     ConnectionError, GvmConnection, SshAuth, SshConfig, SshConnection, TlsClientIdentity,
     TlsConfig, TlsConnection, UnixSocketConfig, UnixSocketConnection,
@@ -4359,6 +4359,43 @@ async fn run_report_config_qualification(
     Ok(())
 }
 
+fn assert_permission_denied<T>(result: Result<T, GvmError>, context: &str) -> Result<(), AppError> {
+    let error = match result {
+        Ok(_) => {
+            return Err(AppError::Assertion(format!(
+                "{context}: expected a permission-denied server error, but the request succeeded"
+            )))
+        }
+        Err(error) => error,
+    };
+    let kind = error.server_error_kind();
+    ensure(
+        kind == Some(GmpServerErrorKind::PermissionDenied),
+        &format!(
+            "{context}: expected semantic server error kind PermissionDenied, got {kind:?} from {error}"
+        ),
+    )?;
+    match error {
+        GvmError::Server { status, message } => {
+            ensure(
+                status == 400,
+                &format!(
+                    "{context}: expected raw server status 400, got {status} with message {message:?}"
+                ),
+            )?;
+            ensure(
+                message == "Permission denied",
+                &format!(
+                    "{context}: expected raw server message \"Permission denied\", got {message:?}"
+                ),
+            )
+        }
+        other => Err(AppError::Assertion(format!(
+            "{context}: semantic PermissionDenied classification did not preserve a raw GvmError::Server value; got {other}"
+        ))),
+    }
+}
+
 async fn run_isolated_suite(
     config: &EnvConfig,
     tracker: &mut CleanupTracker,
@@ -4564,12 +4601,12 @@ async fn run_isolated_suite(
     let denied = restricted
         .create_user(CreateUserRequest::new("rust-gvm-e2e-permission-denied"))
         .await;
-    ensure(
-        matches!(denied, Err(GvmError::Server { .. })),
-        "restricted user unexpectedly created an administrative user",
-    )?;
+    assert_permission_denied(denied, "restricted user administrative create_user")?;
     restricted.disconnect().await?;
-    log_pass("isolated permission denied", "typed server error");
+    log_pass(
+        "isolated permission denied",
+        "PermissionDenied; raw status 400 and message Permission denied",
+    );
 
     let mut create_host = CreateHostRequest::new("192.0.2.118");
     create_host.comment = Some(config.name("host"));
@@ -11892,6 +11929,65 @@ mod tests {
         let xml = request_xml(&request);
 
         assert_eq!(xml, r#"<delete_user user_id="user-id"/>"#);
+    }
+
+    #[test]
+    fn permission_denied_assertion_requires_shared_kind_and_exact_raw_fields() {
+        assert!(assert_permission_denied(
+            Err::<(), _>(GvmError::Server {
+                status: 400,
+                message: "Permission denied".to_string(),
+            }),
+            "test create_user",
+        )
+        .is_ok());
+
+        let wrong_kind = assert_permission_denied(
+            Err::<(), _>(GvmError::Server {
+                status: 400,
+                message: "Invalid request".to_string(),
+            }),
+            "test create_user",
+        )
+        .expect_err("ordinary invalid input must not count as permission denied")
+        .to_string();
+        assert!(wrong_kind.contains("expected semantic server error kind PermissionDenied"));
+        assert!(wrong_kind.contains("got Some(InvalidInput)"));
+
+        let wrong_status = assert_permission_denied(
+            Err::<(), _>(GvmError::Server {
+                status: 403,
+                message: "Permission denied".to_string(),
+            }),
+            "test create_user",
+        )
+        .expect_err("the raw GMP status must remain exact")
+        .to_string();
+        assert!(wrong_status.contains("expected raw server status 400, got 403"));
+
+        let wrong_message = assert_permission_denied(
+            Err::<(), _>(GvmError::Server {
+                status: 400,
+                message: " permission DENIED ".to_string(),
+            }),
+            "test create_user",
+        )
+        .expect_err("the normalized classification must not weaken the raw message assertion")
+        .to_string();
+        assert!(wrong_message.contains("expected raw server message \"Permission denied\""));
+
+        let wrong_variant = assert_permission_denied(
+            Err::<(), _>(GvmError::InvalidState("not authenticated".to_string())),
+            "test create_user",
+        )
+        .expect_err("a non-server error must fail")
+        .to_string();
+        assert!(wrong_variant.contains("got None from invalid state: not authenticated"));
+
+        let success = assert_permission_denied(Ok::<_, GvmError>(()), "test create_user")
+            .expect_err("success must fail the denial assertion")
+            .to_string();
+        assert!(success.contains("request succeeded"));
     }
 
     #[test]

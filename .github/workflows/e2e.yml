@@ -38,7 +38,7 @@ on:
         description: Exact canonical rust-gvm commit SHA (defaults to the reviewed pin)
         required: true
         type: string
-        default: d57605b5d1284c36e3f4e58112a6a987baa3395b
+        default: b3c09abb9f48f31ee15ad0f0e0e7fbbc62683902
       gvm-rools-ref:
         description: gvm-rools ref for CLI/differential validation
         required: true
@@ -77,7 +77,7 @@ env:
   COMPOSE_FILE: docker/docker-compose.yml
   RUNNER_IMAGE_NAME: rust-gvm-e2e-runner
   RUNNER_IMAGE_TAG: ci
-  RUST_GVM_SHA: d57605b5d1284c36e3f4e58112a6a987baa3395b
+  RUST_GVM_SHA: b3c09abb9f48f31ee15ad0f0e0e7fbbc62683902
   E2E_REPOSITORY_SHA: ${{ github.sha }}
   GVMD_VERSION: ${{ inputs.gvmd-version }}
   GVMD_IMAGE: ${{ inputs.gvmd-image }}
