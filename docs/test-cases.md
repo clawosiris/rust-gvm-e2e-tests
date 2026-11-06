@@ -174,7 +174,10 @@ This lane requires `E2E_ISOLATED=1` and a distinct Compose project/volume
 namespace. It covers:
 
 - user/group/role/permission create, typed reads, modify, duplicate and
-  permission-denied failures, trash/restore/ultimate delete;
+  permission-denied failures, including a restricted-user administrative
+  `create_user` rejection that must classify as `GmpServerErrorKind::PermissionDenied`
+  while preserving the exact raw `GvmError::Server` status 400 and message
+  `Permission denied`, plus trash/restore/ultimate delete;
 - host asset and operating-system asset parsing plus modify and local request-validation
   failure behavior;
 - cloned report-format and TLS-certificate lifecycles;
