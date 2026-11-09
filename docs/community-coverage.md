@@ -50,7 +50,7 @@ These exact command names are advertised by reviewed live deployment evidence bu
 
 ### EPSS typed projection parity
 
-- upstream typed projection: [https://github.com/greenbone-hive/rust-gvm/pull/793](https://github.com/greenbone-hive/rust-gvm/pull/793) at exact rust-gvm source `d57605b5d1284c36e3f4e58112a6a987baa3395b`
+- upstream typed projection: [https://github.com/greenbone/rust-gvm/pull/793](https://github.com/greenbone/rust-gvm/pull/793) at exact rust-gvm source `d57605b5d1284c36e3f4e58112a6a987baa3395b`
 - lane: `devel-scan`; deterministic selection: lowest-OID EPSS-bearing NVT in the live feed
 - raw and typed GMP projections are compared independently for NVT list/detail and imported result list/detail, with `get_version` after every sequence
 - sanitized import fixture: `fixtures/import-report.xml`; mandatory result QoD: `87` / `remote_banner`

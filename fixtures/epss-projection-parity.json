@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "issue": 231,
-  "upstream_pull_request": "https://github.com/greenbone-hive/rust-gvm/pull/793",
+  "upstream_pull_request": "https://github.com/greenbone/rust-gvm/pull/793",
   "rust_gvm_sha": "d57605b5d1284c36e3f4e58112a6a987baa3395b",
   "lane": "devel-scan",
   "surfaces": [

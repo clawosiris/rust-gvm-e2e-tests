@@ -1,7 +1,7 @@
 # rust-gvm-e2e-tests
 
 Real-stack conformance tests for
-[rust-gvm](https://github.com/greenbone-hive/rust-gvm) against GMP deployments,
+[rust-gvm](https://github.com/greenbone/rust-gvm) against GMP deployments,
 including the repository-owned Community stack and caller-owned providers.
 The harness talks directly to `gvmd`, validates public typed response models,
 and cross-checks deterministic behavior with gvm-tools/python-gvm.
@@ -35,7 +35,7 @@ python3 tools/coverage_manifest.py --check --rust-gvm-source ../rust-gvm
 ```
 
 Cross-repository qualification may supply a different exact 40-character
-commit SHA from the canonical `greenbone-hive/rust-gvm` repository. The
+commit SHA from the canonical `greenbone/rust-gvm` repository. The
 workflow verifies that commit on a GitHub-hosted runner, checks its complete
 command/helper surface against the reviewed coverage policy, and builds all
 four client crates from that same SHA. Pull requests, schedules, and manual

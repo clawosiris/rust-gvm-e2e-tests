@@ -14,12 +14,12 @@ import tomllib
 from pathlib import Path
 
 
-CANONICAL_REPOSITORY = "https://github.com/greenbone-hive/rust-gvm.git"
+CANONICAL_REPOSITORY = "https://github.com/greenbone/rust-gvm.git"
 RUST_GVM_PACKAGES = {"gvm-client", "gvm-connection", "gvm-gmp", "gvm-protocol"}
 EXACT_SHA = re.compile(r"^[0-9a-f]{40}$")
 DEPENDENCY = re.compile(
     r'^(?P<prefix>(?P<name>gvm-(?:client|connection|gmp|protocol))\s*=\s*\{'
-    r'[^\n]*git\s*=\s*"https://github\.com/greenbone-hive/rust-gvm\.git"'
+    r'[^\n]*git\s*=\s*"https://github\.com/greenbone/rust-gvm\.git"'
     r'[^\n]*rev\s*=\s*")(?P<sha>[0-9a-f]{40})(?P<suffix>"[^\n]*\})$',
     re.MULTILINE,
 )
