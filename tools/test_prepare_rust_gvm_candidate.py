@@ -11,7 +11,8 @@ from prepare_rust_gvm_candidate import rewrite_manifest, verify_lock
 
 PIN = "d57605b5d1284c36e3f4e58112a6a987baa3395b"
 CANDIDATE = "bc7f3474efd2f1f05904b73ea7fe223e102ebade"
-CANONICAL = "https://github.com/greenbone-hive/rust-gvm.git"
+CANONICAL = "https://github.com/greenbone/rust-gvm.git"
+PREVIOUS = "https://github.com/greenbone-hive/rust-gvm.git"
 
 
 def dependency(name: str) -> str:
@@ -34,6 +35,14 @@ class PrepareRustGvmCandidateTests(unittest.TestCase):
             rewrite_manifest(dependency("gvm-client"), "main")
         with self.assertRaises(ValueError):
             rewrite_manifest(dependency("gvm-client"), CANDIDATE)
+
+    def test_rejects_previous_repository_location(self):
+        source = "\n".join(
+            dependency(name).replace(CANONICAL, PREVIOUS)
+            for name in ("gvm-client", "gvm-connection", "gvm-gmp", "gvm-protocol")
+        )
+        with self.assertRaises(ValueError):
+            rewrite_manifest(source, CANDIDATE)
 
     def test_lock_verification_requires_exact_candidate_for_all_packages(self):
         packages = "\n".join(

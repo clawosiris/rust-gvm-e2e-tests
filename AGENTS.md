@@ -54,7 +54,7 @@ REST E2E suite in `rust-gvm-api`.
 
 - `main` validates the released/mainline dependency path. All four `rust-gvm`
   crates in `tests/library/Cargo.toml` normally point to the canonical
-  `greenbone-hive/rust-gvm` `main` branch.
+  `greenbone/rust-gvm` `main` branch.
 - Other product branches can carry broader or newer coverage. Do not copy an
   API or assumption from another branch without reconciling it with the target
   branch's lockfile, workflow defaults, and supported gvmd/GMP baseline.

@@ -166,7 +166,7 @@ jobs:
           RUST_GVM_REF: ${{ inputs.rust-gvm-ref }}
         run: |
           git init -q /tmp/rust-gvm
-          git -C /tmp/rust-gvm remote add origin https://github.com/greenbone-hive/rust-gvm.git
+          git -C /tmp/rust-gvm remote add origin https://github.com/greenbone/rust-gvm.git
           git -C /tmp/rust-gvm fetch --depth 1 origin "${RUST_GVM_REF}"
           git -C /tmp/rust-gvm checkout --detach FETCH_HEAD
           test "$(git -C /tmp/rust-gvm rev-parse HEAD)" = "${RUST_GVM_REF}"

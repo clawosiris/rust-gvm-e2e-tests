@@ -218,13 +218,15 @@ class CommunityCheckoutPolicyTests(unittest.TestCase):
 
         manifest = CARGO_MANIFEST.read_text(encoding="utf-8")
         lockfile = LOCKFILE.read_text(encoding="utf-8")
-        canonical = "https://github.com/greenbone-hive/rust-gvm.git"
+        canonical = "https://github.com/greenbone/rust-gvm.git"
         self.assertEqual(manifest.count(f'git = "{canonical}"'), 4)
         self.assertEqual(manifest.count(f'rev = "{SUPPORTED_RUST_GVM_SHA}"'), 4)
         lock_source = f"source = \"git+{canonical}?rev={SUPPORTED_RUST_GVM_SHA}#{SUPPORTED_RUST_GVM_SHA}\""
         self.assertEqual(lockfile.count(lock_source), 4)
         self.assertNotIn("clawosiris/rust-gvm.git", manifest)
         self.assertNotIn("clawosiris/rust-gvm.git", lockfile)
+        for source in (manifest, lockfile, workflow, reusable_workflow):
+            self.assertNotIn("greenbone-hive/rust-gvm", source)
 
     def test_repaired_main_shared_state_and_readiness_contract_is_preserved(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")

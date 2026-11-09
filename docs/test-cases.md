@@ -228,7 +228,7 @@ identity sets with python-gvm for version, configs, scanners, port lists, feeds,
 report formats, and cross-client target creation/visibility/deletion. Any
 unexpected mismatch is blocking. Both clients issue an explicit unbounded
 `usage_type=scan` config query because
-[rust-gvm #404](https://github.com/greenbone-hive/rust-gvm/issues/404) tracks the
+[rust-gvm #404](https://github.com/greenbone/rust-gvm/issues/404) tracks the
 ergonomic `get_scan_configs` wrapper's missing scope. Feed equality
 intentionally excludes the momentary `currently_syncing` flag, which can change
 between sequential client reads; stable feed type, name, and status remain
