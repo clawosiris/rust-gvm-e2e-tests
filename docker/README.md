@@ -25,7 +25,7 @@ From the repository root, build the pinned runner and use the lane wrapper:
 
 ```bash
 docker build -f docker/Dockerfile.runner \
-  --build-arg RUST_GVM_SHA=d57605b5d1284c36e3f4e58112a6a987baa3395b \
+  --build-arg RUST_GVM_SHA=b3c09abb9f48f31ee15ad0f0e0e7fbbc62683902 \
   -t rust-gvm-e2e-runner:ci .
 bash docker/scripts/run-deployment-lane.sh devel-fast
 ```
