@@ -198,6 +198,28 @@ class CoveragePolicyTests(unittest.TestCase):
             MANIFEST.rationale_for("export_audit_report", "conditional-availability"),
         )
 
+    def test_v012_enterprise_surfaces_preserve_evidence_boundaries(self):
+        for command in (
+            "get_active_directory_objects",
+            "verify_active_directory_credential",
+        ):
+            self.assertIn(command, MANIFEST.CONDITIONAL_COMMANDS)
+            self.assertIn(command, MANIFEST.UNIMPLEMENTED_DISCOVERY_COMMANDS)
+            self.assertEqual(
+                MANIFEST.command_disposition(command), "conditional-availability"
+            )
+            self.assertIn(
+                "does not claim live qualification",
+                MANIFEST.rationale_for(command, "conditional-availability"),
+            )
+        self.assertEqual(
+            MANIFEST.feature_command_map()["get_agent_inventory_token"],
+            "ENABLE_AGENTS",
+        )
+        self.assertNotIn(
+            "get_agent_inventory_token", MANIFEST.IMPLEMENTED_FEATURE_COMMANDS
+        )
+
     def test_epss_regression_fixture_and_generated_documentation_are_complete(self):
         regression = MANIFEST.load_epss_regression()
         self.assertEqual(regression["known_affected_release"], "26.40.2")

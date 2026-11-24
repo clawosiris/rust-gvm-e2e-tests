@@ -7,10 +7,10 @@ publish = false
 
 [dependencies]
 base64 = "0.23"
-gvm-client = { git = "https://github.com/greenbone/rust-gvm.git", rev = "b3c09abb9f48f31ee15ad0f0e0e7fbbc62683902" }
-gvm-connection = { git = "https://github.com/greenbone/rust-gvm.git", rev = "b3c09abb9f48f31ee15ad0f0e0e7fbbc62683902", features = ["ssh", "tls"] }
-gvm-gmp = { git = "https://github.com/greenbone/rust-gvm.git", rev = "b3c09abb9f48f31ee15ad0f0e0e7fbbc62683902" }
-gvm-protocol = { git = "https://github.com/greenbone/rust-gvm.git", rev = "b3c09abb9f48f31ee15ad0f0e0e7fbbc62683902" }
+gvm-client = { git = "https://github.com/greenbone/rust-gvm.git", rev = "ab437cfaab51b636b0ef69bddde09103dbb16b92" }
+gvm-connection = { git = "https://github.com/greenbone/rust-gvm.git", rev = "ab437cfaab51b636b0ef69bddde09103dbb16b92", features = ["ssh", "tls"] }
+gvm-gmp = { git = "https://github.com/greenbone/rust-gvm.git", rev = "ab437cfaab51b636b0ef69bddde09103dbb16b92" }
+gvm-protocol = { git = "https://github.com/greenbone/rust-gvm.git", rev = "ab437cfaab51b636b0ef69bddde09103dbb16b92" }
 quick-xml = "0.42"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

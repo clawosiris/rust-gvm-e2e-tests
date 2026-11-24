@@ -1,8 +1,8 @@
 {
   "schema_version": 4,
-  "rust_gvm_sha": "b3c09abb9f48f31ee15ad0f0e0e7fbbc62683902",
-  "registry_count": 164,
-  "typed_helper_count": 267,
+  "rust_gvm_sha": "ab437cfaab51b636b0ef69bddde09103dbb16b92",
+  "registry_count": 167,
+  "typed_helper_count": 270,
   "helper_variant_count": 4,
   "replaced_helper_count": 28,
   "removed_helper_count": 1,
@@ -104,6 +104,7 @@
         "delete_agent_group",
         "get_agent_groups",
         "get_agent_installer_instruction",
+        "get_agent_inventory_token",
         "get_agent_support_bundle",
         "get_agents",
         "modify_agent",
@@ -889,6 +890,15 @@
       "implemented": true
     },
     {
+      "name": "get_active_directory_objects",
+      "wire_command": "get_active_directory_objects",
+      "disposition": "conditional-availability",
+      "lane": "devel-fast",
+      "rationale": "Typed Active Directory integration surface is retained as explicit discovery evidence, but the public Community deployment has no LDAP fixture or safe credential verification path and therefore does not claim live qualification.",
+      "requires": [],
+      "implemented": false
+    },
+    {
       "name": "get_agent_groups",
       "wire_command": "get_agent_groups",
       "disposition": "capability-selected",
@@ -902,6 +912,17 @@
     {
       "name": "get_agent_installer_instruction",
       "wire_command": "get_agent_installer_instruction",
+      "disposition": "capability-selected",
+      "lane": "devel-fast",
+      "rationale": "Selection is decided by the deployment contract and feature catalog before mutation.",
+      "requires": [
+        "ENABLE_AGENTS"
+      ],
+      "implemented": false
+    },
+    {
+      "name": "get_agent_inventory_token",
+      "wire_command": "get_agent_inventory_token",
       "disposition": "capability-selected",
       "lane": "devel-fast",
       "rationale": "Selection is decided by the deployment contract and feature catalog before mutation.",
@@ -1810,6 +1831,15 @@
       "rationale": "Supported operation isolated because it is administrative, global, or destructive.",
       "requires": [],
       "implemented": true
+    },
+    {
+      "name": "verify_active_directory_credential",
+      "wire_command": "verify_active_directory_credential",
+      "disposition": "conditional-availability",
+      "lane": "devel-fast",
+      "rationale": "Typed Active Directory integration surface is retained as explicit discovery evidence, but the public Community deployment has no LDAP fixture or safe credential verification path and therefore does not claim live qualification.",
+      "requires": [],
+      "implemented": false
     },
     {
       "name": "verify_credential_store",
@@ -2737,6 +2767,15 @@
       "implemented": true
     },
     {
+      "name": "get_active_directory_objects",
+      "wire_command": "get_active_directory_objects",
+      "disposition": "conditional-availability",
+      "lane": "devel-fast",
+      "rationale": "Typed Active Directory integration surface is retained as explicit discovery evidence, but the public Community deployment has no LDAP fixture or safe credential verification path and therefore does not claim live qualification.",
+      "requires": [],
+      "implemented": false
+    },
+    {
       "name": "get_agent",
       "wire_command": "get_agents",
       "disposition": "capability-selected",
@@ -2772,6 +2811,17 @@
     {
       "name": "get_agent_installer_instruction",
       "wire_command": "get_agent_installer_instruction",
+      "disposition": "capability-selected",
+      "lane": "devel-fast",
+      "rationale": "Selection is decided by the deployment contract and feature catalog before mutation.",
+      "requires": [
+        "ENABLE_AGENTS"
+      ],
+      "implemented": false
+    },
+    {
+      "name": "get_agent_inventory_token",
+      "wire_command": "get_agent_inventory_token",
       "disposition": "capability-selected",
       "lane": "devel-fast",
       "rationale": "Selection is decided by the deployment contract and feature catalog before mutation.",
@@ -4291,6 +4341,15 @@
       "rationale": "Expected Community scan/report capability exercised by the bounded nightly/manual lane.",
       "requires": [],
       "implemented": true
+    },
+    {
+      "name": "verify_active_directory_credential",
+      "wire_command": "verify_active_directory_credential",
+      "disposition": "conditional-availability",
+      "lane": "devel-fast",
+      "rationale": "Typed Active Directory integration surface is retained as explicit discovery evidence, but the public Community deployment has no LDAP fixture or safe credential verification path and therefore does not claim live qualification.",
+      "requires": [],
+      "implemented": false
     },
     {
       "name": "verify_credential_store",

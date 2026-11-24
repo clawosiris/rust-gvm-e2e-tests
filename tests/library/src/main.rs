@@ -2377,8 +2377,8 @@ async fn run_dynamic_capability_scenarios(
             .take(1)
             .map(|agent| agent.meta.id.clone())
             .collect();
-        let mut create =
-            CreateAgentGroupRequest::new(config.name("agent-group"), agent_ids, "0 */6 * * *");
+        let group_name = config.name("agent-group");
+        let mut create = CreateAgentGroupRequest::new(group_name.clone(), agent_ids, "0 */6 * * *");
         create.comment = Some("rust-gvm dynamic capability E2E".to_string());
         let created = client.execute(create).await?;
         ensure(
@@ -2393,7 +2393,8 @@ async fn run_dynamic_capability_scenarios(
             detail.status == 200 && detail.items.iter().any(|item| item.meta.id == created.id),
             "created agent group was not readable",
         )?;
-        let mut modify = ModifyAgentGroupRequest::new(created.id.clone(), "0 */12 * * *");
+        let mut modify =
+            ModifyAgentGroupRequest::new(created.id.clone(), group_name, "0 */12 * * *");
         modify.comment = Some("rust-gvm dynamic capability E2E modified".to_string());
         let modified = client.execute(modify).await?;
         ensure(
