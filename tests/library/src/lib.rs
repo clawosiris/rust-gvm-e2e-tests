@@ -185,6 +185,7 @@ mod tests {
         "delete_oci_image_target",
         "get_agent_groups",
         "get_agent_installer_instruction",
+        "get_agent_inventory_token",
         "get_agent_support_bundle",
         "get_agents",
         "get_oci_image_targets",
@@ -198,7 +199,7 @@ mod tests {
     #[test]
     fn registry_and_manifest_are_exactly_equal() {
         validate_compiled_manifest().expect("compiled manifest must match dependency registry");
-        assert_eq!(COMMAND_COVERAGE.len(), 164);
+        assert_eq!(COMMAND_COVERAGE.len(), 167);
     }
 
     #[test]
@@ -267,7 +268,7 @@ mod tests {
     #[test]
     fn all_public_helpers_remain_compile_referenced() {
         compile_enforce_public_helper_surface();
-        assert_eq!(HELPER_COVERAGE.len(), 267);
+        assert_eq!(HELPER_COVERAGE.len(), 270);
     }
 
     #[test]

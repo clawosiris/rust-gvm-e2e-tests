@@ -7,7 +7,7 @@ use gvm_connection::UnixSocketConnection;
 
 use crate::{CoverageEntry, Disposition, LiveHelpAllowlistEntry, SurfaceMigration, SurfaceStatus};
 
-pub const RUST_GVM_SHA: &str = "b3c09abb9f48f31ee15ad0f0e0e7fbbc62683902";
+pub const RUST_GVM_SHA: &str = "ab437cfaab51b636b0ef69bddde09103dbb16b92";
 
 pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
@@ -507,6 +507,14 @@ pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
         implemented: true,
     },
     CoverageEntry {
+        name: "get_active_directory_objects",
+        wire_command: "get_active_directory_objects",
+        disposition: Disposition::ConditionalAvailability,
+        lane: "devel-fast",
+        requires: &[],
+        implemented: false,
+    },
+    CoverageEntry {
         name: "get_agent_groups",
         wire_command: "get_agent_groups",
         disposition: Disposition::CapabilitySelected,
@@ -517,6 +525,14 @@ pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "get_agent_installer_instruction",
         wire_command: "get_agent_installer_instruction",
+        disposition: Disposition::CapabilitySelected,
+        lane: "devel-fast",
+        requires: &["ENABLE_AGENTS"],
+        implemented: false,
+    },
+    CoverageEntry {
+        name: "get_agent_inventory_token",
+        wire_command: "get_agent_inventory_token",
         disposition: Disposition::CapabilitySelected,
         lane: "devel-fast",
         requires: &["ENABLE_AGENTS"],
@@ -1297,6 +1313,14 @@ pub static COMMAND_COVERAGE: &[CoverageEntry] = &[
         lane: "devel-isolated",
         requires: &[],
         implemented: true,
+    },
+    CoverageEntry {
+        name: "verify_active_directory_credential",
+        wire_command: "verify_active_directory_credential",
+        disposition: Disposition::ConditionalAvailability,
+        lane: "devel-fast",
+        requires: &[],
+        implemented: false,
     },
     CoverageEntry {
         name: "verify_credential_store",
@@ -2094,6 +2118,14 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
         implemented: true,
     },
     CoverageEntry {
+        name: "get_active_directory_objects",
+        wire_command: "get_active_directory_objects",
+        disposition: Disposition::ConditionalAvailability,
+        lane: "devel-fast",
+        requires: &[],
+        implemented: false,
+    },
+    CoverageEntry {
         name: "get_agent",
         wire_command: "get_agents",
         disposition: Disposition::CapabilitySelected,
@@ -2120,6 +2152,14 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
     CoverageEntry {
         name: "get_agent_installer_instruction",
         wire_command: "get_agent_installer_instruction",
+        disposition: Disposition::CapabilitySelected,
+        lane: "devel-fast",
+        requires: &["ENABLE_AGENTS"],
+        implemented: false,
+    },
+    CoverageEntry {
+        name: "get_agent_inventory_token",
+        wire_command: "get_agent_inventory_token",
         disposition: Disposition::CapabilitySelected,
         lane: "devel-fast",
         requires: &["ENABLE_AGENTS"],
@@ -3438,6 +3478,14 @@ pub static HELPER_COVERAGE: &[CoverageEntry] = &[
         implemented: true,
     },
     CoverageEntry {
+        name: "verify_active_directory_credential",
+        wire_command: "verify_active_directory_credential",
+        disposition: Disposition::ConditionalAvailability,
+        lane: "devel-fast",
+        requires: &[],
+        implemented: false,
+    },
+    CoverageEntry {
         name: "verify_credential_store",
         wire_command: "verify_credential_store",
         disposition: Disposition::CapabilitySelected,
@@ -3778,10 +3826,12 @@ pub fn compile_enforce_public_helper_surface() {
     let _ = GmpClient::<UnixSocketConnection>::export_delta_audit_report;
     let _ = GmpClient::<UnixSocketConnection>::export_delta_scan_report;
     let _ = GmpClient::<UnixSocketConnection>::export_scan_report;
+    let _ = GmpClient::<UnixSocketConnection>::get_active_directory_objects;
     let _ = GmpClient::<UnixSocketConnection>::get_agent;
     let _ = GmpClient::<UnixSocketConnection>::get_agent_group;
     let _ = GmpClient::<UnixSocketConnection>::get_agent_groups;
     let _ = GmpClient::<UnixSocketConnection>::get_agent_installer_instruction;
+    let _ = GmpClient::<UnixSocketConnection>::get_agent_inventory_token;
     let _ = GmpClient::<UnixSocketConnection>::get_agent_support_bundle;
     let _ = GmpClient::<UnixSocketConnection>::get_agents;
     let _ = GmpClient::<UnixSocketConnection>::get_aggregates;
@@ -3946,6 +3996,7 @@ pub fn compile_enforce_public_helper_surface() {
     let _ = GmpClient::<UnixSocketConnection>::sync_agents;
     let _ = GmpClient::<UnixSocketConnection>::test_alert;
     let _ = GmpClient::<UnixSocketConnection>::trigger_alert;
+    let _ = GmpClient::<UnixSocketConnection>::verify_active_directory_credential;
     let _ = GmpClient::<UnixSocketConnection>::verify_credential_store;
     let _ = GmpClient::<UnixSocketConnection>::verify_report_format;
     let _ = GmpClient::<UnixSocketConnection>::verify_scanner;

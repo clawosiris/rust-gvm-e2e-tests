@@ -252,6 +252,7 @@ CONDITIONAL_COMMANDS = {
     "export_delta_audit_report",
     "export_delta_scan_report",
     "export_scan_report",
+    "get_active_directory_objects",
     "get_credential_stores",
     "get_integration_configs",
     "get_license",
@@ -273,6 +274,7 @@ CONDITIONAL_COMMANDS = {
     "modify_license",
     "modify_web_application_target",
     "sync_config",
+    "verify_active_directory_credential",
     "verify_credential_store",
 }
 
@@ -284,10 +286,12 @@ UNIMPLEMENTED_DISCOVERY_COMMANDS = {
     "export_audit_report",
     "export_delta_audit_report",
     "export_delta_scan_report",
+    "get_active_directory_objects",
     "get_license",
     "get_timezones",
     "modify_license",
     "sync_config",
+    "verify_active_directory_credential",
 }
 
 SCAN_CONDITIONAL_COMMANDS = {
@@ -653,6 +657,12 @@ def lane_for(disposition: str, wire_command: str = "") -> str:
 
 
 def rationale_for(name: str, disposition: str) -> str:
+    if name in {"get_active_directory_objects", "verify_active_directory_credential"}:
+        return (
+            "Typed Active Directory integration surface is retained as explicit discovery "
+            "evidence, but the public Community deployment has no LDAP fixture or safe "
+            "credential verification path and therefore does not claim live qualification."
+        )
     if name in {
         "create_report_config",
         "clone_report_config",

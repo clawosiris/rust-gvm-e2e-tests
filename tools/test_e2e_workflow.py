@@ -22,7 +22,7 @@ FEED_SNAPSHOT_SCRIPT = (
 COMPOSE_FILE = Path(__file__).parents[1] / "docker/docker-compose.yml"
 CARGO_MANIFEST = Path(__file__).parents[1] / "tests/library/Cargo.toml"
 LOCKFILE = Path(__file__).parents[1] / "Cargo.lock"
-SUPPORTED_RUST_GVM_SHA = "b3c09abb9f48f31ee15ad0f0e0e7fbbc62683902"
+SUPPORTED_RUST_GVM_SHA = "ab437cfaab51b636b0ef69bddde09103dbb16b92"
 SELF_HOSTED_LANES = {
     "devel-fast",
     "devel-scan",

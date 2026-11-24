@@ -27,7 +27,7 @@ historical qualification evidence, not a runtime selection gate. Complete
 observed snapshots are emitted per lane for drift review.
 
 Regenerate or check against the supported rust-gvm checkout at
-`b3c09abb9f48f31ee15ad0f0e0e7fbbc62683902` (PR #803 exact head):
+`ab437cfaab51b636b0ef69bddde09103dbb16b92` (v0.12.0 protected-main release candidate):
 
 ```bash
 python3 tools/coverage_manifest.py --rust-gvm-source ../rust-gvm
@@ -96,7 +96,7 @@ Build the runner, start the warm stack, and execute a lane:
 
 ```bash
 docker build -f docker/Dockerfile.runner \
-  --build-arg RUST_GVM_SHA=b3c09abb9f48f31ee15ad0f0e0e7fbbc62683902 \
+  --build-arg RUST_GVM_SHA=ab437cfaab51b636b0ef69bddde09103dbb16b92 \
   -t rust-gvm-e2e-runner:ci .
 bash docker/scripts/run-deployment-lane.sh devel-fast
 ```

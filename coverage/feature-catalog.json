@@ -8,6 +8,7 @@
         "delete_agent_group",
         "get_agent_groups",
         "get_agent_installer_instruction",
+        "get_agent_inventory_token",
         "get_agent_support_bundle",
         "get_agents",
         "modify_agent",
